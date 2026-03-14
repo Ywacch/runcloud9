@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/ywacch/ganymede/pkg/deployer"
@@ -28,6 +29,7 @@ func NewHandler(deployers map[string]deployer.ComponentDeployer) *Handler {
 // RegisterRoutes attaches handlers to the mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /deployments", h.handleCreateDeployment)
+	mux.HandleFunc("DELETE /deployments/{id}", h.handleDeleteDeployment)
 	mux.HandleFunc("GET /health", h.handleHealth)
 }
 
@@ -38,11 +40,15 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request) {
 	// context.WithTimeout creates a child context that auto-cancels
-	// after 2 minutes. This context us passed to every deployer call so that if
+	// after `timeout` minutes. This context us passed to every deployer call so that if
 	// the whole operation takes too long, all in-flight work gets cancelled.
 	// Always defer cancel() immediately after WithTimeout because if you forget,
 	// the context leaks until the parent is cancelled.
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	timeout := 2 * time.Minute
+	if os.Getenv("DEPLOYER") == "k8s" {
+		timeout = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
 	var design deployer.DeploymentDesign
@@ -143,6 +149,24 @@ func validateDesign(d deployer.DeploymentDesign) error {
 		return fmt.Errorf("design must contain at least one node")
 	}
 	return nil
+}
+
+func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request) {
+	//PathValue is Go 1.22+:extracts {id} from the URL pattern.
+	namespace := r.PathValue("id")
+	if namespace == "" {
+		writeError(w, http.StatusBadRequest, "missing deployment id")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	d := h.deployers["db"]
+	if err := d.Teardown(ctx, namespace); err != nil {
+		log.Printf("teardown %s: %v", namespace, err)
+		writeError(w, http.StatusInternalServerError, "teardown failed")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
