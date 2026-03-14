@@ -58,8 +58,8 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 
 	// Generate a namespace for this deployment.
 	// Format: ganymede-{template}-{timestamp}
-	// UNDERSTAND: Each deployment gets its own K8s namespace. This is how we
-	// isolate deployments from each other. Deleting the namespace deletes
+	// Each deployment gets its own K8s namespace. This is how
+	// deployments are isolated from each other. Deleting the namespace deletes
 	// everything inside it: pods, services, config maps. Clean teardown.
 	namespace := fmt.Sprintf("ganymede-%s-%d", design.Template, time.Now().Unix())
 
