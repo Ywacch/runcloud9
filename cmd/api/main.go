@@ -13,7 +13,7 @@ import (
 	"k8s.io/client-go/util/homedir"
 )
 
-// buildDeployers returns the deployer map. UNDERSTAND: os.Getenv returns empty string if var not set.
+// buildDeployers returns the deployer map. os.Getenv returns empty string if var not set.
 // Default to local so tests and local dev without minikube still work.
 func buildDeployers() map[string]deployer.ComponentDeployer {
 	if os.Getenv("DEPLOYER") != "k8s" {
@@ -40,7 +40,7 @@ func buildDeployers() map[string]deployer.ComponentDeployer {
 	log.Println("Using K8sDeployer (minikube/GKE)")
 	return map[string]deployer.ComponentDeployer{
 		"db":         deployer.NewK8sDeployer(clientset, "db"),
-		"cache":      &deployer.LocalDeployer{NodeType: "cache"},      // Week 4
+		"cache":      deployer.NewK8sDeployer(clientset, "cache"),
 		"app-server": &deployer.LocalDeployer{NodeType: "app-server"}, // Week 4
 		"lb":         &deployer.LocalDeployer{NodeType: "lb"},
 		"mq":         &deployer.LocalDeployer{NodeType: "mq"},
@@ -54,7 +54,7 @@ func main() {
 	if len(os.Args) > 1 {
 		port = os.Args[1]
 	}
-	
+
 	handler := api.NewHandler(deployers)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)

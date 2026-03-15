@@ -7,6 +7,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -26,26 +27,17 @@ func NewK8sDeployer(clientset kubernetes.Interface, nodeType string) *K8sDeploye
 	return &K8sDeployer{clientset: clientset, nodeType: nodeType}
 }
 
-
 func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
-	if cfg.Node.Type != "db" {
-		// Other component types (cache, app-server) implemented in Week 4
-		log.Printf("K8sDeployer: skipping unsupported node type %q", cfg.Node.Type)
-		return nil
-	}
 
-	// UNDERSTAND: namespace creation is idempotent-ish but we don't need to handle
-	// AlreadyExists here: each deployment gets a unique namespace from the timestamp
+	// namespace creation is idempotent-ish. each deployment gets a unique namespace from the timestamp
 	_, err := k.clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{Name: cfg.Namespace},
 	}, metav1.CreateOptions{})
-	if err != nil {
+	if err != nil && !errors.IsAlreadyExists(err) {
 		return fmt.Errorf("create namespace: %w", err)
 	}
 
-	labels := map[string]string{"app": "postgres", "deployment": cfg.Namespace}
-
-	// UNDERSTAND: resource requests/limits are required on GKE Autopilot.
+	// resource requests/limits are required on GKE Autopilot.
 	// Requests = guaranteed minimum. Limits = hard cap.
 	// We set them equal here so Autopilot doesn't reject the pod.
 	resources := corev1.ResourceRequirements{
@@ -59,61 +51,113 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 		},
 	}
 
-	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "postgres", Namespace: cfg.Namespace},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr(int32(1)),
-			Selector: &metav1.LabelSelector{MatchLabels: labels},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  "postgres",
-							Image: "postgres:15",
-							Env: []corev1.EnvVar{
-								{Name: "POSTGRES_DB", Value: "syscrack"},
-								{Name: "POSTGRES_USER", Value: "syscrack"},
-								{Name: "POSTGRES_PASSWORD", Value: "syscrack"},
+	switch cfg.Node.Type {
+	case "db":
+		labels := map[string]string{"app": "postgres", "deployment": cfg.Namespace}
+
+		dep := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "postgres", Namespace: cfg.Namespace},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: ptr(int32(1)),
+				Selector: &metav1.LabelSelector{MatchLabels: labels},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: labels},
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Name:  "postgres",
+								Image: "postgres:15",
+								Env: []corev1.EnvVar{
+									{Name: "POSTGRES_DB", Value: "syscrack"},
+									{Name: "POSTGRES_USER", Value: "syscrack"},
+									{Name: "POSTGRES_PASSWORD", Value: "syscrack"},
+								},
+								Ports:     []corev1.ContainerPort{{ContainerPort: 5432}},
+								Resources: resources,
 							},
-							Ports: []corev1.ContainerPort{{ContainerPort: 5432}},
-							Resources: resources,
 						},
 					},
 				},
 			},
-		},
-	}
-	_, err = k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{})
-	if err != nil {
-		return fmt.Errorf("create deployment: %w", err)
-	}
+		}
 
-	// UNDERSTAND: the Service is how other pods find Postgres by DNS name.
-	// K8s gives it a stable internal DNS: {service-name}.{namespace}.svc.cluster.local
-	// Without a Service, pods have no stable address — their IPs change on restart.
-	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "postgres", Namespace: cfg.Namespace},
-		Spec: corev1.ServiceSpec{
-			Type:     corev1.ServiceTypeClusterIP,
-			Selector: labels,
-			Ports:    []corev1.ServicePort{{Port: 5432, TargetPort: intstr.FromInt32(5432)}},
-		},
-	}
-	_, err = k.clientset.CoreV1().Services(cfg.Namespace).Create(ctx, svc, metav1.CreateOptions{})
-	if err != nil {
-		return fmt.Errorf("create service: %w", err)
+		_, err = k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("create deployment: %w", err)
+		}
+
+		// The Service is how other pods find Postgres by DNS name.
+		// K8s gives it a stable internal DNS: {service-name}.{namespace}.svc.cluster.local
+		// Without a Service, pods have no stable address — their IPs change on restart.
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: cfg.Namespace},
+			Spec: corev1.ServiceSpec{
+				Type:     corev1.ServiceTypeClusterIP,
+				Selector: labels,
+				Ports:    []corev1.ServicePort{{Port: 5432, TargetPort: intstr.FromInt32(5432)}},
+			},
+		}
+
+		_, err = k.clientset.CoreV1().Services(cfg.Namespace).Create(ctx, svc, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("create service: %w", err)
+		}
+	case "cache":
+		labels := map[string]string{"app": "redis", "deployment": cfg.Namespace}
+
+		dep := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "redis", Namespace: cfg.Namespace},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: ptr(int32(1)),
+				Selector: &metav1.LabelSelector{MatchLabels: labels},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: labels},
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Name:      "redis",
+								Image:     "redis:7",
+								Ports:     []corev1.ContainerPort{{ContainerPort: 6379}},
+								Resources: resources,
+							},
+						},
+					},
+				},
+			},
+		}
+
+		_, err = k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("create deployment: %w", err)
+		}
+
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: cfg.Namespace},
+			Spec: corev1.ServiceSpec{
+				Type:     corev1.ServiceTypeClusterIP,
+				Selector: labels,
+				Ports:    []corev1.ServicePort{{Port: 6379, TargetPort: intstr.FromInt32(6379)}},
+			},
+		}
+
+		_, err = k.clientset.CoreV1().Services(cfg.Namespace).Create(ctx, svc, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("create service: %w", err)
+		}
+	default:
+		log.Printf("K8sDeployer: skipping unsupported node type %q", cfg.Node.Type)
+		return nil
 	}
 
 	return k.waitForReady(ctx, cfg.Namespace)
 }
 
 func (k *K8sDeployer) waitForReady(ctx context.Context, namespace string) error {
-	// UNDERSTAND: Watch gives us a stream of events (ADDED, MODIFIED, DELETED)
+	// Watch gives us a stream of events (ADDED, MODIFIED, DELETED)
 	// for pods matching our label selector. We block on this stream until
 	// we see a pod with ConditionReady=True, or the context deadline fires.
 	watcher, err := k.clientset.CoreV1().Pods(namespace).Watch(ctx, metav1.ListOptions{
-		LabelSelector: "app=postgres",
+		LabelSelector: "deployment=" + namespace,
 	})
 	if err != nil {
 		return fmt.Errorf("watch pods: %w", err)
