@@ -144,6 +144,44 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 		if err != nil {
 			return fmt.Errorf("create service: %w", err)
 		}
+	case "app-server":
+		// Image is a placeholder for now — Week 6 replaces with pre-built template images.
+		// We use nginx so the pod starts and passes readiness; real app images come in Week 6.
+		labels := map[string]string{"app": "app-server", "deployment": cfg.Namespace}
+		dep := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "app-server", Namespace: cfg.Namespace},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: ptr(int32(1)),
+				Selector: &metav1.LabelSelector{MatchLabels: labels},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: labels},
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{
+							Name:      "app-server",
+							Image:     "nginx:latest",
+							Ports:     []corev1.ContainerPort{{ContainerPort: 8080}},
+							Resources: resources,
+						}},
+					},
+				},
+			},
+		}
+		_, err = k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("create deployment: %w", err)
+		}
+		svcApp := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "app-server", Namespace: cfg.Namespace},
+			Spec: corev1.ServiceSpec{
+				Type:     corev1.ServiceTypeClusterIP,
+				Selector: labels,
+				Ports:    []corev1.ServicePort{{Port: 8080, TargetPort: intstr.FromInt32(8080)}},
+			},
+		}
+		_, err = k.clientset.CoreV1().Services(cfg.Namespace).Create(ctx, svcApp, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("create service: %w", err)
+		}
 	default:
 		log.Printf("K8sDeployer: skipping unsupported node type %q", cfg.Node.Type)
 		return nil

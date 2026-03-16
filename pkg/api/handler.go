@@ -2,14 +2,18 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ywacch/ganymede/pkg/deployer"
+	"github.com/ywacch/ganymede/pkg/store"
+	"github.com/ywacch/ganymede/pkg/teardown"
 )
 
 // Handler holds dependencies for the HTTP layer.
@@ -17,13 +21,13 @@ import (
 // This makes testing easier as you can swap in a mock deployer without
 // touching global state.
 type Handler struct {
-	// deployers maps component type (e.g. "db", "cache") to its deployer.
-	// In production this will be K8s implementations. For now, LocalDeployer.
 	deployers map[string]deployer.ComponentDeployer
+	store     *store.DeploymentStore
+	scheduler *teardown.Scheduler
 }
 
-func NewHandler(deployers map[string]deployer.ComponentDeployer) *Handler {
-	return &Handler{deployers: deployers}
+func NewHandler(deployers map[string]deployer.ComponentDeployer, store *store.DeploymentStore, scheduler *teardown.Scheduler) *Handler {
+	return &Handler{deployers: deployers, store: store, scheduler: scheduler}
 }
 
 // RegisterRoutes attaches handlers to the mux.
@@ -62,18 +66,48 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Generate a namespace for this deployment.
-	// Format: ganymede-{template}-{timestamp}
-	// Each deployment gets its own K8s namespace. This is how
-	// deployments are isolated from each other. Deleting the namespace deletes
-	// everything inside it: pods, services, config maps. Clean teardown.
 	namespace := fmt.Sprintf("ganymede-%s-%d", design.Template, time.Now().Unix())
+	expiresAt := time.Now().Add(10 * time.Minute)
+
+	if h.store != nil {
+		var designMap map[string]any
+		if b, err := json.Marshal(design); err != nil {
+			writeError(w, http.StatusInternalServerError, "invalid design")
+			return
+		} else if err := json.Unmarshal(b, &designMap); err != nil {
+			writeError(w, http.StatusInternalServerError, "invalid design")
+			return
+		}
+		_, err := h.store.CreateDeployment(ctx, store.CreateDeploymentParams{
+			Namespace: namespace,
+			Template:  design.Template,
+			Archetype: design.Archetype,
+			Design:    designMap,
+			ExpiresAt: expiresAt,
+			UserID:    getUserID(r),
+		})
+		if err != nil {
+			log.Printf("create deployment record: %v", err)
+			writeError(w, http.StatusInternalServerError, "failed to create deployment record")
+			return
+		}
+	}
 
 	result, err := h.orchestrate(ctx, design, namespace)
 	if err != nil {
 		log.Printf("orchestration failed for namespace=%s: %v", namespace, err)
+		if h.store != nil {
+			_ = h.store.UpdateStatus(context.Background(), namespace, "failed")
+		}
 		writeError(w, http.StatusInternalServerError, "deployment failed")
 		return
+	}
+
+	if h.store != nil {
+		_ = h.store.UpdateStatus(context.Background(), namespace, "running")
+	}
+	if h.scheduler != nil {
+		h.scheduler.Schedule(namespace, expiresAt)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -158,6 +192,9 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "missing deployment id")
 		return
 	}
+	if h.scheduler != nil {
+		h.scheduler.Cancel(namespace)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	d := h.deployers["db"]
@@ -166,7 +203,38 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "teardown failed")
 		return
 	}
+	if h.store != nil {
+		_ = h.store.UpdateStatus(context.Background(), namespace, "terminated")
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// getUserID extracts the sub claim from the Bearer JWT in Authorization header.
+// Returns empty string on any failure — unauthenticated requests are allowed.
+func getUserID(r *http.Request) string {
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "Bearer ") {
+		return ""
+	}
+	token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+	if token == "" {
+		return ""
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		Sub string `json:"sub"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ""
+	}
+	return claims.Sub
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
