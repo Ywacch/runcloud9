@@ -31,8 +31,14 @@ func buildDeployers() map[string]deployer.ComponentDeployer {
 		}
 	}
 
-	kubeconfig := filepath.Join(homedir.HomeDir(), ".kube", "config")
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	// UNDERSTAND: KUBECONFIG env var lets you point at a specific config file.
+	// Useful when running multiple clusters (minikube + GKE) simultaneously.
+	// Falls back to ~/.kube/config if not set — same as kubectl default behaviour.
+	kubeconfigPath := os.Getenv("KUBECONFIG")
+	if kubeconfigPath == "" {
+		kubeconfigPath = filepath.Join(homedir.HomeDir(), ".kube", "config")
+	}
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
 	if err != nil {
 		log.Fatalf("build kubeconfig: %v", err)
 	}
