@@ -51,8 +51,12 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 		},
 	}
 
+	envVars := DeriveEnvVars(cfg.Node, cfg.Design)
+
+	appLabel := ""
 	switch cfg.Node.Type {
 	case "db":
+		appLabel = "postgres"
 		labels := map[string]string{"app": "postgres", "deployment": cfg.Namespace}
 
 		dep := &appsv1.Deployment{
@@ -67,11 +71,11 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 							{
 								Name:  "postgres",
 								Image: "postgres:15",
-								Env: []corev1.EnvVar{
+								Env: append([]corev1.EnvVar{
 									{Name: "POSTGRES_DB", Value: "syscrack"},
 									{Name: "POSTGRES_USER", Value: "syscrack"},
 									{Name: "POSTGRES_PASSWORD", Value: "syscrack"},
-								},
+								}, envMapToK8s(envVars)...),
 								Ports:     []corev1.ContainerPort{{ContainerPort: 5432}},
 								Resources: resources,
 							},
@@ -103,48 +107,151 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 			return fmt.Errorf("create service: %w", err)
 		}
 	case "cache":
-		labels := map[string]string{"app": "redis", "deployment": cfg.Namespace}
-
-		dep := &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{Name: "redis", Namespace: cfg.Namespace},
-			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr(int32(1)),
-				Selector: &metav1.LabelSelector{MatchLabels: labels},
-				Template: corev1.PodTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{Labels: labels},
-					Spec: corev1.PodSpec{
-						Containers: []corev1.Container{
-							{
-								Name:      "redis",
-								Image:     "redis:7",
-								Ports:     []corev1.ContainerPort{{ContainerPort: 6379}},
-								Resources: resources,
+		if requiresProxy(cfg.Node) {
+			// Proxy strategies deploy two workloads from the single canvas cache node:
+			// 1) internal Redis (simple redis:7)
+			// 2) caching-proxy (HTTP->Redis->DB wrapper)
+			redisLabels := map[string]string{"app": "redis-internal", "deployment": cfg.Namespace}
+			internalRedisDep := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{Name: "redis-internal", Namespace: cfg.Namespace},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: ptr(int32(1)),
+					Selector: &metav1.LabelSelector{MatchLabels: redisLabels},
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{Labels: redisLabels},
+						Spec: corev1.PodSpec{
+							Containers: []corev1.Container{
+								{
+									Name:      "redis",
+									Image:     "redis:7",
+									Ports:     []corev1.ContainerPort{{ContainerPort: 6379}},
+									Resources: resources,
+								},
 							},
 						},
 					},
 				},
-			},
-		}
+			}
+			_, err = k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, internalRedisDep, metav1.CreateOptions{})
+			if err != nil {
+				return fmt.Errorf("create internal redis deployment: %w", err)
+			}
 
-		_, err = k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{})
-		if err != nil {
-			return fmt.Errorf("create deployment: %w", err)
-		}
+			internalRedisSvc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "redis-internal", Namespace: cfg.Namespace},
+				Spec: corev1.ServiceSpec{
+					Type:     corev1.ServiceTypeClusterIP,
+					Selector: redisLabels,
+					Ports:    []corev1.ServicePort{{Port: 6379, TargetPort: intstr.FromInt32(6379)}},
+				},
+			}
+			_, err = k.clientset.CoreV1().Services(cfg.Namespace).Create(ctx, internalRedisSvc, metav1.CreateOptions{})
+			if err != nil {
+				return fmt.Errorf("create internal redis service: %w", err)
+			}
 
-		svc := &corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: cfg.Namespace},
-			Spec: corev1.ServiceSpec{
-				Type:     corev1.ServiceTypeClusterIP,
-				Selector: labels,
-				Ports:    []corev1.ServicePort{{Port: 6379, TargetPort: intstr.FromInt32(6379)}},
-			},
-		}
+			// Ensure the Redis backend is ready before the proxy starts.
+			if err := k.waitForReady(ctx, cfg.Namespace, "redis-internal"); err != nil {
+				return err
+			}
 
-		_, err = k.clientset.CoreV1().Services(cfg.Namespace).Create(ctx, svc, metav1.CreateOptions{})
-		if err != nil {
-			return fmt.Errorf("create service: %w", err)
+			proxyLabels := map[string]string{"app": "cache-proxy", "deployment": cfg.Namespace}
+			proxyStrategy := configString(cfg.Node.Config, "strategy", "write-through")
+			proxyEnv := append(
+				envMapToK8s(envVars),
+				corev1.EnvVar{Name: "REDIS_HOST", Value: "redis-internal"},
+				corev1.EnvVar{Name: "REDIS_PORT", Value: "6379"},
+				corev1.EnvVar{Name: "PORT", Value: "8081"},
+			)
+
+			appLabel = "cache-proxy"
+			proxyDep := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{Name: "cache-proxy", Namespace: cfg.Namespace},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: ptr(int32(1)),
+					Selector: &metav1.LabelSelector{MatchLabels: proxyLabels},
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{Labels: proxyLabels},
+						Spec: corev1.PodSpec{
+							Containers: []corev1.Container{
+								{
+									Name:      "cache-proxy",
+									Image:     cacheImage(proxyStrategy),
+									Ports:     []corev1.ContainerPort{{ContainerPort: 8081}},
+									Resources: resources,
+									Env:        proxyEnv,
+								},
+							},
+						},
+					},
+				},
+			}
+			_, err = k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, proxyDep, metav1.CreateOptions{})
+			if err != nil {
+				return fmt.Errorf("create cache proxy deployment: %w", err)
+			}
+
+			proxySvc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: cfg.Namespace},
+				Spec: corev1.ServiceSpec{
+					Type:     corev1.ServiceTypeClusterIP,
+					Selector: proxyLabels,
+					Ports:    []corev1.ServicePort{{Port: 8081, TargetPort: intstr.FromInt32(8081)}},
+				},
+			}
+			_, err = k.clientset.CoreV1().Services(cfg.Namespace).Create(ctx, proxySvc, metav1.CreateOptions{})
+			if err != nil {
+				return fmt.Errorf("create cache proxy service: %w", err)
+			}
+
+		} else {
+			// Cache-aside: single Redis pod/service.
+			appLabel = "redis"
+			labels := map[string]string{"app": "redis", "deployment": cfg.Namespace}
+
+			dep := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{Name: "redis", Namespace: cfg.Namespace},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: ptr(int32(1)),
+					Selector: &metav1.LabelSelector{MatchLabels: labels},
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{Labels: labels},
+						Spec: corev1.PodSpec{
+							Containers: []corev1.Container{
+								{
+									Name:      "redis",
+									Image:     cacheImage("cache-aside"),
+									Ports:     []corev1.ContainerPort{{ContainerPort: 6379}},
+									Resources: resources,
+									Env:        envMapToK8s(envVars),
+								},
+							},
+						},
+					},
+				},
+			}
+
+			_, err = k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{})
+			if err != nil {
+				return fmt.Errorf("create deployment: %w", err)
+			}
+
+			svc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: cfg.Namespace},
+				Spec: corev1.ServiceSpec{
+					Type:     corev1.ServiceTypeClusterIP,
+					Selector: labels,
+					Ports:    []corev1.ServicePort{{Port: 6379, TargetPort: intstr.FromInt32(6379)}},
+				},
+			}
+
+			_, err = k.clientset.CoreV1().Services(cfg.Namespace).Create(ctx, svc, metav1.CreateOptions{})
+			if err != nil {
+				return fmt.Errorf("create service: %w", err)
+			}
 		}
 	case "app-server":
+		appLabel = "app-server"
 		// Image is a placeholder for now — Week 6 replaces with pre-built template images.
 		// We use nginx so the pod starts and passes readiness; real app images come in Week 6.
 		labels := map[string]string{"app": "app-server", "deployment": cfg.Namespace}
@@ -158,9 +265,10 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 					Spec: corev1.PodSpec{
 						Containers: []corev1.Container{{
 							Name:      "app-server",
-							Image:     "nginx:latest",
+							Image:     appServerImage(cfg.Design.Template),
 							Ports:     []corev1.ContainerPort{{ContainerPort: 8080}},
 							Resources: resources,
+							Env:        envMapToK8s(envVars),
 						}},
 					},
 				},
@@ -187,15 +295,15 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 		return nil
 	}
 
-	return k.waitForReady(ctx, cfg.Namespace)
+	return k.waitForReady(ctx, cfg.Namespace, appLabel)
 }
 
-func (k *K8sDeployer) waitForReady(ctx context.Context, namespace string) error {
+func (k *K8sDeployer) waitForReady(ctx context.Context, namespace string, appLabel string) error {
 	// Watch gives us a stream of events (ADDED, MODIFIED, DELETED)
 	// for pods matching our label selector. We block on this stream until
 	// we see a pod with ConditionReady=True, or the context deadline fires.
 	watcher, err := k.clientset.CoreV1().Pods(namespace).Watch(ctx, metav1.ListOptions{
-		LabelSelector: "deployment=" + namespace,
+		LabelSelector: "deployment=" + namespace + ",app=" + appLabel,
 	})
 	if err != nil {
 		return fmt.Errorf("watch pods: %w", err)
@@ -221,7 +329,7 @@ func (k *K8sDeployer) waitForReady(ctx context.Context, namespace string) error 
 			// UNDERSTAND: ctx.Done() closes when the context is cancelled or times out.
 			// We return ctx.Err() not a custom error — callers use errors.Is(err, context.DeadlineExceeded)
 			// to distinguish timeout from other failures.
-			return fmt.Errorf("timed out waiting for postgres ready: %w", ctx.Err())
+			return fmt.Errorf("timed out waiting for %s ready: %w", appLabel, ctx.Err())
 		}
 	}
 }
@@ -245,5 +353,37 @@ func (k *K8sDeployer) Teardown(ctx context.Context, namespace string) error {
 }
 
 func ptr(i int32) *int32 { return &i }
+
+func appServerImage(template string) string {
+	switch template {
+	case "url-shortener":
+		// Built/pushed as part of Week 6.
+		return "europe-west1-docker.pkg.dev/ganymede-cloud/ganymede-images/url-shortener:v2"
+	default:
+		// Fallback so other templates still deploy in Week 6.
+		return "nginx:latest"
+	}
+}
+
+func cacheImage(strategy string) string {
+	// UNDERSTAND: cache-aside uses plain Redis; proxy strategies use a custom Go service.
+	switch strategy {
+	case "write-through", "write-behind", "read-through":
+		return "europe-west1-docker.pkg.dev/ganymede-cloud/ganymede-images/caching-proxy:v1"
+	default:
+		return "redis:7"
+	}
+}
+
+func envMapToK8s(m map[string]string) []corev1.EnvVar {
+	if len(m) == 0 {
+		return nil
+	}
+	var vars []corev1.EnvVar
+	for k, v := range m {
+		vars = append(vars, corev1.EnvVar{Name: k, Value: v})
+	}
+	return vars
+}
 
 var _ ComponentDeployer = (*K8sDeployer)(nil)

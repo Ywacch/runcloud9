@@ -1,0 +1,602 @@
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"math/big"
+	"net/http"
+	"net/url"
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
+)
+
+type Config struct {
+	DBHost         string
+	DBPort         string
+	DBName         string
+	DBUser         string
+	DBPassword     string
+	CacheHost      string
+	CachePort      string
+	CacheStrategy  string
+	CacheMode      string
+	ProxyPort      string
+	CacheTTL       time.Duration
+	Stampede       bool
+	Port           string
+}
+
+type Server struct {
+	db    *DB
+	cache *Cache // nil if CACHE_HOST empty
+	proxy *ProxyClient
+	cfg   Config
+
+	cacheHits   atomic.Int64
+	cacheMisses atomic.Int64
+}
+
+func envOrDefault(key, defaultVal string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return defaultVal
+}
+
+func loadConfig() Config {
+	cacheMode := os.Getenv("CACHE_MODE")
+	if cacheMode == "" {
+		cacheMode = "redis"
+	}
+
+	ttlSecs, _ := strconv.Atoi(os.Getenv("CACHE_TTL"))
+	if ttlSecs == 0 {
+		ttlSecs = 300
+	}
+
+	wbSecs, _ := strconv.Atoi(os.Getenv("WRITE_BEHIND_INTERVAL"))
+	if wbSecs == 0 {
+		wbSecs = 30
+	}
+
+	strategy := os.Getenv("CACHE_STRATEGY")
+	if strategy == "" {
+		strategy = "cache-aside"
+	}
+
+	dbHost := os.Getenv("DB_HOST")
+	if cacheMode != "proxy" && dbHost == "" {
+		// UNDERSTAND: DB_HOST is required — every URL shortener deployment has Postgres in redis mode.
+		// In proxy mode the caching-proxy owns DB access.
+		slog.Error("DB_HOST missing")
+		os.Exit(1)
+	}
+
+	return Config{
+		DBHost:         dbHost,
+		DBPort:         envOrDefault("DB_PORT", "5432"),
+		DBName:         envOrDefault("DB_NAME", "syscrack"),
+		DBUser:         envOrDefault("DB_USER", "syscrack"),
+		DBPassword:     envOrDefault("DB_PASSWORD", "syscrack"),
+		CacheHost:      os.Getenv("CACHE_HOST"),
+		CachePort:      envOrDefault("CACHE_PORT", "6379"),
+		CacheStrategy:  strategy,
+		CacheMode:      cacheMode,
+		ProxyPort:      envOrDefault("CACHE_PROXY_PORT", "8081"),
+		CacheTTL:       time.Duration(ttlSecs) * time.Second,
+		Stampede:       os.Getenv("STAMPEDE_PROTECTION") == "true",
+		Port:           envOrDefault("PORT", "8080"),
+	}
+}
+
+func jsonError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+func writeJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// Never panic — we recover and return JSON error.
+func withRecovery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("panic recovered", "error", rec)
+				jsonError(w, http.StatusInternalServerError, "internal server error")
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) routes() *http.ServeMux {
+	mux := http.NewServeMux()
+
+	mux.Handle("/shorten", withRecovery(http.HandlerFunc(s.handleShorten)))
+	mux.Handle("/r/", withRecovery(http.HandlerFunc(s.handleRedirect)))
+	mux.Handle("/stats/", withRecovery(http.HandlerFunc(s.handleStats)))
+	mux.Handle("/health", withRecovery(http.HandlerFunc(s.handleHealth)))
+	mux.Handle("/metrics", withRecovery(http.HandlerFunc(s.handleMetrics)))
+
+	return mux
+}
+
+func (s *Server) handleShorten(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	req.URL = strings.TrimSpace(req.URL)
+	if req.URL == "" {
+		jsonError(w, http.StatusBadRequest, "url is required")
+		return
+	}
+
+	if _, err := url.ParseRequestURI(req.URL); err != nil {
+		jsonError(w, http.StatusBadRequest, "url is not valid")
+		return
+	}
+
+	ctx := r.Context()
+	code, err := s.generateUniqueCode(ctx)
+	if err != nil {
+		slog.Error("generateUniqueCode failed", "error", err)
+		jsonError(w, http.StatusInternalServerError, "failed to generate code")
+		return
+	}
+
+	if s.cfg.CacheMode == "proxy" {
+		if err := s.proxy.Set(ctx, code, req.URL, s.cfg.CacheTTL); err != nil {
+			slog.Error("proxy SET failed", "error", err)
+			jsonError(w, http.StatusInternalServerError, "cache write failed")
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{
+			"code":      code,
+			"short_url": "/r/" + code,
+		})
+		return
+	}
+
+	// POST /shorten behaviour depends on cache strategy.
+	switch s.cfg.CacheStrategy {
+	case "cache-aside":
+		// write DB only; cache is populated on reads.
+		if err := s.db.SaveURL(ctx, code, req.URL); err != nil {
+			jsonError(w, http.StatusInternalServerError, "db write failed")
+			return
+		}
+		// no cache write
+	case "write-through":
+		if err := s.db.SaveURL(ctx, code, req.URL); err != nil {
+			jsonError(w, http.StatusInternalServerError, "db write failed")
+			return
+		}
+		if s.cache != nil {
+			if err := s.cache.Set(ctx, code, req.URL, s.cfg.CacheTTL); err != nil {
+				slog.Warn("cache set failed", "error", err)
+			}
+		}
+	default:
+		// Safe default: DB only.
+		if err := s.db.SaveURL(ctx, code, req.URL); err != nil {
+			jsonError(w, http.StatusInternalServerError, "db write failed")
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"code":      code,
+		"short_url": "/r/" + code,
+	})
+}
+
+func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	code := strings.TrimPrefix(r.URL.Path, "/r/")
+	code = strings.Trim(code, "/")
+	if code == "" {
+		jsonError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	ctx := r.Context()
+
+	if s.cfg.CacheMode == "proxy" {
+		val, source, ok, err := s.proxy.Get(ctx, code)
+		if err != nil {
+			slog.Error("proxy GET failed", "error", err)
+			jsonError(w, http.StatusInternalServerError, "failed to fetch url")
+			return
+		}
+		if !ok {
+			jsonError(w, http.StatusNotFound, "not found")
+			return
+		}
+
+		if source == "cache" {
+			s.cacheHits.Add(1)
+		} else {
+			s.cacheMisses.Add(1)
+		}
+		go func() {
+			_ = s.proxy.Increment(context.Background(), code)
+		}()
+
+		writeJSON(w, http.StatusOK, map[string]string{
+			"code":         code,
+			"original_url": val,
+		})
+		return
+	}
+
+	// Cache enabled?
+	if s.cache != nil {
+		// Fast-path: plain Get to differentiate hit vs miss.
+		if val, ok := s.cache.Get(ctx, code); ok {
+			s.cacheHits.Add(1)
+			go func() {
+				_ = s.db.IncrementHitCount(context.Background(), code)
+			}()
+			writeJSON(w, http.StatusOK, map[string]string{
+				"code":         code,
+				"original_url": val,
+			})
+			return
+		}
+
+		s.cacheMisses.Add(1)
+		fetchFn := func() (string, error) {
+			rec, err := s.db.GetURL(ctx, code)
+			if err != nil {
+				return "", err
+			}
+			return rec.Original, nil
+		}
+
+		val, err := s.cache.GetProtected(ctx, code, fetchFn)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				jsonError(w, http.StatusNotFound, "not found")
+				return
+			}
+			slog.Error("redirect fetch failed", "error", err)
+			jsonError(w, http.StatusInternalServerError, "failed to fetch url")
+			return
+		}
+
+		// Populate cache with original only.
+		if err := s.cache.Set(ctx, code, val, s.cfg.CacheTTL); err != nil {
+			slog.Warn("cache set after miss failed", "error", err)
+		}
+		go func() {
+			_ = s.db.IncrementHitCount(context.Background(), code)
+		}()
+
+		writeJSON(w, http.StatusOK, map[string]string{
+			"code":         code,
+			"original_url": val,
+		})
+		return
+	}
+
+	// Cache disabled: read from DB.
+	rec, err := s.db.GetURL(ctx, code)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			jsonError(w, http.StatusNotFound, "not found")
+			return
+		}
+		slog.Error("redirect db read failed", "error", err)
+		jsonError(w, http.StatusInternalServerError, "failed to fetch url")
+		return
+	}
+	go func() {
+		_ = s.db.IncrementHitCount(context.Background(), code)
+	}()
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"code":         code,
+		"original_url": rec.Original,
+	})
+}
+
+func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	code := strings.TrimPrefix(r.URL.Path, "/stats/")
+	code = strings.Trim(code, "/")
+	if code == "" {
+		jsonError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	ctx := r.Context()
+
+	if s.cfg.CacheMode == "proxy" {
+		rec, ok, err := s.proxy.Stats(ctx, code)
+		if err != nil {
+			slog.Error("proxy STATS failed", "error", err)
+			jsonError(w, http.StatusInternalServerError, "failed to fetch stats")
+			return
+		}
+		if !ok {
+			jsonError(w, http.StatusNotFound, "not found")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"code":         rec.Code,
+			"original_url": rec.Original,
+			"hit_count":    rec.HitCount,
+			"created_at":   rec.CreatedAt,
+		})
+		return
+	}
+
+	// UNDERSTAND: /stats bypasses cache entirely (accurate hit_count).
+	rec, err := s.db.GetURL(ctx, code)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			jsonError(w, http.StatusNotFound, "not found")
+			return
+		}
+		slog.Error("stats db read failed", "error", err)
+		jsonError(w, http.StatusInternalServerError, "failed to fetch stats")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"code":         rec.Code,
+		"original_url": rec.Original,
+		"hit_count":    rec.HitCount,
+		"created_at":   rec.CreatedAt,
+	})
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	ctx := r.Context()
+
+	if s.cfg.CacheMode == "proxy" {
+		_, redis, db, err := s.proxy.Health(ctx)
+		if err != nil {
+			slog.Error("proxy health failed", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{
+				"status": "error",
+				"db":     "unreachable",
+			})
+			return
+		}
+		_ = redis
+		_ = db
+		writeJSON(w, http.StatusOK, map[string]string{
+			"status": "ok",
+			"db":     "ok",
+			"cache":  "proxy",
+		})
+		return
+	}
+
+	// DB health.
+	var n int
+	if err := s.db.pool.QueryRow(ctx, "SELECT 1").Scan(&n); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"status": "error",
+			"db":     "unreachable",
+		})
+		return
+	}
+
+	cacheHealth := "disabled"
+	if s.cache != nil {
+		if err := s.cache.client.Ping(ctx).Err(); err != nil {
+			cacheHealth = "error"
+		} else {
+			cacheHealth = "ok"
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status": "ok",
+		"db":     "ok",
+		"cache":  cacheHealth,
+	})
+}
+
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	hits := s.cacheHits.Load()
+	misses := s.cacheMisses.Load()
+	total := hits + misses
+
+	hitRate := float64(0)
+	if total > 0 {
+		hitRate = float64(hits) / float64(total)
+	}
+
+	strategy := s.cfg.CacheStrategy
+	if s.cfg.CacheMode == "proxy" {
+		strategy = "proxy"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"cache_hits":          hits,
+		"cache_misses":        misses,
+		"hit_rate":            hitRate,
+		"strategy":            strategy,
+		"stampede_protection": s.cfg.Stampede,
+	})
+}
+
+const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+func generateCode() string {
+	// generate 6 chars using crypto-rand so we don't depend on math/rand seeding.
+	b := make([]byte, 6)
+	for i := range b {
+		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		b[i] = charset[n.Int64()]
+	}
+	return string(b)
+}
+
+// UNDERSTAND: collision probability with 6 chars from 62-char alphabet is
+// 62^6 = ~56 billion combinations. At 1M URLs the collision rate is negligible,
+// but we still handle it correctly — retry up to 5 times before giving up.
+func (s *Server) generateUniqueCode(ctx context.Context) (string, error) {
+	for i := 0; i < 5; i++ {
+		code := generateCode()
+		var (
+			exists bool
+			err    error
+		)
+		if s.cfg.CacheMode == "proxy" {
+			exists, err = s.proxy.Exists(ctx, code)
+		} else {
+			exists, err = s.db.URLExists(ctx, code)
+		}
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return code, nil
+		}
+	}
+	return "", fmt.Errorf("failed to generate unique code after 5 attempts")
+}
+
+func newServer(ctx context.Context, cfg Config) (*Server, error) {
+	if cfg.CacheMode == "proxy" {
+		if cfg.CacheHost == "" {
+			return nil, fmt.Errorf("CACHE_HOST is required in proxy mode")
+		}
+		s := &Server{
+			cfg:   cfg,
+			proxy: NewProxyClient(cfg.CacheHost, cfg.ProxyPort),
+		}
+		return s, nil
+	}
+
+	connURL := &url.URL{
+		Scheme: "postgres",
+		Host:   fmt.Sprintf("%s:%s", cfg.DBHost, cfg.DBPort),
+		Path:   "/" + cfg.DBName,
+		User:   url.UserPassword(cfg.DBUser, cfg.DBPassword),
+	}
+	connString := connURL.String()
+
+	pool, err := pgxpool.New(ctx, connString)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create schema.
+	_, err = pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS urls (
+			code        VARCHAR(8) PRIMARY KEY,
+			original    TEXT NOT NULL,
+			created_at  TIMESTAMPTZ DEFAULT NOW(),
+			hit_count   INTEGER DEFAULT 0
+		);
+	`)
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+
+	s := &Server{
+		db:  newDB(pool),
+		cfg: cfg,
+	}
+
+	// Optional cache.
+	if cfg.CacheHost != "" {
+		client := redis.NewClient(&redis.Options{
+			Addr: fmt.Sprintf("%s:%s", cfg.CacheHost, cfg.CachePort),
+		})
+		// Best-effort ping: cache errors are never fatal.
+		if err := client.Ping(ctx).Err(); err != nil {
+			slog.Warn("redis ping failed; continuing with cache disabled", "error", err)
+			// treat as disabled
+		} else {
+			s.cache = newCache(client, cfg.Stampede)
+		}
+	}
+
+	return s, nil
+}
+
+func main() {
+	slog.Info("url-shortener starting")
+	cfg := loadConfig()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+
+	s, err := newServer(ctx, cfg)
+	if err != nil {
+		slog.Error("newServer failed", "error", err)
+		os.Exit(1)
+	}
+	if s.db != nil && s.db.pool != nil {
+		defer s.db.pool.Close()
+	}
+
+	srv := &http.Server{
+		Addr:    ":" + cfg.Port,
+		Handler: s.routes(),
+	}
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+
+	slog.Info("listening", "port", cfg.Port)
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		slog.Error("server failed", "error", err)
+		os.Exit(1)
+	}
+}

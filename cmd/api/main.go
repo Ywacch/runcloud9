@@ -10,6 +10,7 @@ import (
 
 	"github.com/ywacch/ganymede/pkg/api"
 	"github.com/ywacch/ganymede/pkg/deployer"
+	"github.com/ywacch/ganymede/pkg/seeder"
 	"github.com/ywacch/ganymede/pkg/store"
 	"github.com/ywacch/ganymede/pkg/teardown"
 	"k8s.io/client-go/kubernetes"
@@ -86,6 +87,24 @@ func main() {
 
 	deployers := buildDeployers()
 
+	const seedBucketName = "ganymede-seed-data"
+	var seed *seeder.Seeder
+	if os.Getenv("DEPLOYER") == "k8s" {
+		kubeconfigPath := os.Getenv("KUBECONFIG")
+		if kubeconfigPath == "" {
+			kubeconfigPath = filepath.Join(homedir.HomeDir(), ".kube", "config")
+		}
+		config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+		if err != nil {
+			log.Fatalf("build kubeconfig: %v", err)
+		}
+		clientset, err := kubernetes.NewForConfig(config)
+		if err != nil {
+			log.Fatalf("build clientset: %v", err)
+		}
+		seed = seeder.NewSeeder(clientset, seedBucketName)
+	}
+
 	deploymentStore, err := store.NewDeploymentStore(supabaseURL, supabaseKey)
 	if err != nil {
 		log.Fatalf("failed to init store: %v", err)
@@ -105,7 +124,7 @@ func main() {
 	}
 
 	scheduler := teardown.NewScheduler(teardownFn)
-	handler := api.NewHandler(deployers, deploymentStore, scheduler)
+	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 

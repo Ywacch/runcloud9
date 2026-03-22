@@ -13,6 +13,7 @@ import (
 
 	"github.com/ywacch/ganymede/pkg/deployer"
 	"github.com/ywacch/ganymede/pkg/store"
+	"github.com/ywacch/ganymede/pkg/seeder"
 	"github.com/ywacch/ganymede/pkg/teardown"
 )
 
@@ -24,10 +25,16 @@ type Handler struct {
 	deployers map[string]deployer.ComponentDeployer
 	store     *store.DeploymentStore
 	scheduler *teardown.Scheduler
+	seeder    *seeder.Seeder
 }
 
-func NewHandler(deployers map[string]deployer.ComponentDeployer, store *store.DeploymentStore, scheduler *teardown.Scheduler) *Handler {
-	return &Handler{deployers: deployers, store: store, scheduler: scheduler}
+func NewHandler(
+	deployers map[string]deployer.ComponentDeployer,
+	store *store.DeploymentStore,
+	scheduler *teardown.Scheduler,
+	seed *seeder.Seeder,
+) *Handler {
+	return &Handler{deployers: deployers, store: store, scheduler: scheduler, seeder: seed}
 }
 
 // RegisterRoutes attaches handlers to the mux.
@@ -151,6 +158,12 @@ func (h *Handler) orchestrate(
 		deployed = append(deployed, node)
 	}
 
+	if h.seeder != nil {
+		if err := h.seeder.SeedDatabase(ctx, namespace, design.Template); err != nil {
+			log.Printf("seeding failed for namespace=%s (continuing deployment): %v", namespace, err)
+		}
+	}
+
 	return &deployer.DeploymentResult{
 		DeploymentID: namespace,
 		Namespace:    namespace,
@@ -181,6 +194,9 @@ func validateDesign(d deployer.DeploymentDesign) error {
 	}
 	if len(d.Nodes) == 0 {
 		return fmt.Errorf("design must contain at least one node")
+	}
+	if err := deployer.ValidateTopology(d); err != nil {
+		return err
 	}
 	return nil
 }
