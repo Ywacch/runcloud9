@@ -1,0 +1,100 @@
+# UNDERSTAND: scrapeInterval controls how often Prometheus polls each pod's /metrics endpoint.
+# Default is 15s — too slow for a 10-minute session demo.
+# 5s gives dashboard updates that feel live without hammering pods.
+prometheus:
+  prometheusSpec:
+    scrapeInterval: "5s"
+    evaluationInterval: "5s"
+    # UNDERSTAND: podMonitorSelectorNilUsesHelmValues=false + empty selector means
+    # Prometheus watches ALL namespaces for pods with scrape annotations.
+    # This is how ephemeral deployment namespaces get auto-discovered.
+    podMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+    additionalScrapeConfigs:
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+    initContainers:
+      - name: init-config-reloader
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 250m
+            memory: 512Mi
+
+# UNDERSTAND: we use annotation-based scraping (not PodMonitor CRDs) because
+# deployment namespaces are created dynamically. Adding a PodMonitor per namespace
+# would require the deployer to create an extra K8s resource per deployment.
+# Annotations on the pod spec are simpler — Prometheus discovers them automatically.
+#
+# Required annotations on pods to enable scraping:
+#   prometheus.io/scrape: "true"
+#   prometheus.io/port: "<container_port>"
+#   prometheus.io/path: "/metrics"  (default, can omit)
+
+grafana:
+  enabled: true
+  adminPassword: "ganymede-dev" # dev only — change for production
+  service:
+    type: ClusterIP # access via port-forward, not LoadBalancer
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 200m
+      memory: 512Mi
+
+# Reduce resource usage — Autopilot has minimum floors so keep these reasonable
+alertmanager:
+  enabled: false # not needed for demo
+
+
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+coreDns:
+  enabled: false
+
+nodeExporter:
+  enabled: false
+prometheusOperator:
+  admissionWebhooks:
+    enabled: false
+    patch:
+      enabled: false
+  tls:
+    enabled: false

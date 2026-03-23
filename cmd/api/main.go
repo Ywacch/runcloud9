@@ -10,6 +10,7 @@ import (
 
 	"github.com/ywacch/ganymede/pkg/api"
 	"github.com/ywacch/ganymede/pkg/deployer"
+	"github.com/ywacch/ganymede/pkg/metrics"
 	"github.com/ywacch/ganymede/pkg/seeder"
 	"github.com/ywacch/ganymede/pkg/store"
 	"github.com/ywacch/ganymede/pkg/teardown"
@@ -124,7 +125,17 @@ func main() {
 	}
 
 	scheduler := teardown.NewScheduler(teardownFn)
-	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed)
+
+	// Prometheus is accessible inside the cluster at this DNS name.
+	// kube-prometheus-stack exposes it as a ClusterIP service in the monitoring namespace.
+	// When running locally, set PROMETHEUS_URL to a port-forwarded URL or leave empty for zeros.
+	prometheusURL := os.Getenv("PROMETHEUS_URL")
+	if prometheusURL == "" && os.Getenv("DEPLOYER") == "k8s" {
+		prometheusURL = "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
+	}
+	metricsCollector := metrics.NewMetricsCollector(prometheusURL)
+
+	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed, metricsCollector)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 

@@ -179,7 +179,7 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 									Image:     cacheImage(proxyStrategy),
 									Ports:     []corev1.ContainerPort{{ContainerPort: 8081}},
 									Resources: resources,
-									Env:        proxyEnv,
+									Env:       proxyEnv,
 								},
 							},
 						},
@@ -223,7 +223,7 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 									Image:     cacheImage("cache-aside"),
 									Ports:     []corev1.ContainerPort{{ContainerPort: 6379}},
 									Resources: resources,
-									Env:        envMapToK8s(envVars),
+									Env:       envMapToK8s(envVars),
 								},
 							},
 						},
@@ -255,20 +255,30 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 		// Image is a placeholder for now — Week 6 replaces with pre-built template images.
 		// We use nginx so the pod starts and passes readiness; real app images come in Week 6.
 		labels := map[string]string{"app": "app-server", "deployment": cfg.Namespace}
+
+		// These annotations are how Prometheus discovers which pods to scrape.
+		// kube-prometheus-stack watches for pods with prometheus.io/scrape=true across
+		// all namespaces. No PodMonitor CRD needed — annotation-based discovery is
+		// simpler for ephemeral namespaces created dynamically by the deployer.
+		appAnnotations := map[string]string{
+			"prometheus.io/scrape": "true",
+			"prometheus.io/port":   "8080",
+			"prometheus.io/path":   "/metrics",
+		}
 		dep := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Name: "app-server", Namespace: cfg.Namespace},
 			Spec: appsv1.DeploymentSpec{
 				Replicas: ptr(int32(1)),
 				Selector: &metav1.LabelSelector{MatchLabels: labels},
 				Template: corev1.PodTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{Labels: labels},
+					ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: appAnnotations},
 					Spec: corev1.PodSpec{
 						Containers: []corev1.Container{{
 							Name:      "app-server",
 							Image:     appServerImage(cfg.Design.Template),
 							Ports:     []corev1.ContainerPort{{ContainerPort: 8080}},
 							Resources: resources,
-							Env:        envMapToK8s(envVars),
+							Env:       envMapToK8s(envVars),
 						}},
 					},
 				},
@@ -358,7 +368,7 @@ func appServerImage(template string) string {
 	switch template {
 	case "url-shortener":
 		// Built/pushed as part of Week 6.
-		return "europe-west1-docker.pkg.dev/ganymede-cloud/ganymede-images/url-shortener:v2"
+		return "europe-west1-docker.pkg.dev/ganymede-cloud/ganymede-images/url-shortener:v3"
 	default:
 		// Fallback so other templates still deploy in Week 6.
 		return "nginx:latest"
