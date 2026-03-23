@@ -11,9 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/ywacch/ganymede/pkg/deployer"
-	"github.com/ywacch/ganymede/pkg/store"
+	"github.com/ywacch/ganymede/pkg/metrics"
 	"github.com/ywacch/ganymede/pkg/seeder"
+	"github.com/ywacch/ganymede/pkg/store"
 	"github.com/ywacch/ganymede/pkg/teardown"
 )
 
@@ -22,10 +24,19 @@ import (
 // This makes testing easier as you can swap in a mock deployer without
 // touching global state.
 type Handler struct {
-	deployers map[string]deployer.ComponentDeployer
-	store     *store.DeploymentStore
-	scheduler *teardown.Scheduler
-	seeder    *seeder.Seeder
+	deployers        map[string]deployer.ComponentDeployer
+	store            *store.DeploymentStore
+	scheduler        *teardown.Scheduler
+	seeder           *seeder.Seeder
+	metricsCollector *metrics.MetricsCollector
+}
+
+var wsUpgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		// UNDERSTAND: in production, check origin against allowed list.
+		// For development, allow all origins.
+		return true
+	},
 }
 
 func NewHandler(
@@ -33,15 +44,43 @@ func NewHandler(
 	store *store.DeploymentStore,
 	scheduler *teardown.Scheduler,
 	seed *seeder.Seeder,
+	metricsCollector *metrics.MetricsCollector,
 ) *Handler {
-	return &Handler{deployers: deployers, store: store, scheduler: scheduler, seeder: seed}
+	return &Handler{
+		deployers:        deployers,
+		store:            store,
+		scheduler:        scheduler,
+		seeder:           seed,
+		metricsCollector: metricsCollector,
+	}
 }
 
 // RegisterRoutes attaches handlers to the mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+	log.Println("RegisterRoutes called") // temporary
 	mux.HandleFunc("POST /deployments", h.handleCreateDeployment)
 	mux.HandleFunc("DELETE /deployments/{id}", h.handleDeleteDeployment)
+	mux.HandleFunc("GET /deployments/{id}/metrics", h.handleMetricsStream)
 	mux.HandleFunc("GET /health", h.handleHealth)
+}
+
+// handleMetricsStream upgrades the HTTP connection to WebSocket and streams
+// deployment metrics until the client disconnects or the deployment expires.
+func (h *Handler) handleMetricsStream(w http.ResponseWriter, r *http.Request) {
+	namespace := r.PathValue("id")
+	if namespace == "" {
+		writeError(w, http.StatusBadRequest, "missing deployment id")
+		return
+	}
+
+	conn, err := wsUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("ws upgrade failed: %v", err)
+		return
+	}
+
+	ctx := r.Context()
+	metrics.StreamMetrics(ctx, conn, h.metricsCollector, namespace)
 }
 
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {

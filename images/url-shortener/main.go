@@ -20,23 +20,24 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 )
 
 type Config struct {
-	DBHost         string
-	DBPort         string
-	DBName         string
-	DBUser         string
-	DBPassword     string
-	CacheHost      string
-	CachePort      string
-	CacheStrategy  string
-	CacheMode      string
-	ProxyPort      string
-	CacheTTL       time.Duration
-	Stampede       bool
-	Port           string
+	DBHost        string
+	DBPort        string
+	DBName        string
+	DBUser        string
+	DBPassword    string
+	CacheHost     string
+	CachePort     string
+	CacheStrategy string
+	CacheMode     string
+	ProxyPort     string
+	CacheTTL      time.Duration
+	Stampede      bool
+	Port          string
 }
 
 type Server struct {
@@ -67,11 +68,6 @@ func loadConfig() Config {
 		ttlSecs = 300
 	}
 
-	wbSecs, _ := strconv.Atoi(os.Getenv("WRITE_BEHIND_INTERVAL"))
-	if wbSecs == 0 {
-		wbSecs = 30
-	}
-
 	strategy := os.Getenv("CACHE_STRATEGY")
 	if strategy == "" {
 		strategy = "cache-aside"
@@ -86,19 +82,19 @@ func loadConfig() Config {
 	}
 
 	return Config{
-		DBHost:         dbHost,
-		DBPort:         envOrDefault("DB_PORT", "5432"),
-		DBName:         envOrDefault("DB_NAME", "syscrack"),
-		DBUser:         envOrDefault("DB_USER", "syscrack"),
-		DBPassword:     envOrDefault("DB_PASSWORD", "syscrack"),
-		CacheHost:      os.Getenv("CACHE_HOST"),
-		CachePort:      envOrDefault("CACHE_PORT", "6379"),
-		CacheStrategy:  strategy,
-		CacheMode:      cacheMode,
-		ProxyPort:      envOrDefault("CACHE_PROXY_PORT", "8081"),
-		CacheTTL:       time.Duration(ttlSecs) * time.Second,
-		Stampede:       os.Getenv("STAMPEDE_PROTECTION") == "true",
-		Port:           envOrDefault("PORT", "8080"),
+		DBHost:        dbHost,
+		DBPort:        envOrDefault("DB_PORT", "5432"),
+		DBName:        envOrDefault("DB_NAME", "syscrack"),
+		DBUser:        envOrDefault("DB_USER", "syscrack"),
+		DBPassword:    envOrDefault("DB_PASSWORD", "syscrack"),
+		CacheHost:     os.Getenv("CACHE_HOST"),
+		CachePort:     envOrDefault("CACHE_PORT", "6379"),
+		CacheStrategy: strategy,
+		CacheMode:     cacheMode,
+		ProxyPort:     envOrDefault("CACHE_PROXY_PORT", "8081"),
+		CacheTTL:      time.Duration(ttlSecs) * time.Second,
+		Stampede:      os.Getenv("STAMPEDE_PROTECTION") == "true",
+		Port:          envOrDefault("PORT", "8080"),
 	}
 }
 
@@ -130,11 +126,15 @@ func withRecovery(next http.Handler) http.Handler {
 func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
-	mux.Handle("/shorten", withRecovery(http.HandlerFunc(s.handleShorten)))
-	mux.Handle("/r/", withRecovery(http.HandlerFunc(s.handleRedirect)))
-	mux.Handle("/stats/", withRecovery(http.HandlerFunc(s.handleStats)))
+	mux.Handle("/shorten", withRecovery(withMetrics("/shorten", http.HandlerFunc(s.handleShorten))))
+	mux.Handle("/r/", withRecovery(withMetrics("/r", http.HandlerFunc(s.handleRedirect))))
+	mux.Handle("/stats/", withRecovery(withMetrics("/stats", http.HandlerFunc(s.handleStats))))
 	mux.Handle("/health", withRecovery(http.HandlerFunc(s.handleHealth)))
-	mux.Handle("/metrics", withRecovery(http.HandlerFunc(s.handleMetrics)))
+	mux.Handle("/cache-stats", withRecovery(http.HandlerFunc(s.handleCacheStats)))
+
+	// promhttp.Handler() serves the Prometheus exposition format
+	// that Prometheus scrapes. This is separate from /cache-stats (our JSON endpoint).
+	mux.Handle("/metrics", promhttp.Handler())
 
 	return mux
 }
@@ -246,8 +246,10 @@ func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 
 		if source == "cache" {
 			s.cacheHits.Add(1)
+			cacheHitsTotal.Inc()
 		} else {
 			s.cacheMisses.Add(1)
+			cacheMissesTotal.Inc()
 		}
 		go func() {
 			_ = s.proxy.Increment(context.Background(), code)
@@ -265,6 +267,7 @@ func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 		// Fast-path: plain Get to differentiate hit vs miss.
 		if val, ok := s.cache.Get(ctx, code); ok {
 			s.cacheHits.Add(1)
+			cacheHitsTotal.Inc()
 			go func() {
 				_ = s.db.IncrementHitCount(context.Background(), code)
 			}()
@@ -276,6 +279,7 @@ func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 		}
 
 		s.cacheMisses.Add(1)
+		cacheMissesTotal.Inc()
 		fetchFn := func() (string, error) {
 			rec, err := s.db.GetURL(ctx, code)
 			if err != nil {
@@ -440,7 +444,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleCacheStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return

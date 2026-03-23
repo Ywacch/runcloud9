@@ -23,6 +23,8 @@ func newDB(pool *pgxpool.Pool) *DB {
 }
 
 func (db *DB) SaveURL(ctx context.Context, code, original string) error {
+	start := time.Now()
+	defer func() { dbQueryDuration.WithLabelValues("save_url").Observe(time.Since(start).Seconds()) }()
 	// UPSERT keeps inserts idempotent (e.g. retries, concurrent writers).
 	// We only update original; hit_count/created_at should remain intact.
 	_, err := db.pool.Exec(ctx, `
@@ -35,6 +37,8 @@ func (db *DB) SaveURL(ctx context.Context, code, original string) error {
 }
 
 func (db *DB) GetURL(ctx context.Context, code string) (URLStats, error) {
+	start := time.Now()
+	defer func() { dbQueryDuration.WithLabelValues("get_url").Observe(time.Since(start).Seconds()) }()
 	row := db.pool.QueryRow(ctx, `
 		SELECT code, original, hit_count, created_at
 		FROM urls
@@ -49,6 +53,8 @@ func (db *DB) GetURL(ctx context.Context, code string) (URLStats, error) {
 }
 
 func (db *DB) IncrementHitCount(ctx context.Context, code string) error {
+	start := time.Now()
+	defer func() { dbQueryDuration.WithLabelValues("increment_hit").Observe(time.Since(start).Seconds()) }()
 	_, err := db.pool.Exec(ctx, `
 		UPDATE urls
 		SET hit_count = hit_count + 1
@@ -58,6 +64,8 @@ func (db *DB) IncrementHitCount(ctx context.Context, code string) error {
 }
 
 func (db *DB) URLExists(ctx context.Context, code string) (bool, error) {
+	start := time.Now()
+	defer func() { dbQueryDuration.WithLabelValues("url_exists").Observe(time.Since(start).Seconds()) }()
 	var exists bool
 	err := db.pool.QueryRow(ctx, `
 		SELECT EXISTS(
