@@ -19,9 +19,10 @@ import (
 	"k8s.io/client-go/util/homedir"
 )
 
-// buildDeployers returns the deployer map. os.Getenv returns empty string if var not set.
+// buildDeployers returns the deployer map and k8s clientset.
+// os.Getenv returns empty string if var not set.
 // Default to local so tests and local dev without minikube still work.
-func buildDeployers() map[string]deployer.ComponentDeployer {
+func buildDeployers() (map[string]deployer.ComponentDeployer, kubernetes.Interface) {
 	if os.Getenv("DEPLOYER") != "k8s" {
 		log.Println("Using LocalDeployer (set DEPLOYER=k8s for real K8s)")
 		return map[string]deployer.ComponentDeployer{
@@ -30,7 +31,7 @@ func buildDeployers() map[string]deployer.ComponentDeployer {
 			"app-server": &deployer.LocalDeployer{NodeType: "app-server"},
 			"lb":         &deployer.LocalDeployer{NodeType: "lb"},
 			"mq":         &deployer.LocalDeployer{NodeType: "mq"},
-		}
+		}, nil
 	}
 
 	// UNDERSTAND: KUBECONFIG env var lets you point at a specific config file.
@@ -56,7 +57,7 @@ func buildDeployers() map[string]deployer.ComponentDeployer {
 		"app-server": deployer.NewK8sDeployer(clientset, "app-server"),
 		"lb":         &deployer.LocalDeployer{NodeType: "lb"},
 		"mq":         &deployer.LocalDeployer{NodeType: "mq"},
-	}
+	}, clientset
 }
 
 // recoverDeployments re-registers teardown timers for active deployments on startup.
@@ -86,23 +87,11 @@ func main() {
 		log.Fatal("SUPABASE_URL and SUPABASE_SERVICE_KEY are required")
 	}
 
-	deployers := buildDeployers()
+	deployers, clientset := buildDeployers()
 
 	const seedBucketName = "ganymede-seed-data"
 	var seed *seeder.Seeder
-	if os.Getenv("DEPLOYER") == "k8s" {
-		kubeconfigPath := os.Getenv("KUBECONFIG")
-		if kubeconfigPath == "" {
-			kubeconfigPath = filepath.Join(homedir.HomeDir(), ".kube", "config")
-		}
-		config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
-		if err != nil {
-			log.Fatalf("build kubeconfig: %v", err)
-		}
-		clientset, err := kubernetes.NewForConfig(config)
-		if err != nil {
-			log.Fatalf("build clientset: %v", err)
-		}
+	if clientset != nil {
 		seed = seeder.NewSeeder(clientset, seedBucketName)
 	}
 
@@ -135,7 +124,7 @@ func main() {
 	}
 	metricsCollector := metrics.NewMetricsCollector(prometheusURL)
 
-	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed, metricsCollector)
+	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed, metricsCollector, clientset)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 

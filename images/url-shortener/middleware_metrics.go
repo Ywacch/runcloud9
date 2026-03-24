@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -23,6 +24,13 @@ func withMetrics(pathPattern string, next http.Handler) http.Handler {
 		).Inc()
 
 		httpRequestDuration.WithLabelValues(r.Method, pathPattern).Observe(duration)
+		slog.Info("request handled",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"route", pathPattern,
+			"status", rw.status,
+			"duration_ms", time.Since(start).Milliseconds(),
+		)
 	})
 }
 

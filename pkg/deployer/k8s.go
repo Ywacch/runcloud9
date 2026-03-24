@@ -367,8 +367,8 @@ func ptr(i int32) *int32 { return &i }
 func appServerImage(template string) string {
 	switch template {
 	case "url-shortener":
-		// Built/pushed as part of Week 6.
-		return "europe-west1-docker.pkg.dev/ganymede-cloud/ganymede-images/url-shortener:v3"
+		// Built/pushed as part of Week 8.
+		return "europe-west1-docker.pkg.dev/ganymede-cloud/ganymede-images/url-shortener:v4"
 	default:
 		// Fallback so other templates still deploy in Week 6.
 		return "nginx:latest"
