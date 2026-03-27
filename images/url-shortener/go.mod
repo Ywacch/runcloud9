@@ -1,4 +1,4 @@
-module github.com/ywacch/ganymede/images/url-shortener
+module github.com/ywacch/cloud9/images/url-shortener
 
 go 1.24.0
 

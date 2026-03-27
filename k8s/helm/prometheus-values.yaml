@@ -62,7 +62,7 @@ prometheus:
 
 grafana:
   enabled: true
-  adminPassword: "ganymede-dev" # dev only — change for production
+  adminPassword: "cloud9-dev" # dev only — change for production
   service:
     type: ClusterIP # access via port-forward, not LoadBalancer
   resources:

@@ -8,16 +8,29 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ywacch/ganymede/pkg/api"
-	"github.com/ywacch/ganymede/pkg/deployer"
-	"github.com/ywacch/ganymede/pkg/metrics"
-	"github.com/ywacch/ganymede/pkg/seeder"
-	"github.com/ywacch/ganymede/pkg/store"
-	"github.com/ywacch/ganymede/pkg/teardown"
+	"github.com/ywacch/cloud9/pkg/api"
+	"github.com/ywacch/cloud9/pkg/deployer"
+	"github.com/ywacch/cloud9/pkg/metrics"
+	"github.com/ywacch/cloud9/pkg/seeder"
+	"github.com/ywacch/cloud9/pkg/store"
+	"github.com/ywacch/cloud9/pkg/teardown"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
 )
+
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 // buildDeployers returns the deployer map and k8s clientset.
 // os.Getenv returns empty string if var not set.
@@ -89,7 +102,11 @@ func main() {
 
 	deployers, clientset := buildDeployers()
 
-	const seedBucketName = "ganymede-seed-data"
+	seedBucketName := os.Getenv("SEED_BUCKET_NAME")
+	if seedBucketName == "" {
+		// Backward-compatible default: keep using existing seed bucket until migrated.
+		seedBucketName = "ganymede-seed-data"
+	}
 	var seed *seeder.Seeder
 	if clientset != nil {
 		seed = seeder.NewSeeder(clientset, seedBucketName)
@@ -134,8 +151,8 @@ func main() {
 	if len(os.Args) > 1 {
 		port = os.Args[1]
 	}
-	log.Printf("Ganymede Cloud API starting on :%s", port)
-	if err := http.ListenAndServe(":"+port, mux); err != nil {
+	log.Printf("Cloud9 API starting on :%s", port)
+	if err := http.ListenAndServe(":"+port, withCORS(mux)); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }

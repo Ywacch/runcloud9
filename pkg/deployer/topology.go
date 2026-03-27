@@ -15,6 +15,30 @@ func requiresProxy(cacheNode DeploymentNode) bool {
 	}
 }
 
+// DisplayCacheStrategyForApp returns the cache strategy label for UI: the first app->cache
+// edge's target config (proxy strategies use the cache node's "strategy"; Redis path uses
+// cacheRedisStrategyForApp). Empty string if the app has no outbound cache connection.
+func DisplayCacheStrategyForApp(appServerID string, design DeploymentDesign) string {
+	nodeMap := make(map[string]DeploymentNode, len(design.Nodes))
+	for _, n := range design.Nodes {
+		nodeMap[n.ID] = n
+	}
+	for _, conn := range design.Connections {
+		if conn.SourceID != appServerID {
+			continue
+		}
+		target, ok := nodeMap[conn.TargetID]
+		if !ok || target.Type != "cache" {
+			continue
+		}
+		if requiresProxy(target) {
+			return configString(target.Config, "strategy", "write-through")
+		}
+		return cacheRedisStrategyForApp(target)
+	}
+	return ""
+}
+
 // firstNonProxyCacheFromApp returns the first cache node reachable from appServerID
 // that is not a proxy strategy (direct Redis / cache-aside path).
 func firstNonProxyCacheFromApp(appServerID string, design DeploymentDesign, nodeMap map[string]DeploymentNode) (DeploymentNode, bool) {
@@ -227,6 +251,19 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 	}
 
 	return env
+}
+
+// cacheRedisStrategyForApp is the label shown in UI for app -> Redis (non-proxy) paths.
+// Prefer canvas key "strategy", then legacy "cacheStrategy", else cache-aside.
+// (DeriveEnvVars sets CACHE_STRATEGY from cacheStrategy only — see tests.)
+func cacheRedisStrategyForApp(cacheNode DeploymentNode) string {
+	if s := configString(cacheNode.Config, "strategy", ""); s != "" {
+		return s
+	}
+	if s := configString(cacheNode.Config, "cacheStrategy", ""); s != "" {
+		return s
+	}
+	return "cache-aside"
 }
 
 func configString(config map[string]any, key, defaultVal string) string {

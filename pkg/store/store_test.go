@@ -21,7 +21,7 @@ func TestCreateAndUpdateDeployment(t *testing.T) {
 	ctx := context.Background()
 
 	params := CreateDeploymentParams{
-		Namespace: "ganymede-test-store-" + time.Now().Format("20060102150405"),
+		Namespace: "cloud9-test-store-" + time.Now().Format("20060102150405"),
 		Template:  "url-shortener",
 		Archetype: "browse-heavy",
 		Design:    map[string]any{"version": "1.0", "nodes": []any{}},

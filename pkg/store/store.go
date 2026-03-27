@@ -26,13 +26,15 @@ type CreateDeploymentParams struct {
 
 // DeploymentRow represents a row from cloud_deployments (subset of columns).
 type DeploymentRow struct {
-	ID        string    `json:"id"`
-	Namespace string    `json:"namespace"`
-	Template  string    `json:"template"`
-	Archetype string    `json:"archetype"`
-	Status    string    `json:"status"`
-	ExpiresAt time.Time `json:"expires_at"`
-	CreatedAt time.Time `json:"created_at"`
+	ID             string         `json:"id"`
+	Namespace      string         `json:"namespace"`
+	Template       string         `json:"template"`
+	Archetype      string         `json:"archetype"`
+	Status         string         `json:"status"`
+	Design         map[string]any `json:"design"`
+	MetricsSummary map[string]any `json:"metrics_summary"`
+	ExpiresAt      time.Time      `json:"expires_at"`
+	CreatedAt      time.Time      `json:"created_at"`
 }
 
 // NewDeploymentStore creates a store using the Supabase URL and service role key.
@@ -116,7 +118,7 @@ func (s *DeploymentStore) GetStaleDeployments(ctx context.Context) ([]Deployment
 // GetDeployment returns the single row matching the namespace.
 func (s *DeploymentStore) GetDeployment(ctx context.Context, namespace string) (DeploymentRow, error) {
 	data, _, err := s.client.From("cloud_deployments").
-		Select("id,namespace,template,archetype,status,expires_at,created_at", "exact", false).
+		Select("id,namespace,template,archetype,status,design,metrics_summary,expires_at,created_at", "exact", false).
 		Eq("namespace", namespace).
 		Limit(1, "").
 		Execute()

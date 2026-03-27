@@ -13,11 +13,11 @@ variable "region" {
 variable "cluster_name" {
   description = "GKE Autopilot cluster name"
   type        = string
-  default     = "ganymede"
+  default     = "cloud9"
 }
 
 variable "seed_bucket_name" {
   description = "GCS bucket for seed data SQL dumps"
   type        = string
-  default     = "ganymede-seed-data"
+  default     = "cloud9-seed-data"
 }
