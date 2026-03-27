@@ -19,7 +19,7 @@ func TestK8sDeployer_Deploy_CreatesNamespaceAndDeployment(t *testing.T) {
 	d := NewK8sDeployer(fakeClient, "db")
 
 	cfg := DeployConfig{
-		Namespace: "ganymede-test-123",
+		Namespace: "cloud9-test-123",
 		Node:      DeploymentNode{ID: "n1", Type: "db", Name: "PostgreSQL"},
 	}
 
@@ -51,7 +51,7 @@ func TestK8sDeployer_Teardown_DeletesNamespace(t *testing.T) {
 	fakeClient := fake.NewSimpleClientset()
 	d := NewK8sDeployer(fakeClient, "db")
 
-	ns := "ganymede-test-456"
+	ns := "cloud9-test-456"
 	_, err := fakeClient.CoreV1().Namespaces().Create(
 		context.Background(),
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}},

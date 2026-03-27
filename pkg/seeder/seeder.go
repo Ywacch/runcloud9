@@ -71,7 +71,7 @@ func (s *Seeder) downloadDump(ctx context.Context, dumpPath string) (string, err
 	}
 	defer client.Close()
 
-	tmp, err := os.CreateTemp("", "ganymede-seed-*.dump")
+	tmp, err := os.CreateTemp("", "cloud9-seed-*.dump")
 	if err != nil {
 		return "", fmt.Errorf("create temp file: %w", err)
 	}

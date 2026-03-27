@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -53,7 +54,7 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 
 	envVars := DeriveEnvVars(cfg.Node, cfg.Design)
 
-	appLabel := ""
+	var appLabel string
 	switch cfg.Node.Type {
 	case "db":
 		appLabel = "postgres"
@@ -365,10 +366,14 @@ func (k *K8sDeployer) Teardown(ctx context.Context, namespace string) error {
 func ptr(i int32) *int32 { return &i }
 
 func appServerImage(template string) string {
+	registry := os.Getenv("TEMPLATE_IMAGE_REGISTRY")
+	if registry == "" {
+		registry = "europe-west1-docker.pkg.dev/cloud9-cloud/cloud9-images"
+	}
 	switch template {
 	case "url-shortener":
-		// Built/pushed as part of Week 6.
-		return "europe-west1-docker.pkg.dev/ganymede-cloud/ganymede-images/url-shortener:v3"
+		// Built/pushed as part of Week 8.
+		return registry + "/url-shortener:v4"
 	default:
 		// Fallback so other templates still deploy in Week 6.
 		return "nginx:latest"
@@ -376,10 +381,14 @@ func appServerImage(template string) string {
 }
 
 func cacheImage(strategy string) string {
+	registry := os.Getenv("TEMPLATE_IMAGE_REGISTRY")
+	if registry == "" {
+		registry = "europe-west1-docker.pkg.dev/cloud9-cloud/cloud9-images"
+	}
 	// UNDERSTAND: cache-aside uses plain Redis; proxy strategies use a custom Go service.
 	switch strategy {
 	case "write-through", "write-behind", "read-through":
-		return "europe-west1-docker.pkg.dev/ganymede-cloud/ganymede-images/caching-proxy:v1"
+		return registry + "/caching-proxy:v1"
 	default:
 		return "redis:7"
 	}

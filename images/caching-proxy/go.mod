@@ -1,4 +1,4 @@
-module github.com/ywacch/ganymede/images/caching-proxy
+module github.com/ywacch/cloud9/images/caching-proxy
 
 go 1.24.0
 

@@ -571,6 +571,9 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 }
 
 func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(logger)
+
 	slog.Info("url-shortener starting")
 	cfg := loadConfig()
 

@@ -243,3 +243,85 @@ func TestValidateTopology_AppServerDbWithProxyCacheForbidden(t *testing.T) {
 		t.Fatalf("expected error to contain %q, got %q", want, err.Error())
 	}
 }
+
+func TestDisplayCacheStrategyForApp_ProxyUsesCacheNodeStrategy(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "a", Type: "app-server", Name: "API Server"},
+			{
+				ID:   "c",
+				Type: "cache",
+				Name: "Redis",
+				Config: map[string]any{
+					"strategy": "write-through",
+				},
+			},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "a", TargetID: "c", Protocol: "TCP"},
+		},
+	}
+	if got := DisplayCacheStrategyForApp("a", design); got != "write-through" {
+		t.Fatalf("want write-through, got %q", got)
+	}
+}
+
+func TestDisplayCacheStrategyForApp_RedisPathUsesCacheConfig(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "a", Type: "app-server", Name: "API Server"},
+			{
+				ID:   "c",
+				Type: "cache",
+				Name: "Redis",
+				Config: map[string]any{
+					"strategy":      "cache-aside",
+					"cacheStrategy": "ignored-for-display",
+				},
+			},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "a", TargetID: "c", Protocol: "TCP"},
+		},
+	}
+	if got := DisplayCacheStrategyForApp("a", design); got != "cache-aside" {
+		t.Fatalf("want cache-aside, got %q", got)
+	}
+}
+
+func TestDisplayCacheStrategyForApp_FallbackCacheStrategyKey(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "a", Type: "app-server", Name: "API Server"},
+			{
+				ID:   "c",
+				Type: "cache",
+				Name: "Redis",
+				Config: map[string]any{
+					"cacheStrategy": "write-around",
+				},
+			},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "a", TargetID: "c", Protocol: "TCP"},
+		},
+	}
+	if got := DisplayCacheStrategyForApp("a", design); got != "write-around" {
+		t.Fatalf("want write-around from cacheStrategy, got %q", got)
+	}
+}
+
+func TestDisplayCacheStrategyForApp_NoCacheEdge(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "a", Type: "app-server", Name: "API Server"},
+			{ID: "d", Type: "db", Name: "PostgreSQL"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "a", TargetID: "d", Protocol: "TCP"},
+		},
+	}
+	if got := DisplayCacheStrategyForApp("a", design); got != "" {
+		t.Fatalf("want empty, got %q", got)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"time"
@@ -73,6 +74,10 @@ func (c *MetricsCollector) query(ctx context.Context, promql string) (float64, e
 
 	var val float64
 	_, _ = fmt.Sscanf(valStr, "%f", &val)
+	// encoding/json can't encode NaN/Inf; sanitize so the WS stream never dies.
+	if math.IsNaN(val) || math.IsInf(val, 0) {
+		return 0, nil
+	}
 	return val, nil
 }
 
@@ -132,37 +137,52 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace string) (*Depl
 	))
 	cmApp.MemoryBytes = int64(mem)
 
-	// VERIFY: Application metrics from Go `promhttp` may or may not include `namespace` after scrape.
-	// Confirm in Prometheus UI that `http_requests_total`, histogram buckets, and cache_* counters
-	// expose `namespace` (or update queries to match actual labels, e.g. `pod` only).
+	// Application metrics inherit k8s scrape labels. url-shortener pods use app=app-server and
+	// names app-server-*; kube-prometheus may attach namespace+pod and/or namespace+app.
+	// Use (pod match) or (app label) so queries work across relabel variants.
+	lblPod := fmt.Sprintf(`namespace=%q,pod=~"app-server.*"`, ns)
+	lblApp := fmt.Sprintf(`namespace=%q,app="app-server"`, ns)
+
 	rps, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(http_requests_total{namespace=%q}[30s]))`,
-		ns,
+		`(sum(rate(http_requests_total{%s}[30s])) or sum(rate(http_requests_total{%s}[30s])))`,
+		lblPod, lblApp,
 	))
 	cmApp.RequestRate = rps
 
 	// UNDERSTAND: histogram_quantile needs the _bucket metric, not _total.
 	p99, _ := c.query(ctx, fmt.Sprintf(
-		`histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{namespace=%q}[1m])) by (le))`,
-		ns,
+		`(histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{%s}[1m])) by (le)) or histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{%s}[1m])) by (le)))`,
+		lblPod, lblApp,
 	))
 	cmApp.P99Latency = p99
 
 	hits, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(cache_hits_total{namespace=%q}[30s]))`,
-		ns,
+		`(sum(rate(cache_hits_total{%s}[30s])) or sum(rate(cache_hits_total{%s}[30s])))`,
+		lblPod, lblApp,
 	))
 	cmApp.CacheHits = hits
 
 	misses, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(cache_misses_total{namespace=%q}[30s]))`,
-		ns,
+		`(sum(rate(cache_misses_total{%s}[30s])) or sum(rate(cache_misses_total{%s}[30s])))`,
+		lblPod, lblApp,
 	))
 	cmApp.CacheMisses = misses
 
+	hits9m, _ := c.query(ctx, fmt.Sprintf(
+		`(sum(increase(cache_hits_total{%s}[9m])) or sum(increase(cache_hits_total{%s}[9m])))`,
+		lblPod, lblApp,
+	))
+	cmApp.CacheHitsLast9m = hits9m
+
+	misses9m, _ := c.query(ctx, fmt.Sprintf(
+		`(sum(increase(cache_misses_total{%s}[9m])) or sum(increase(cache_misses_total{%s}[9m])))`,
+		lblPod, lblApp,
+	))
+	cmApp.CacheMissesLast9m = misses9m
+
 	errRate, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(http_requests_total{namespace=%q,status=~"5.."}[30s]))`,
-		ns,
+		`(sum(rate(http_requests_total{%s,status=~"5.."}[30s])) or sum(rate(http_requests_total{%s,status=~"5.."}[30s])))`,
+		lblPod, lblApp,
 	))
 	cmApp.ErrorRate = errRate
 

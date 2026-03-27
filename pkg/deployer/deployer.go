@@ -44,8 +44,8 @@ type ComponentDeployer interface {
 
 // DeploymentResult holds the outcome after all components are deployed.
 type DeploymentResult struct {
-	DeploymentID string
-	Namespace    string
-	Status       string // "running" | "failed"
-	Error        string `json:",omitempty"`
+	DeploymentID string `json:"deploymentId"`
+	Namespace    string `json:"namespace"`
+	Status       string `json:"status"` // "running" | "failed"
+	Error        string `json:"error,omitempty"`
 }

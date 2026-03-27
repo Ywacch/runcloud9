@@ -8,20 +8,34 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ywacch/ganymede/pkg/api"
-	"github.com/ywacch/ganymede/pkg/deployer"
-	"github.com/ywacch/ganymede/pkg/metrics"
-	"github.com/ywacch/ganymede/pkg/seeder"
-	"github.com/ywacch/ganymede/pkg/store"
-	"github.com/ywacch/ganymede/pkg/teardown"
+	"github.com/ywacch/cloud9/pkg/api"
+	"github.com/ywacch/cloud9/pkg/deployer"
+	"github.com/ywacch/cloud9/pkg/metrics"
+	"github.com/ywacch/cloud9/pkg/seeder"
+	"github.com/ywacch/cloud9/pkg/store"
+	"github.com/ywacch/cloud9/pkg/teardown"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
 )
 
-// buildDeployers returns the deployer map. os.Getenv returns empty string if var not set.
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// buildDeployers returns the deployer map and k8s clientset.
+// os.Getenv returns empty string if var not set.
 // Default to local so tests and local dev without minikube still work.
-func buildDeployers() map[string]deployer.ComponentDeployer {
+func buildDeployers() (map[string]deployer.ComponentDeployer, kubernetes.Interface) {
 	if os.Getenv("DEPLOYER") != "k8s" {
 		log.Println("Using LocalDeployer (set DEPLOYER=k8s for real K8s)")
 		return map[string]deployer.ComponentDeployer{
@@ -30,7 +44,7 @@ func buildDeployers() map[string]deployer.ComponentDeployer {
 			"app-server": &deployer.LocalDeployer{NodeType: "app-server"},
 			"lb":         &deployer.LocalDeployer{NodeType: "lb"},
 			"mq":         &deployer.LocalDeployer{NodeType: "mq"},
-		}
+		}, nil
 	}
 
 	// UNDERSTAND: KUBECONFIG env var lets you point at a specific config file.
@@ -56,7 +70,7 @@ func buildDeployers() map[string]deployer.ComponentDeployer {
 		"app-server": deployer.NewK8sDeployer(clientset, "app-server"),
 		"lb":         &deployer.LocalDeployer{NodeType: "lb"},
 		"mq":         &deployer.LocalDeployer{NodeType: "mq"},
-	}
+	}, clientset
 }
 
 // recoverDeployments re-registers teardown timers for active deployments on startup.
@@ -86,23 +100,15 @@ func main() {
 		log.Fatal("SUPABASE_URL and SUPABASE_SERVICE_KEY are required")
 	}
 
-	deployers := buildDeployers()
+	deployers, clientset := buildDeployers()
 
-	const seedBucketName = "ganymede-seed-data"
+	seedBucketName := os.Getenv("SEED_BUCKET_NAME")
+	if seedBucketName == "" {
+		// Backward-compatible default: keep using existing seed bucket until migrated.
+		seedBucketName = "ganymede-seed-data"
+	}
 	var seed *seeder.Seeder
-	if os.Getenv("DEPLOYER") == "k8s" {
-		kubeconfigPath := os.Getenv("KUBECONFIG")
-		if kubeconfigPath == "" {
-			kubeconfigPath = filepath.Join(homedir.HomeDir(), ".kube", "config")
-		}
-		config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
-		if err != nil {
-			log.Fatalf("build kubeconfig: %v", err)
-		}
-		clientset, err := kubernetes.NewForConfig(config)
-		if err != nil {
-			log.Fatalf("build clientset: %v", err)
-		}
+	if clientset != nil {
 		seed = seeder.NewSeeder(clientset, seedBucketName)
 	}
 
@@ -135,7 +141,7 @@ func main() {
 	}
 	metricsCollector := metrics.NewMetricsCollector(prometheusURL)
 
-	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed, metricsCollector)
+	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed, metricsCollector, clientset)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -145,8 +151,8 @@ func main() {
 	if len(os.Args) > 1 {
 		port = os.Args[1]
 	}
-	log.Printf("Ganymede Cloud API starting on :%s", port)
-	if err := http.ListenAndServe(":"+port, mux); err != nil {
+	log.Printf("Cloud9 API starting on :%s", port)
+	if err := http.ListenAndServe(":"+port, withCORS(mux)); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }

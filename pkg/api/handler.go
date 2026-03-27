@@ -12,11 +12,13 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/ywacch/ganymede/pkg/deployer"
-	"github.com/ywacch/ganymede/pkg/metrics"
-	"github.com/ywacch/ganymede/pkg/seeder"
-	"github.com/ywacch/ganymede/pkg/store"
-	"github.com/ywacch/ganymede/pkg/teardown"
+	"github.com/ywacch/cloud9/pkg/deployer"
+	"github.com/ywacch/cloud9/pkg/logs"
+	"github.com/ywacch/cloud9/pkg/metrics"
+	"github.com/ywacch/cloud9/pkg/seeder"
+	"github.com/ywacch/cloud9/pkg/store"
+	"github.com/ywacch/cloud9/pkg/teardown"
+	"k8s.io/client-go/kubernetes"
 )
 
 // Handler holds dependencies for the HTTP layer.
@@ -29,6 +31,7 @@ type Handler struct {
 	scheduler        *teardown.Scheduler
 	seeder           *seeder.Seeder
 	metricsCollector *metrics.MetricsCollector
+	clientset        kubernetes.Interface
 }
 
 var wsUpgrader = websocket.Upgrader{
@@ -45,6 +48,7 @@ func NewHandler(
 	scheduler *teardown.Scheduler,
 	seed *seeder.Seeder,
 	metricsCollector *metrics.MetricsCollector,
+	clientset kubernetes.Interface,
 ) *Handler {
 	return &Handler{
 		deployers:        deployers,
@@ -52,15 +56,17 @@ func NewHandler(
 		scheduler:        scheduler,
 		seeder:           seed,
 		metricsCollector: metricsCollector,
+		clientset:        clientset,
 	}
 }
 
 // RegisterRoutes attaches handlers to the mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	log.Println("RegisterRoutes called") // temporary
 	mux.HandleFunc("POST /deployments", h.handleCreateDeployment)
+	mux.HandleFunc("GET /deployments/{id}", h.handleGetDeployment)
 	mux.HandleFunc("DELETE /deployments/{id}", h.handleDeleteDeployment)
 	mux.HandleFunc("GET /deployments/{id}/metrics", h.handleMetricsStream)
+	mux.HandleFunc("GET /deployments/{id}/logs", h.handleLogsStream)
 	mux.HandleFunc("GET /health", h.handleHealth)
 }
 
@@ -81,6 +87,85 @@ func (h *Handler) handleMetricsStream(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	metrics.StreamMetrics(ctx, conn, h.metricsCollector, namespace)
+}
+
+func (h *Handler) handleGetDeployment(w http.ResponseWriter, r *http.Request) {
+	namespace := r.PathValue("id")
+	if namespace == "" {
+		writeError(w, http.StatusBadRequest, "missing deployment id")
+		return
+	}
+	if h.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "deployment store unavailable")
+		return
+	}
+	row, err := h.store.GetDeployment(r.Context(), namespace)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "deployment not found")
+		return
+	}
+
+	resp := map[string]any{
+		"id":             row.ID,
+		"namespace":      row.Namespace,
+		"template":       row.Template,
+		"archetype":      row.Archetype,
+		"status":         row.Status,
+		"expiresAt":      row.ExpiresAt.UTC().Format(time.RFC3339),
+		"createdAt":      row.CreatedAt.UTC().Format(time.RFC3339),
+		"metricsSummary": row.MetricsSummary,
+		"design":         row.Design,
+	}
+
+	var parsedDesign deployer.DeploymentDesign
+	if row.Design != nil {
+		if b, err := json.Marshal(row.Design); err == nil {
+			_ = json.Unmarshal(b, &parsedDesign)
+		}
+	}
+	if len(parsedDesign.Nodes) > 0 {
+		byID := make(map[string]string)
+		for _, n := range parsedDesign.Nodes {
+			if n.Type != "app-server" {
+				continue
+			}
+			if s := deployer.DisplayCacheStrategyForApp(n.ID, parsedDesign); s != "" {
+				byID[n.ID] = s
+			}
+		}
+		if len(byID) > 0 {
+			resp["cacheStrategyByAppId"] = byID
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleLogsStream upgrades the HTTP connection to WebSocket and streams
+// pod logs for all components in the deployment namespace.
+func (h *Handler) handleLogsStream(w http.ResponseWriter, r *http.Request) {
+	namespace := r.PathValue("id")
+	if namespace == "" {
+		writeError(w, http.StatusBadRequest, "missing deployment id")
+		return
+	}
+
+	// UNDERSTAND: if clientset is nil (local dev without K8s),
+	// return 503 rather than panic. Log streaming requires a real cluster.
+	if h.clientset == nil {
+		writeError(w, http.StatusServiceUnavailable, "log streaming requires K8s deployer")
+		return
+	}
+
+	conn, err := wsUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("log ws upgrade failed: %v", err)
+		return
+	}
+
+	ctx := r.Context()
+	logs.StreamLogs(ctx, conn, h.clientset, namespace)
 }
 
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -112,8 +197,8 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	namespace := fmt.Sprintf("ganymede-%s-%d", design.Template, time.Now().Unix())
-	expiresAt := time.Now().Add(10 * time.Minute)
+	namespace := fmt.Sprintf("cloud9-%s-%d", design.Template, time.Now().Unix())
+	expiresAt := time.Now().Add(9 * time.Minute)
 
 	if h.store != nil {
 		var designMap map[string]any

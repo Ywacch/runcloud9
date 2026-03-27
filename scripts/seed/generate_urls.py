@@ -18,7 +18,7 @@ DB_CONFIG = {
     "port": os.environ.get("PGPORT", "5432"),
 }
 
-BUCKET_NAME = "ganymede-seed-data"
+BUCKET_NAME = os.environ.get("SEED_BUCKET_NAME", "cloud9-seed-data")
 DUMP_PATH = "url-shortener/urls.dump"
 LOCAL_DUMP = os.path.join(tempfile.gettempdir(), "urls.dump")
 
@@ -127,14 +127,14 @@ def pg_dump_internal():
     try:
         # Use pg_dump from postgres:15 container
         subprocess.run([
-            "docker", "exec", "ganymede-local",
+            "docker", "exec", "cloud9-local",
             "pg_dump", "-Fc", "-U", "syscrack", "-d", "syscrack",
             "-f", "/tmp/urls.dump"
         ], check=True)
 
         # Copy the dump out of the container
         subprocess.run([
-            "docker", "cp", "ganymede-local:/tmp/urls.dump", LOCAL_DUMP
+            "docker", "cp", "cloud9-local:/tmp/urls.dump", LOCAL_DUMP
         ], check=True)
 
         print("Database dump successful.")
