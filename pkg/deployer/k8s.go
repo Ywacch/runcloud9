@@ -368,12 +368,12 @@ func ptr(i int32) *int32 { return &i }
 func appServerImage(template string) string {
 	registry := os.Getenv("TEMPLATE_IMAGE_REGISTRY")
 	if registry == "" {
-		registry = "europe-west1-docker.pkg.dev/cloud9-cloud/cloud9-images"
+		registry = "europe-west1-docker.pkg.dev/ganymede-cloud/cloud9-images"
 	}
 	switch template {
 	case "url-shortener":
 		// Built/pushed as part of Week 8.
-		return registry + "/url-shortener:v4"
+		return registry + "/url-shortener:v5"
 	default:
 		// Fallback so other templates still deploy in Week 6.
 		return "nginx:latest"
@@ -383,7 +383,7 @@ func appServerImage(template string) string {
 func cacheImage(strategy string) string {
 	registry := os.Getenv("TEMPLATE_IMAGE_REGISTRY")
 	if registry == "" {
-		registry = "europe-west1-docker.pkg.dev/cloud9-cloud/cloud9-images"
+		registry = "europe-west1-docker.pkg.dev/ganymede-cloud/cloud9-images"
 	}
 	// UNDERSTAND: cache-aside uses plain Redis; proxy strategies use a custom Go service.
 	switch strategy {

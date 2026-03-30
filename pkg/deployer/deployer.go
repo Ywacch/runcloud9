@@ -48,4 +48,5 @@ type DeploymentResult struct {
 	Namespace    string `json:"namespace"`
 	Status       string `json:"status"` // "running" | "failed"
 	Error        string `json:"error,omitempty"`
+	Seeded       bool   `json:"seeded"`
 }

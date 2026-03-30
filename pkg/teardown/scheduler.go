@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Scheduler manages a 10-minute auto-teardown timer per deployment.
+// Scheduler manages a 9-minute auto-teardown timer per deployment.
 // one goroutine-backed timer per active deployment.
 // time.AfterFunc fires the callback in a new goroutine after the duration.
 // We keep a map so we can cancel timers if teardown is requested early (DELETE endpoint).

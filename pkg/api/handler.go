@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/ywacch/cloud9/pkg/deployer"
+	"github.com/ywacch/cloud9/pkg/loadgen"
 	"github.com/ywacch/cloud9/pkg/logs"
 	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/seeder"
@@ -32,6 +35,7 @@ type Handler struct {
 	seeder           *seeder.Seeder
 	metricsCollector *metrics.MetricsCollector
 	clientset        kubernetes.Interface
+	loadgen          *loadgen.LoadGenerator
 }
 
 var wsUpgrader = websocket.Upgrader{
@@ -49,6 +53,7 @@ func NewHandler(
 	seed *seeder.Seeder,
 	metricsCollector *metrics.MetricsCollector,
 	clientset kubernetes.Interface,
+	lg *loadgen.LoadGenerator,
 ) *Handler {
 	return &Handler{
 		deployers:        deployers,
@@ -57,6 +62,7 @@ func NewHandler(
 		seeder:           seed,
 		metricsCollector: metricsCollector,
 		clientset:        clientset,
+		loadgen:          lg,
 	}
 }
 
@@ -67,6 +73,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /deployments/{id}", h.handleDeleteDeployment)
 	mux.HandleFunc("GET /deployments/{id}/metrics", h.handleMetricsStream)
 	mux.HandleFunc("GET /deployments/{id}/logs", h.handleLogsStream)
+	mux.HandleFunc("POST /deployments/{id}/loadgen", h.handleStartLoadGen)
+	mux.HandleFunc("DELETE /deployments/{id}/loadgen", h.handleStopLoadGen)
 	mux.HandleFunc("GET /health", h.handleHealth)
 }
 
@@ -115,6 +123,11 @@ func (h *Handler) handleGetDeployment(w http.ResponseWriter, r *http.Request) {
 		"createdAt":      row.CreatedAt.UTC().Format(time.RFC3339),
 		"metricsSummary": row.MetricsSummary,
 		"design":         row.Design,
+	}
+	if row.MetricsSummary != nil {
+		if seeded, ok := row.MetricsSummary["seeded"].(bool); ok {
+			resp["seeded"] = seeded
+		}
 	}
 
 	var parsedDesign deployer.DeploymentDesign
@@ -236,6 +249,9 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 
 	if h.store != nil {
 		_ = h.store.UpdateStatus(context.Background(), namespace, "running")
+		_ = h.store.UpdateMetricsSummary(context.Background(), namespace, map[string]any{
+			"seeded": result.Seeded,
+		})
 	}
 	if h.scheduler != nil {
 		h.scheduler.Schedule(namespace, expiresAt)
@@ -282,9 +298,12 @@ func (h *Handler) orchestrate(
 		deployed = append(deployed, node)
 	}
 
+	seeded := false
 	if h.seeder != nil {
 		if err := h.seeder.SeedDatabase(ctx, namespace, design.Template); err != nil {
 			log.Printf("seeding failed for namespace=%s (continuing deployment): %v", namespace, err)
+		} else {
+			seeded = true
 		}
 	}
 
@@ -292,6 +311,7 @@ func (h *Handler) orchestrate(
 		DeploymentID: namespace,
 		Namespace:    namespace,
 		Status:       "running",
+		Seeded:       seeded,
 	}, nil
 }
 
@@ -325,6 +345,75 @@ func validateDesign(d deployer.DeploymentDesign) error {
 	return nil
 }
 
+// handleStartLoadGen starts or updates load generation for a deployment.
+func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
+	namespace := r.PathValue("id")
+	if namespace == "" {
+		writeError(w, http.StatusBadRequest, "missing deployment id")
+		return
+	}
+
+	if h.loadgen == nil {
+		writeError(w, http.StatusServiceUnavailable, "load generator unavailable")
+		return
+	}
+
+	var profile loadgen.LoadProfile
+	err := json.NewDecoder(r.Body).Decode(&profile)
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			profile = loadgen.DefaultProfile()
+		} else {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid json: %v", err))
+			return
+		}
+	}
+
+	if profile.Template == "" && h.store != nil {
+		row, err := h.store.GetDeployment(r.Context(), namespace)
+		if err == nil {
+			profile.Template = row.Template
+		}
+	}
+	if profile.Template == "" {
+		profile.Template = "url-shortener"
+	}
+
+	profile = loadgen.NormalizeProfile(profile)
+
+	if err := h.loadgen.Start(namespace, profile); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":          "started",
+		"template":        profile.Template,
+		"rps":             profile.RPS,
+		"distribution":    profile.Distribution,
+		"durationSeconds": profile.DurationSeconds,
+	})
+}
+
+// handleStopLoadGen stops load generation for a deployment.
+func (h *Handler) handleStopLoadGen(w http.ResponseWriter, r *http.Request) {
+	namespace := r.PathValue("id")
+	if namespace == "" {
+		writeError(w, http.StatusBadRequest, "missing deployment id")
+		return
+	}
+
+	if h.loadgen == nil {
+		writeError(w, http.StatusServiceUnavailable, "load generator unavailable")
+		return
+	}
+
+	h.loadgen.Stop(namespace)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request) {
 	//PathValue is Go 1.22+:extracts {id} from the URL pattern.
 	namespace := r.PathValue("id")
@@ -332,8 +421,33 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "missing deployment id")
 		return
 	}
+	// Stop load generator if running (prevents requests to a dying namespace)
+	if h.loadgen != nil {
+		h.loadgen.Stop(namespace)
+	}
 	if h.scheduler != nil {
 		h.scheduler.Cancel(namespace)
+	}
+	// Persist final metrics summary before teardown (read-modify-write preserves 'seeded' and other fields).
+	if h.metricsCollector != nil && h.store != nil {
+		dm, err := h.metricsCollector.Collect(r.Context(), namespace)
+		if err == nil && dm != nil {
+			row, rowErr := h.store.GetDeployment(r.Context(), namespace)
+			summary := make(map[string]any)
+			if rowErr == nil && row.MetricsSummary != nil {
+				for k, v := range row.MetricsSummary {
+					summary[k] = v
+				}
+			}
+			for k, v := range metrics.PeakSummary(dm) {
+				summary[k] = v
+			}
+			summary["terminated_at"] = time.Now().Format(time.RFC3339)
+			if rowErr == nil {
+				summary["actual_duration_seconds"] = int(time.Since(row.CreatedAt).Seconds())
+			}
+			_ = h.store.SetMetricsSummary(r.Context(), namespace, summary)
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()

@@ -34,6 +34,8 @@ go.work.sum
 # Reference docs (master/appendix)
 *_master.md
 *_appendix.md
+*_extensions.md
+throwaway/
 
 # Terraform
 terraform-key.json

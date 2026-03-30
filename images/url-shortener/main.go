@@ -131,6 +131,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.Handle("/stats/", withRecovery(withMetrics("/stats", http.HandlerFunc(s.handleStats))))
 	mux.Handle("/health", withRecovery(http.HandlerFunc(s.handleHealth)))
 	mux.Handle("/cache-stats", withRecovery(http.HandlerFunc(s.handleCacheStats)))
+	mux.Handle("/code-pool", withRecovery(http.HandlerFunc(s.handleCodePool)))
 
 	// promhttp.Handler() serves the Prometheus exposition format
 	// that Prometheus scrapes. This is separate from /cache-stats (our JSON endpoint).
@@ -389,6 +390,39 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		"hit_count":    rec.HitCount,
 		"created_at":   rec.CreatedAt,
 	})
+}
+
+// handleCodePool returns a sample of existing short codes for the load generator.
+// UNDERSTAND: the load generator calls this once on startup to get real codes
+// from the seeded database. These codes will produce cache hits/misses and
+// DB lookups — much more realistic than random codes that always 404.
+func (s *Server) handleCodePool(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.db == nil || s.db.pool == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"codes": []string{}})
+		return
+	}
+	const limit = 200
+	rows, err := s.db.pool.Query(r.Context(),
+		`SELECT code FROM urls ORDER BY hit_count DESC LIMIT $1`, limit)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to fetch codes")
+		return
+	}
+	defer rows.Close()
+
+	var codes []string
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err != nil {
+			continue
+		}
+		codes = append(codes, code)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"codes": codes})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

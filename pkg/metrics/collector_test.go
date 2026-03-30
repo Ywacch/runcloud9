@@ -47,7 +47,7 @@ func TestCollect_CacheIncreaseQueries(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL)
+	c := NewMetricsCollector(srv.URL, nil)
 	dm, err := c.Collect(context.Background(), "ns-test")
 	if err != nil {
 		t.Fatal(err)

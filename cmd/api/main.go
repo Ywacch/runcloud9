@@ -10,6 +10,7 @@ import (
 
 	"github.com/ywacch/cloud9/pkg/api"
 	"github.com/ywacch/cloud9/pkg/deployer"
+	"github.com/ywacch/cloud9/pkg/loadgen"
 	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/seeder"
 	"github.com/ywacch/cloud9/pkg/store"
@@ -105,7 +106,7 @@ func main() {
 	seedBucketName := os.Getenv("SEED_BUCKET_NAME")
 	if seedBucketName == "" {
 		// Backward-compatible default: keep using existing seed bucket until migrated.
-		seedBucketName = "ganymede-seed-data"
+		seedBucketName = "cloud9-seed-data"
 	}
 	var seed *seeder.Seeder
 	if clientset != nil {
@@ -117,9 +118,37 @@ func main() {
 		log.Fatalf("failed to init store: %v", err)
 	}
 
+	lg := loadgen.NewLoadGenerator()
+	var metricsCollector *metrics.MetricsCollector
+
 	// teardownFn uses context.Background() so cleanup is never cut short by request cancel or timeout.
 	teardownFn := func(namespace string) {
+		// Stop load generator first — prevents requests to a dying namespace
+		lg.Stop(namespace)
 		ctx := context.Background()
+		// Collect final metrics snapshot and merge into existing summary (preserves 'seeded' and other fields).
+		if metricsCollector != nil {
+			dm, err := metricsCollector.Collect(ctx, namespace)
+			if err == nil && dm != nil {
+				row, rowErr := deploymentStore.GetDeployment(ctx, namespace)
+				summary := make(map[string]any)
+				if rowErr == nil && row.MetricsSummary != nil {
+					for k, v := range row.MetricsSummary {
+						summary[k] = v
+					}
+				}
+				for k, v := range metrics.PeakSummary(dm) {
+					summary[k] = v
+				}
+				summary["terminated_at"] = time.Now().Format(time.RFC3339)
+				if rowErr == nil {
+					summary["actual_duration_seconds"] = int(time.Since(row.CreatedAt).Seconds())
+				}
+				if err := deploymentStore.SetMetricsSummary(ctx, namespace, summary); err != nil {
+					log.Printf("auto-teardown metrics summary update failed for %s: %v", namespace, err)
+				}
+			}
+		}
 		d := deployers["db"]
 		if err := d.Teardown(ctx, namespace); err != nil {
 			log.Printf("auto-teardown failed for %s: %v", namespace, err)
@@ -139,9 +168,9 @@ func main() {
 	if prometheusURL == "" && os.Getenv("DEPLOYER") == "k8s" {
 		prometheusURL = "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
 	}
-	metricsCollector := metrics.NewMetricsCollector(prometheusURL)
+	metricsCollector = metrics.NewMetricsCollector(prometheusURL, lg)
 
-	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed, metricsCollector, clientset)
+	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed, metricsCollector, clientset, lg)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 

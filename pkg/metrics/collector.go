@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/ywacch/cloud9/pkg/loadgen"
 )
 
 // MetricsCollector queries the Prometheus HTTP API for a specific deployment namespace.
@@ -17,12 +19,14 @@ import (
 type MetricsCollector struct {
 	prometheusURL string
 	httpClient    *http.Client
+	loadgen       *loadgen.LoadGenerator
 }
 
-func NewMetricsCollector(prometheusURL string) *MetricsCollector {
+func NewMetricsCollector(prometheusURL string, lg *loadgen.LoadGenerator) *MetricsCollector {
 	return &MetricsCollector{
 		prometheusURL: prometheusURL,
 		httpClient:    &http.Client{Timeout: 5 * time.Second},
+		loadgen:       lg,
 	}
 }
 
@@ -91,18 +95,16 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace string) (*Depl
 
 	ns := namespace
 
-	// DB (postgres)
+	// DB (postgres) — resource requests from kube-state-metrics (cAdvisor unavailable on GKE Autopilot).
+	// TODO: For true real-time usage, pull container metrics from Cloud Monitoring API.
 	cmDB := ComponentMetrics{Component: "db"}
-	// VERIFY: Confirm `namespace` and `pod` labels on container_* series match kube-prometheus-stack
-	// relabeling (Prometheus UI → Status → Targets, then run an ad-hoc query on raw series).
-	// Adjust PromQL if labels differ before marking Week 7 complete.
 	cpu, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(container_cpu_usage_seconds_total{namespace=%q,pod=~"postgres.*",container!=""}[1m]))`,
+		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"postgres.*",resource="cpu"})`,
 		ns,
 	))
 	cmDB.CPUUsage = cpu
 	mem, _ := c.query(ctx, fmt.Sprintf(
-		`sum(container_memory_working_set_bytes{namespace=%q,pod=~"postgres.*",container!=""})`,
+		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"postgres.*",resource="memory"})`,
 		ns,
 	))
 	cmDB.MemoryBytes = int64(mem)
@@ -110,83 +112,95 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace string) (*Depl
 
 	// Cache tier: cache-aside redis-* and proxy redis-internal-* (matched by redis.*) + cache-proxy-*
 	cmCache := ComponentMetrics{Component: "cache"}
-	// VERIFY: same as above for cAdvisor series in this namespace.
 	cpu, _ = c.query(ctx, fmt.Sprintf(
-		`sum(rate(container_cpu_usage_seconds_total{namespace=%q,pod=~"redis.*|cache-proxy.*",container!=""}[1m]))`,
+		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"redis.*|cache-proxy.*",resource="cpu"})`,
 		ns,
 	))
 	cmCache.CPUUsage = cpu
 	mem, _ = c.query(ctx, fmt.Sprintf(
-		`sum(container_memory_working_set_bytes{namespace=%q,pod=~"redis.*|cache-proxy.*",container!=""})`,
+		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"redis.*|cache-proxy.*",resource="memory"})`,
 		ns,
 	))
 	cmCache.MemoryBytes = int64(mem)
-	dm.Components["cache"] = cmCache
+	// UNDERSTAND: assign cache to dm.Components after app metrics so hit/miss counters can be mirrored.
 
 	// App-server: HTTP + cache counters from url-shortener /metrics
 	cmApp := ComponentMetrics{Component: "app-server"}
-	// VERIFY: cAdvisor CPU/memory — same label confirmation as above.
 	cpu, _ = c.query(ctx, fmt.Sprintf(
-		`sum(rate(container_cpu_usage_seconds_total{namespace=%q,pod=~"app-server.*",container!=""}[1m]))`,
+		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"app-server.*",resource="cpu"})`,
 		ns,
 	))
 	cmApp.CPUUsage = cpu
 	mem, _ = c.query(ctx, fmt.Sprintf(
-		`sum(container_memory_working_set_bytes{namespace=%q,pod=~"app-server.*",container!=""})`,
+		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"app-server.*",resource="memory"})`,
 		ns,
 	))
 	cmApp.MemoryBytes = int64(mem)
 
-	// Application metrics inherit k8s scrape labels. url-shortener pods use app=app-server and
-	// names app-server-*; kube-prometheus may attach namespace+pod and/or namespace+app.
-	// Use (pod match) or (app label) so queries work across relabel variants.
-	lblPod := fmt.Sprintf(`namespace=%q,pod=~"app-server.*"`, ns)
-	lblApp := fmt.Sprintf(`namespace=%q,app="app-server"`, ns)
+	// Application metrics: all app-server series in this deployment namespace share namespace=%q.
+	nsSel := fmt.Sprintf(`namespace=%q`, ns)
 
 	rps, _ := c.query(ctx, fmt.Sprintf(
-		`(sum(rate(http_requests_total{%s}[30s])) or sum(rate(http_requests_total{%s}[30s])))`,
-		lblPod, lblApp,
+		`sum(rate(http_requests_total{%s}[30s]))`,
+		nsSel,
 	))
 	cmApp.RequestRate = rps
 
 	// UNDERSTAND: histogram_quantile needs the _bucket metric, not _total.
 	p99, _ := c.query(ctx, fmt.Sprintf(
-		`(histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{%s}[1m])) by (le)) or histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{%s}[1m])) by (le)))`,
-		lblPod, lblApp,
+		`histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{%s}[1m])) by (le))`,
+		nsSel,
 	))
 	cmApp.P99Latency = p99
 
 	hits, _ := c.query(ctx, fmt.Sprintf(
-		`(sum(rate(cache_hits_total{%s}[30s])) or sum(rate(cache_hits_total{%s}[30s])))`,
-		lblPod, lblApp,
+		`sum(rate(cache_hits_total{%s}[30s]))`,
+		nsSel,
 	))
 	cmApp.CacheHits = hits
 
 	misses, _ := c.query(ctx, fmt.Sprintf(
-		`(sum(rate(cache_misses_total{%s}[30s])) or sum(rate(cache_misses_total{%s}[30s])))`,
-		lblPod, lblApp,
+		`sum(rate(cache_misses_total{%s}[30s]))`,
+		nsSel,
 	))
 	cmApp.CacheMisses = misses
 
 	hits9m, _ := c.query(ctx, fmt.Sprintf(
-		`(sum(increase(cache_hits_total{%s}[9m])) or sum(increase(cache_hits_total{%s}[9m])))`,
-		lblPod, lblApp,
+		`sum(increase(cache_hits_total{%s}[9m]))`,
+		nsSel,
 	))
 	cmApp.CacheHitsLast9m = hits9m
 
 	misses9m, _ := c.query(ctx, fmt.Sprintf(
-		`(sum(increase(cache_misses_total{%s}[9m])) or sum(increase(cache_misses_total{%s}[9m])))`,
-		lblPod, lblApp,
+		`sum(increase(cache_misses_total{%s}[9m]))`,
+		nsSel,
 	))
 	cmApp.CacheMissesLast9m = misses9m
 
 	errRate, _ := c.query(ctx, fmt.Sprintf(
-		`(sum(rate(http_requests_total{%s,status=~"5.."}[30s])) or sum(rate(http_requests_total{%s,status=~"5.."}[30s])))`,
-		lblPod, lblApp,
+		`sum(rate(http_requests_total{%s,status=~"5.."}[30s]))`,
+		nsSel,
 	))
 	cmApp.ErrorRate = errRate
 
 	dm.Components["app-server"] = cmApp
+
+	// Copy cache metrics from app-server onto the cache component so the CachePanel can display them.
+	// UNDERSTAND: cache_hits_total and cache_misses_total are emitted by the app-server (not Redis).
+	// We mirror them onto the cache component so the frontend doesn't need to cross-reference.
+	cmCache.CacheHits = cmApp.CacheHits
+	cmCache.CacheMisses = cmApp.CacheMisses
+	cmCache.CacheHitsLast9m = cmApp.CacheHitsLast9m
+	cmCache.CacheMissesLast9m = cmApp.CacheMissesLast9m
+	dm.Components["cache"] = cmCache
+
+	// Attach load generator stats to the metrics snapshot.
+	// UNDERSTAND: load stats are embedded in the existing metrics stream
+	// so the frontend gets everything on one WebSocket connection.
+	if c.loadgen != nil {
+		stats := c.loadgen.GetStats(namespace)
+		dm.LoadGen = &stats
+	}
 
 	return dm, nil
 }
