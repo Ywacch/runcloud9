@@ -272,7 +272,12 @@ func (h *Handler) orchestrate(
 
 	deployed := []deployer.DeploymentNode{}
 
-	for _, node := range design.Nodes {
+	ordered, err := deployer.DeploymentOrder(design)
+	if err != nil {
+		return nil, fmt.Errorf("topology: %w", err)
+	}
+
+	for _, node := range ordered {
 		d, ok := h.deployers[node.Type]
 		if !ok {
 			// No deployer registered for this type. use a generic local one for now

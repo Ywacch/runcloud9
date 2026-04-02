@@ -70,7 +70,7 @@ func buildDeployers() (map[string]deployer.ComponentDeployer, kubernetes.Interfa
 		"cache":      deployer.NewK8sDeployer(clientset, "cache"),
 		"app-server": deployer.NewK8sDeployer(clientset, "app-server"),
 		"lb":         &deployer.LocalDeployer{NodeType: "lb"},
-		"mq":         &deployer.LocalDeployer{NodeType: "mq"},
+		"mq":         deployer.NewK8sDeployer(clientset, "mq"),
 	}, clientset
 }
 

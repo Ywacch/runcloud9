@@ -5,6 +5,66 @@ import (
 	"testing"
 )
 
+func TestDeploymentOrder_Chain(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "app", Type: "app-server", Name: "app"},
+			{ID: "db", Type: "db", Name: "db"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "app", TargetID: "db"},
+		},
+	}
+
+	ordered, err := DeploymentOrder(design)
+	if err != nil {
+		t.Fatalf("DeploymentOrder returned error: %v", err)
+	}
+	if len(ordered) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(ordered))
+	}
+	if ordered[0].ID != "db" || ordered[1].ID != "app" {
+		t.Fatalf("unexpected order: got [%s, %s]", ordered[0].ID, ordered[1].ID)
+	}
+}
+
+func TestDeploymentOrder_Cycle(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "a", Type: "app-server", Name: "a"},
+			{ID: "b", Type: "db", Name: "b"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "a", TargetID: "b"},
+			{SourceID: "b", TargetID: "a"},
+		},
+	}
+
+	_, err := DeploymentOrder(design)
+	if err == nil {
+		t.Fatalf("expected error for cycle, got nil")
+	}
+}
+
+func TestDeploymentOrder_StableTieBreak_NoEdges(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "b", Type: "db", Name: "b"},
+			{ID: "a", Type: "db", Name: "a"},
+			{ID: "c", Type: "db", Name: "c"},
+		},
+	}
+
+	ordered, err := DeploymentOrder(design)
+	if err != nil {
+		t.Fatalf("DeploymentOrder returned error: %v", err)
+	}
+	// Kahn with stable queue produces [a,b,c] then reversed => [c,b,a].
+	if ordered[0].ID != "c" || ordered[1].ID != "b" || ordered[2].ID != "a" {
+		t.Fatalf("unexpected order: got [%s, %s, %s]", ordered[0].ID, ordered[1].ID, ordered[2].ID)
+	}
+}
+
 func TestDeriveEnvVars_ProxyStrategyInjectsDBIntoCacheProxyNode(t *testing.T) {
 	design := DeploymentDesign{
 		Nodes: []DeploymentNode{
