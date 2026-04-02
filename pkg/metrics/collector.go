@@ -94,6 +94,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace string) (*Depl
 	}
 
 	ns := namespace
+	// Application metrics from url-shortener /metrics use this label selector (K8s scrape adds namespace).
+	nsSel := fmt.Sprintf(`namespace=%q`, ns)
 
 	// DB (postgres) — resource requests from kube-state-metrics (cAdvisor unavailable on GKE Autopilot).
 	// TODO: For true real-time usage, pull container metrics from Cloud Monitoring API.
@@ -108,6 +110,29 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace string) (*Depl
 		ns,
 	))
 	cmDB.MemoryBytes = int64(mem)
+
+	dbQPS, _ := c.query(ctx, fmt.Sprintf(
+		`sum(rate(db_query_duration_seconds_count{%s}[30s]))`,
+		nsSel,
+	))
+	cmDB.DbQueryRate = dbQPS
+	dbLatSum, _ := c.query(ctx, fmt.Sprintf(
+		`sum(rate(db_query_duration_seconds_sum{%s}[30s]))`,
+		nsSel,
+	))
+	dbLatCount, _ := c.query(ctx, fmt.Sprintf(
+		`sum(rate(db_query_duration_seconds_count{%s}[30s]))`,
+		nsSel,
+	))
+	if dbLatCount > 0 {
+		cmDB.DbQueryLatency = dbLatSum / dbLatCount
+	}
+	dbTotal, _ := c.query(ctx, fmt.Sprintf(
+		`sum(increase(db_query_duration_seconds_count{%s}[9m]))`,
+		nsSel,
+	))
+	cmDB.DbTotalQueries = dbTotal
+
 	dm.Components["db"] = cmDB
 
 	// Cache tier: cache-aside redis-* and proxy redis-internal-* (matched by redis.*) + cache-proxy-*
@@ -136,9 +161,6 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace string) (*Depl
 		ns,
 	))
 	cmApp.MemoryBytes = int64(mem)
-
-	// Application metrics: all app-server series in this deployment namespace share namespace=%q.
-	nsSel := fmt.Sprintf(`namespace=%q`, ns)
 
 	rps, _ := c.query(ctx, fmt.Sprintf(
 		`sum(rate(http_requests_total{%s}[30s]))`,
@@ -182,6 +204,12 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace string) (*Depl
 		nsSel,
 	))
 	cmApp.ErrorRate = errRate
+
+	totalReqs, _ := c.query(ctx, fmt.Sprintf(
+		`sum(increase(http_requests_total{%s}[9m]))`,
+		nsSel,
+	))
+	cmApp.TotalRequests = totalReqs
 
 	dm.Components["app-server"] = cmApp
 

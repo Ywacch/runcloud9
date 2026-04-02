@@ -209,6 +209,9 @@ func (s *attackSession) pushStats(vm *vegeta.Metrics, profile LoadProfile) {
 	s.stats.SuccessRate = vm.Success * 100
 	s.stats.MeanLatency = vm.Latencies.Mean.Seconds()
 	s.stats.P99Latency = vm.Latencies.P99.Seconds()
+	if s.stats.StartedAt != nil {
+		s.stats.DurationSeconds = time.Since(*s.stats.StartedAt).Seconds()
+	}
 	s.stats.StatusCodes = copyIntMap(vm.StatusCodes)
 }
 

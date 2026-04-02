@@ -6,13 +6,13 @@ import "time"
 // UNDERSTAND: templates define their own endpoints — the load generator
 // doesn't need to know about /shorten or /r/{code} specifically.
 type EndpointSpec struct {
-	Method        string `json:"method"`        // "GET" or "POST"
-	PathTemplate  string `json:"pathTemplate"`  // "/r/{code}", "/feed/{userId}", "/products"
-	ParamName     string `json:"paramName"`     // "code", "userId", "" — name of the {param} in path
-	PoolEndpoint  string `json:"poolEndpoint"`  // "/code-pool", "/user-pool", "" — endpoint to fetch param values
-	PoolField     string `json:"poolField"`     // "codes", "userIds" — JSON field name in pool response
-	BodyTemplate  string `json:"bodyTemplate"`  // `{"url":"https://example.com/page/{{.Rand}}"}` or "" for no body
-	Weight        int    `json:"weight"`        // distribution weight (e.g. 80, 20)
+	Method       string `json:"method"`       // "GET" or "POST"
+	PathTemplate string `json:"pathTemplate"` // "/r/{code}", "/feed/{userId}", "/products"
+	ParamName    string `json:"paramName"`    // "code", "userId", "" — name of the {param} in path
+	PoolEndpoint string `json:"poolEndpoint"` // "/code-pool", "/user-pool", "" — endpoint to fetch param values
+	PoolField    string `json:"poolField"`    // "codes", "userIds" — JSON field name in pool response
+	BodyTemplate string `json:"bodyTemplate"` // `{"url":"https://example.com/page/{{.Rand}}"}` or "" for no body
+	Weight       int    `json:"weight"`       // distribution weight (e.g. 80, 20)
 }
 
 // DistributionKey is the stable key for optional distribution overrides and LoadStats.
@@ -26,9 +26,9 @@ func DistributionKey(s EndpointSpec) string {
 // All fields have defaults so the user can start with just "start"
 // and tweak later.
 type LoadProfile struct {
-	RPS             int            `json:"rps"`             // requests per second (default: 50)
-	DurationSeconds int64          `json:"durationSeconds"` // 0 = run until stopped (default: 0)
-	Template        string         `json:"template"`        // "url-shortener" — looks up EndpointSpecs in registry
+	RPS             int    `json:"rps"`             // requests per second (default: 50)
+	DurationSeconds int64  `json:"durationSeconds"` // 0 = run until stopped (default: 0)
+	Template        string `json:"template"`        // "url-shortener" — looks up EndpointSpecs in registry
 	// Distribution optional override: keys are DistributionKey (e.g. "GET /r/{code}") → weight.
 	Distribution map[string]int `json:"distribution"`
 }
@@ -45,15 +45,16 @@ func (p LoadProfile) AttackDuration() time.Duration {
 // UNDERSTAND: we embed load stats into the existing metrics stream rather than
 // creating a separate WebSocket — one connection per deployment keeps the frontend simple.
 type LoadStats struct {
-	Active        bool           `json:"active"`        // is load running?
-	CurrentRPS    float64        `json:"currentRps"`    // configured RPS (target)
-	TotalRequests uint64         `json:"totalRequests"` // cumulative since start
-	SuccessRate   float64        `json:"successRate"`   // percentage 0-100
-	MeanLatency   float64        `json:"meanLatency"`   // seconds
-	P99Latency    float64        `json:"p99Latency"`    // seconds
-	StatusCodes   map[string]int `json:"statusCodes"`   // "200" → count, "500" → count
-	Distribution  map[string]int `json:"distribution"` // effective weights per DistributionKey
-	StartedAt     *time.Time     `json:"startedAt"`     // nil if not active
+	Active          bool           `json:"active"`          // is load running?
+	CurrentRPS      float64        `json:"currentRps"`      // configured RPS (target)
+	TotalRequests   uint64         `json:"totalRequests"`   // cumulative since start
+	SuccessRate     float64        `json:"successRate"`     // percentage 0-100
+	MeanLatency     float64        `json:"meanLatency"`     // seconds
+	P99Latency      float64        `json:"p99Latency"`      // seconds
+	DurationSeconds float64        `json:"durationSeconds"` // elapsed run time in seconds
+	StatusCodes     map[string]int `json:"statusCodes"`     // "200" → count, "500" → count
+	Distribution    map[string]int `json:"distribution"`    // effective weights per DistributionKey
+	StartedAt       *time.Time     `json:"startedAt"`       // nil if not active
 }
 
 // DefaultProfile returns default RPS only. Template and distribution come from the handler or JSON.
