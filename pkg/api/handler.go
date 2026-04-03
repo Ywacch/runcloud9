@@ -350,6 +350,30 @@ func validateDesign(d deployer.DeploymentDesign) error {
 	return nil
 }
 
+func designHasLoadBalancer(design map[string]any) bool {
+	if design == nil {
+		return false
+	}
+	raw, ok := design["nodes"]
+	if !ok || raw == nil {
+		return false
+	}
+	nodes, ok := raw.([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range nodes {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, _ := m["type"].(string); t == "lb" {
+			return true
+		}
+	}
+	return false
+}
+
 // handleStartLoadGen starts or updates load generation for a deployment.
 func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 	namespace := r.PathValue("id")
@@ -374,17 +398,26 @@ func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if profile.Template == "" && h.store != nil {
-		row, err := h.store.GetDeployment(r.Context(), namespace)
-		if err == nil {
-			profile.Template = row.Template
+	var row store.DeploymentRow
+	var haveRow bool
+	if h.store != nil {
+		if rrow, gerr := h.store.GetDeployment(r.Context(), namespace); gerr == nil {
+			row = rrow
+			haveRow = true
 		}
+	}
+	if profile.Template == "" && haveRow {
+		profile.Template = row.Template
 	}
 	if profile.Template == "" {
 		profile.Template = "url-shortener"
 	}
 
 	profile = loadgen.NormalizeProfile(profile)
+
+	if profile.BaseURL == "" && haveRow && designHasLoadBalancer(row.Design) {
+		profile.BaseURL = fmt.Sprintf("http://lb.%s.svc.cluster.local:80", namespace)
+	}
 
 	if err := h.loadgen.Start(namespace, profile); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

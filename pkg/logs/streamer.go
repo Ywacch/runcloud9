@@ -28,6 +28,9 @@ var componentPodLabels = map[string]string{
 	"db":         "app=postgres",
 	"cache":      "app=redis",
 	"app-server": "app=app-server",
+	"mq":         "app=rabbitmq",
+	"worker":     "app=worker",
+	"lb":         "app=lb",
 }
 
 // StreamLogs finds all pods in the namespace, starts one goroutine per pod

@@ -222,6 +222,45 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace string) (*Depl
 	cmCache.CacheMissesLast9m = cmApp.CacheMissesLast9m
 	dm.Components["cache"] = cmCache
 
+	cmMQ := ComponentMetrics{Component: "mq"}
+	cpu, _ = c.query(ctx, fmt.Sprintf(
+		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"rabbitmq.*",resource="cpu"})`,
+		ns,
+	))
+	cmMQ.CPUUsage = cpu
+	mem, _ = c.query(ctx, fmt.Sprintf(
+		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"rabbitmq.*",resource="memory"})`,
+		ns,
+	))
+	cmMQ.MemoryBytes = int64(mem)
+	dm.Components["mq"] = cmMQ
+
+	cmWorker := ComponentMetrics{Component: "worker"}
+	cpu, _ = c.query(ctx, fmt.Sprintf(
+		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"worker.*",resource="cpu"})`,
+		ns,
+	))
+	cmWorker.CPUUsage = cpu
+	mem, _ = c.query(ctx, fmt.Sprintf(
+		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"worker.*",resource="memory"})`,
+		ns,
+	))
+	cmWorker.MemoryBytes = int64(mem)
+	dm.Components["worker"] = cmWorker
+
+	cmLB := ComponentMetrics{Component: "lb"}
+	cpu, _ = c.query(ctx, fmt.Sprintf(
+		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"lb.*",resource="cpu"})`,
+		ns,
+	))
+	cmLB.CPUUsage = cpu
+	mem, _ = c.query(ctx, fmt.Sprintf(
+		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"lb.*",resource="memory"})`,
+		ns,
+	))
+	cmLB.MemoryBytes = int64(mem)
+	dm.Components["lb"] = cmLB
+
 	// Attach load generator stats to the metrics snapshot.
 	// UNDERSTAND: load stats are embedded in the existing metrics stream
 	// so the frontend gets everything on one WebSocket connection.

@@ -39,10 +39,13 @@ func NewLoadGenerator() *LoadGenerator {
 	}
 }
 
-func loadgenBaseURL(namespace string) string {
-	// UNDERSTAND: when running the API locally, set LOADGEN_BASE_URL to the forwarded app-server origin (e.g. http://127.0.0.1:9080).
+// resolveLoadgenBaseURL picks the HTTP origin for vegeta. LOADGEN_BASE_URL overrides everything (local port-forward).
+func resolveLoadgenBaseURL(namespace string, profile LoadProfile) string {
 	if override := os.Getenv("LOADGEN_BASE_URL"); override != "" {
 		return override
+	}
+	if profile.BaseURL != "" {
+		return profile.BaseURL
 	}
 	return fmt.Sprintf("http://app-server.%s.svc.cluster.local:8080", namespace)
 }
@@ -137,7 +140,7 @@ func (lg *LoadGenerator) GetStats(namespace string) LoadStats {
 }
 
 func (s *attackSession) run(ctx context.Context, lg *LoadGenerator, namespace string, profile LoadProfile) {
-	baseURL := loadgenBaseURL(namespace)
+	baseURL := resolveLoadgenBaseURL(namespace, profile)
 	specs := s.specs
 
 	pools := fetchParamPools(baseURL, specs)

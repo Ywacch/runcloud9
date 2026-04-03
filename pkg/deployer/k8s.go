@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -315,13 +316,166 @@ func (k *K8sDeployer) deployAppServer(ctx context.Context, cfg DeployConfig, res
 }
 
 func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, resources corev1.ResourceRequirements, replicas int32) error {
-	log.Printf("K8sDeployer: skipping unsupported node type %q (stub in Stream 2)", cfg.Node.Type)
-	return nil
+	envVars := DeriveEnvVars(cfg.Node, cfg.Design)
+	labels := map[string]string{"app": "worker", "deployment": cfg.Namespace}
+	img := workerImage(cfg.Design.Template)
+
+	ctr := corev1.Container{
+		Name:      "worker",
+		Image:     img,
+		Resources: resources,
+		Env:       envMapToK8s(envVars),
+	}
+	// busybox exits immediately without a long-running command — keep pod Ready for QA placeholders.
+	if img == "busybox:latest" || strings.HasSuffix(img, "/busybox:latest") {
+		ctr.Command = []string{"sleep"}
+		ctr.Args = []string{"infinity"}
+	}
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: cfg.Namespace},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: ptr(replicas),
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{ctr},
+				},
+			},
+		},
+	}
+	_, err := k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("create worker deployment: %w", err)
+	}
+	return k.waitForReady(ctx, cfg.Namespace, "worker")
 }
 
 func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources corev1.ResourceRequirements, replicas int32) error {
-	log.Printf("K8sDeployer: skipping unsupported node type %q (stub in Stream 2)", cfg.Node.Type)
-	return nil
+	algo := configString(cfg.Node.Config, "lbAlgorithm", "round-robin")
+	backends := lbBackends(cfg.Node, cfg.Design)
+	if len(backends) == 0 {
+		return fmt.Errorf("lb has no app-server backends: add edges from lb to app-server")
+	}
+	nginxConf := generateNginxConfig(backends, algo)
+
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "lb-config", Namespace: cfg.Namespace},
+		Data:       map[string]string{"nginx.conf": nginxConf},
+	}
+	_, err := k.clientset.CoreV1().ConfigMaps(cfg.Namespace).Create(ctx, cm, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("create lb configmap: %w", err)
+	}
+
+	labels := map[string]string{"app": "lb", "deployment": cfg.Namespace}
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "lb", Namespace: cfg.Namespace},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: ptr(replicas),
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name:  "nginx",
+						Image: "nginx:alpine",
+						Ports: []corev1.ContainerPort{{ContainerPort: 80}},
+						Resources: resources,
+						VolumeMounts: []corev1.VolumeMount{{
+							Name: "config", MountPath: "/etc/nginx/nginx.conf", SubPath: "nginx.conf",
+						}},
+					}},
+					Volumes: []corev1.Volume{{
+						Name: "config",
+						VolumeSource: corev1.VolumeSource{
+							ConfigMap: &corev1.ConfigMapVolumeSource{
+								LocalObjectReference: corev1.LocalObjectReference{Name: "lb-config"},
+							},
+						},
+					}},
+				},
+			},
+		},
+	}
+	if _, err := k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("create lb deployment: %w", err)
+	}
+
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "lb", Namespace: cfg.Namespace},
+		Spec: corev1.ServiceSpec{
+			Type:     corev1.ServiceTypeClusterIP,
+			Selector: labels,
+			Ports:    []corev1.ServicePort{{Port: 80, TargetPort: intstr.FromInt32(80)}},
+		},
+	}
+	if _, err := k.clientset.CoreV1().Services(cfg.Namespace).Create(ctx, svc, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("create lb service: %w", err)
+	}
+
+	return k.waitForReady(ctx, cfg.Namespace, "lb")
+}
+
+// lbBackends extracts K8s service hostnames for app-servers reached by outbound edges from the lb node.
+// Today every app-server uses the shared Service name "app-server".
+func lbBackends(lbNode DeploymentNode, design DeploymentDesign) []string {
+	nodeMap := make(map[string]DeploymentNode, len(design.Nodes))
+	for _, n := range design.Nodes {
+		nodeMap[n.ID] = n
+	}
+	seen := make(map[string]struct{})
+	var backends []string
+	for _, c := range design.Connections {
+		if c.SourceID != lbNode.ID {
+			continue
+		}
+		t, ok := nodeMap[c.TargetID]
+		if !ok || t.Type != "app-server" {
+			continue
+		}
+		host := "app-server"
+		if _, dup := seen[host]; dup {
+			continue
+		}
+		seen[host] = struct{}{}
+		backends = append(backends, host)
+	}
+	return backends
+}
+
+// generateNginxConfig builds a minimal nginx.conf with an upstream and reverse proxy to app backends.
+// algorithm: round-robin (default), least_conn, ip_hash — the latter two are valid only inside upstream {}.
+func generateNginxConfig(backends []string, algorithm string) string {
+	var upstreamExtra string
+	switch algorithm {
+	case "least_conn":
+		upstreamExtra = "        least_conn;\n"
+	case "ip_hash":
+		upstreamExtra = "        ip_hash;\n"
+	default:
+		upstreamExtra = ""
+	}
+	var b strings.Builder
+	for _, host := range backends {
+		fmt.Fprintf(&b, "        server %s:8080;\n", host)
+	}
+	return fmt.Sprintf(`events {
+    worker_connections 1024;
+}
+http {
+    upstream backends {
+%s%s    }
+
+    server {
+        listen 80;
+        location / {
+            proxy_pass http://backends;
+        }
+    }
+}
+`, upstreamExtra, b.String())
 }
 
 func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, resources corev1.ResourceRequirements, replicas int32) error {
@@ -439,6 +593,21 @@ func appServerImage(template string) string {
 	default:
 		// Fallback so other templates still deploy in Week 6.
 		return "nginx:latest"
+	}
+}
+
+func workerImage(template string) string {
+	registry := os.Getenv("TEMPLATE_IMAGE_REGISTRY")
+	if registry == "" {
+		registry = "europe-west1-docker.pkg.dev/ganymede-cloud/cloud9-images"
+	}
+	switch template {
+	case "twitter-fanout":
+		return registry + "/fanout-worker:v1"
+	case "e-commerce":
+		return registry + "/fulfillment-worker:v1"
+	default:
+		return "busybox:latest"
 	}
 }
 

@@ -29,6 +29,8 @@ type LoadProfile struct {
 	RPS             int    `json:"rps"`             // requests per second (default: 50)
 	DurationSeconds int64  `json:"durationSeconds"` // 0 = run until stopped (default: 0)
 	Template        string `json:"template"`        // "url-shortener" — looks up EndpointSpecs in registry
+	// BaseURL optional origin (e.g. http://lb.ns.svc.cluster.local:80). Env LOADGEN_BASE_URL wins if set.
+	BaseURL string `json:"baseUrl,omitempty"`
 	// Distribution optional override: keys are DistributionKey (e.g. "GET /r/{code}") → weight.
 	Distribution map[string]int `json:"distribution"`
 }

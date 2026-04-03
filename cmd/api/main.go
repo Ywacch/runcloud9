@@ -45,6 +45,7 @@ func buildDeployers() (map[string]deployer.ComponentDeployer, kubernetes.Interfa
 			"app-server": &deployer.LocalDeployer{NodeType: "app-server"},
 			"lb":         &deployer.LocalDeployer{NodeType: "lb"},
 			"mq":         &deployer.LocalDeployer{NodeType: "mq"},
+			"worker":     &deployer.LocalDeployer{NodeType: "worker"},
 		}, nil
 	}
 
@@ -69,8 +70,9 @@ func buildDeployers() (map[string]deployer.ComponentDeployer, kubernetes.Interfa
 		"db":         deployer.NewK8sDeployer(clientset, "db"),
 		"cache":      deployer.NewK8sDeployer(clientset, "cache"),
 		"app-server": deployer.NewK8sDeployer(clientset, "app-server"),
-		"lb":         &deployer.LocalDeployer{NodeType: "lb"},
+		"lb":         deployer.NewK8sDeployer(clientset, "lb"),
 		"mq":         deployer.NewK8sDeployer(clientset, "mq"),
+		"worker":     deployer.NewK8sDeployer(clientset, "worker"),
 	}, clientset
 }
 
