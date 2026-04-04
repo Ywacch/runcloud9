@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -74,6 +75,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /deployments/{id}", h.handleDeleteDeployment)
 	mux.HandleFunc("GET /deployments/{id}/metrics", h.handleMetricsStream)
 	mux.HandleFunc("GET /deployments/{id}/logs", h.handleLogsStream)
+	mux.HandleFunc("GET /deployments/{id}/proxy/{component}", h.handleProxy)
+	mux.HandleFunc("GET /deployments/{id}/proxy/{component}/{path...}", h.handleProxy)
+	mux.HandleFunc("POST /deployments/{id}/proxy/{component}", h.handleProxy)
+	mux.HandleFunc("POST /deployments/{id}/proxy/{component}/{path...}", h.handleProxy)
+	mux.HandleFunc("OPTIONS /deployments/{id}/proxy/{component}", h.handleProxy)
+	mux.HandleFunc("OPTIONS /deployments/{id}/proxy/{component}/{path...}", h.handleProxy)
 	mux.HandleFunc("POST /deployments/{id}/loadgen", h.handleStartLoadGen)
 	mux.HandleFunc("DELETE /deployments/{id}/loadgen", h.handleStopLoadGen)
 	mux.HandleFunc("GET /health", h.handleHealth)
@@ -277,7 +284,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(result)
 }
 
-// orchestrate deploys all nodes in the design sequentially.
+// orchestrate deploys nodes in dependency layers; nodes within a layer run in parallel.
 // On any failure, it attempts to teardown already-deployed nodes (rollback).
 func (h *Handler) orchestrate(
 	ctx context.Context,
@@ -285,37 +292,44 @@ func (h *Handler) orchestrate(
 	namespace string,
 ) (*deployer.DeploymentResult, error) {
 
-	deployed := []deployer.DeploymentNode{}
+	var deployed []deployer.DeploymentNode
 
-	ordered, err := deployer.DeploymentOrder(design)
+	layers, err := deployer.DeploymentLayers(design)
 	if err != nil {
 		return nil, fmt.Errorf("topology: %w", err)
 	}
 
-	for _, node := range ordered {
-		d, ok := h.deployers[node.Type]
-		if !ok {
-			// No deployer registered for this type. use a generic local one for now
-			d = &deployer.LocalDeployer{NodeType: node.Type}
+	for _, layer := range layers {
+		errs := make([]error, len(layer))
+		var wg sync.WaitGroup
+		for i := range layer {
+			wg.Add(1)
+			go func(idx int, node deployer.DeploymentNode) {
+				defer wg.Done()
+				d, ok := h.deployers[node.Type]
+				if !ok {
+					d = &deployer.LocalDeployer{NodeType: node.Type}
+				}
+				cfg := deployer.DeployConfig{
+					Namespace: namespace,
+					Node:      node,
+					Design:    design,
+				}
+				if err := d.Deploy(ctx, cfg); err != nil {
+					errs[idx] = fmt.Errorf("deploy node %s: %w", node.Name, err)
+				}
+			}(i, layer[i])
 		}
+		wg.Wait()
 
-		cfg := deployer.DeployConfig{
-			Namespace: namespace,
-			Node:      node,
-			Design:    design,
+		for _, e := range errs {
+			if e != nil {
+				log.Printf("deploy failed, rolling back %d nodes", len(deployed))
+				h.rollback(context.Background(), deployed, namespace)
+				return nil, e
+			}
 		}
-
-		if err := d.Deploy(ctx, cfg); err != nil {
-			// Rollback on partial failure. We iterate the already-
-			// deployed nodes and teardown each one. We use context.Background()
-			// here (not the original ctx) because the original ctx may already
-			// be cancelled — we want teardown to proceed regardless.
-			log.Printf("deploy failed for node=%s, rolling back %d nodes", node.Name, len(deployed))
-			h.rollback(context.Background(), deployed, namespace)
-			return nil, fmt.Errorf("deploy node %s: %w", node.Name, err)
-		}
-
-		deployed = append(deployed, node)
+		deployed = append(deployed, layer...)
 	}
 
 	seeded := false
