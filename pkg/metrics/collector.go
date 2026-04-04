@@ -19,6 +19,7 @@ import (
 type MetricsCollector struct {
 	prometheusURL string
 	httpClient    *http.Client
+	scrapeClient  *http.Client // short timeout for in-cluster LB / RabbitMQ HTTP scrapes
 	loadgen       *loadgen.LoadGenerator
 }
 
@@ -26,6 +27,7 @@ func NewMetricsCollector(prometheusURL string, lg *loadgen.LoadGenerator) *Metri
 	return &MetricsCollector{
 		prometheusURL: prometheusURL,
 		httpClient:    &http.Client{Timeout: 5 * time.Second},
+		scrapeClient:  &http.Client{Timeout: 2 * time.Second},
 		loadgen:       lg,
 	}
 }
@@ -244,16 +246,21 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace string) (*Depl
 	cmMQ := ComponentMetrics{Component: "mq"}
 	cmMQ.CPUUsage = c.queryCPUUsageOrRequest(ctx, ns, "rabbitmq.*")
 	cmMQ.MemoryBytes = int64(c.queryMemoryWorkingSetOrRequest(ctx, ns, "rabbitmq.*"))
+	cmMQ.QueueDepth, cmMQ.ProduceRate, cmMQ.ConsumeRate, cmMQ.MessagesReady, cmMQ.MessagesUnacked =
+		c.scrapeRabbitMQOverview(ctx, ns)
 	dm.Components["mq"] = cmMQ
 
 	cmWorker := ComponentMetrics{Component: "worker"}
 	cmWorker.CPUUsage = c.queryCPUUsageOrRequest(ctx, ns, "worker.*")
 	cmWorker.MemoryBytes = int64(c.queryMemoryWorkingSetOrRequest(ctx, ns, "worker.*"))
+	cmWorker.RequestRate = cmMQ.ConsumeRate
 	dm.Components["worker"] = cmWorker
 
 	cmLB := ComponentMetrics{Component: "lb"}
 	cmLB.CPUUsage = c.queryCPUUsageOrRequest(ctx, ns, "lb.*")
 	cmLB.MemoryBytes = int64(c.queryMemoryWorkingSetOrRequest(ctx, ns, "lb.*"))
+	cmLB.RequestRate = cmApp.RequestRate
+	cmLB.ActiveConnections = c.scrapeNginxStubActiveConnections(ctx, ns)
 	dm.Components["lb"] = cmLB
 
 	// Attach load generator stats to the metrics snapshot.

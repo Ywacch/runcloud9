@@ -110,6 +110,28 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
+func validateShortenURL(raw string) error {
+	if raw == "" {
+		return errors.New("url is required")
+	}
+	if len(raw) > 2048 {
+		return errors.New("url exceeds maximum length of 2048 characters")
+	}
+	u, err := url.ParseRequestURI(raw)
+	if err != nil {
+		return errors.New("url is not a valid absolute URI")
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+	default:
+		return errors.New("url scheme must be http or https")
+	}
+	if u.Host == "" {
+		return errors.New("url must include a host")
+	}
+	return nil
+}
+
 // Never panic — we recover and return JSON error.
 func withRecovery(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -154,30 +176,26 @@ func (s *Server) handleShorten(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.URL = strings.TrimSpace(req.URL)
-	if req.URL == "" {
-		jsonError(w, http.StatusBadRequest, "url is required")
-		return
-	}
-
-	if _, err := url.ParseRequestURI(req.URL); err != nil {
-		jsonError(w, http.StatusBadRequest, "url is not valid")
+	if err := validateShortenURL(req.URL); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	ctx := r.Context()
-	code, err := s.generateUniqueCode(ctx)
+	var code string
+	var err error
+	if s.cfg.CacheMode == "proxy" {
+		code, err = s.allocateCodeProxy(ctx, req.URL)
+	} else {
+		code, err = s.allocateCodeDB(ctx, req.URL)
+	}
 	if err != nil {
-		slog.Error("generateUniqueCode failed", "error", err)
+		slog.Error("allocate short code failed", "error", err)
 		jsonError(w, http.StatusInternalServerError, "failed to generate code")
 		return
 	}
 
 	if s.cfg.CacheMode == "proxy" {
-		if err := s.proxy.Set(ctx, code, req.URL, s.cfg.CacheTTL); err != nil {
-			slog.Error("proxy SET failed", "error", err)
-			jsonError(w, http.StatusInternalServerError, "cache write failed")
-			return
-		}
 		writeJSON(w, http.StatusCreated, map[string]string{
 			"code":      code,
 			"short_url": "/r/" + code,
@@ -188,28 +206,15 @@ func (s *Server) handleShorten(w http.ResponseWriter, r *http.Request) {
 	// POST /shorten behaviour depends on cache strategy.
 	switch s.cfg.CacheStrategy {
 	case "cache-aside":
-		// write DB only; cache is populated on reads.
-		if err := s.db.SaveURL(ctx, code, req.URL); err != nil {
-			jsonError(w, http.StatusInternalServerError, "db write failed")
-			return
-		}
-		// no cache write
+		// DB row already inserted in allocateCodeDB; cache is populated on reads.
 	case "write-through":
-		if err := s.db.SaveURL(ctx, code, req.URL); err != nil {
-			jsonError(w, http.StatusInternalServerError, "db write failed")
-			return
-		}
 		if s.cache != nil {
 			if err := s.cache.Set(ctx, code, req.URL, s.cfg.CacheTTL); err != nil {
 				slog.Warn("cache set failed", "error", err)
 			}
 		}
 	default:
-		// Safe default: DB only.
-		if err := s.db.SaveURL(ctx, code, req.URL); err != nil {
-			jsonError(w, http.StatusInternalServerError, "db write failed")
-			return
-		}
+		// DB row already inserted; no cache write.
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]string{
@@ -518,27 +523,40 @@ func generateCode() string {
 	return string(b)
 }
 
-// UNDERSTAND: collision probability with 6 chars from 62-char alphabet is
-// 62^6 = ~56 billion combinations. At 1M URLs the collision rate is negligible,
-// but we still handle it correctly — retry up to 5 times before giving up.
-func (s *Server) generateUniqueCode(ctx context.Context) (string, error) {
-	for i := 0; i < 5; i++ {
+// allocateCodeProxy reserves a code via the caching-proxy (Exists + Set), retrying on collisions.
+func (s *Server) allocateCodeProxy(ctx context.Context, longURL string) (string, error) {
+	for attempt := 1; attempt <= 5; attempt++ {
 		code := generateCode()
-		var (
-			exists bool
-			err    error
-		)
-		if s.cfg.CacheMode == "proxy" {
-			exists, err = s.proxy.Exists(ctx, code)
-		} else {
-			exists, err = s.db.URLExists(ctx, code)
-		}
+		exists, err := s.proxy.Exists(ctx, code)
 		if err != nil {
 			return "", err
 		}
-		if !exists {
+		if exists {
+			shortenerCodeCollisionsTotal.Inc()
+			slog.Warn("short code collision", "mode", "proxy", "attempt", attempt, "code", code)
+			continue
+		}
+		if err := s.proxy.Set(ctx, code, longURL, s.cfg.CacheTTL); err != nil {
+			return "", err
+		}
+		return code, nil
+	}
+	return "", fmt.Errorf("failed to generate unique code after 5 attempts")
+}
+
+// allocateCodeDB inserts with ON CONFLICT DO NOTHING and retries when the row was not inserted.
+func (s *Server) allocateCodeDB(ctx context.Context, longURL string) (string, error) {
+	for attempt := 1; attempt <= 5; attempt++ {
+		code := generateCode()
+		inserted, err := s.db.InsertURL(ctx, code, longURL)
+		if err != nil {
+			return "", err
+		}
+		if inserted {
 			return code, nil
 		}
+		shortenerCodeCollisionsTotal.Inc()
+		slog.Warn("short code collision", "mode", "db", "attempt", attempt, "code", code)
 	}
 	return "", fmt.Errorf("failed to generate unique code after 5 attempts")
 }

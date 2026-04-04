@@ -98,6 +98,9 @@ func TestGenerateNginxConfig(t *testing.T) {
 	if !strings.Contains(rr, "upstream backends") || !strings.Contains(rr, "proxy_pass http://backends") {
 		t.Fatalf("round-robin config: %s", rr)
 	}
+	if !strings.Contains(rr, "location /nginx_status") || !strings.Contains(rr, "stub_status") {
+		t.Fatalf("round-robin config missing stub_status: %s", rr)
+	}
 	if strings.Contains(rr, "least_conn") || strings.Contains(rr, "ip_hash") {
 		t.Fatalf("unexpected alg directives in round-robin: %s", rr)
 	}

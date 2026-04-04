@@ -503,6 +503,10 @@ http {
 
     server {
         listen 80;
+        location /nginx_status {
+            stub_status;
+            allow all;
+        }
         location / {
             proxy_pass http://backends;
         }

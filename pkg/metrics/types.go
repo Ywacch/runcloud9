@@ -37,6 +37,13 @@ type ComponentMetrics struct {
 	DbQueryRate    float64 `json:"dbQueryRate"`    // queries/sec
 	DbQueryLatency float64 `json:"dbQueryLatency"` // seconds (avg)
 	DbTotalQueries float64 `json:"dbTotalQueries"` // increase(count[9m])
+	// LB (nginx stub_status) + mirrored app RPS; MQ management API; worker mirrors MQ consume rate.
+	ActiveConnections float64 `json:"activeConnections"`
+	QueueDepth        float64 `json:"queueDepth"`
+	ProduceRate       float64 `json:"produceRate"`
+	ConsumeRate       float64 `json:"consumeRate"`
+	MessagesReady     float64 `json:"messagesReady"`
+	MessagesUnacked   float64 `json:"messagesUnacked"`
 }
 
 func emptyPeakSummary() map[string]any {
