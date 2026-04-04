@@ -20,6 +20,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/seeder"
 	"github.com/ywacch/cloud9/pkg/store"
+	"github.com/ywacch/cloud9/pkg/templates"
 	"github.com/ywacch/cloud9/pkg/teardown"
 	"k8s.io/client-go/kubernetes"
 )
@@ -76,6 +77,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /deployments/{id}/loadgen", h.handleStartLoadGen)
 	mux.HandleFunc("DELETE /deployments/{id}/loadgen", h.handleStopLoadGen)
 	mux.HandleFunc("GET /health", h.handleHealth)
+	mux.HandleFunc("GET /templates", h.handleGetTemplates)
 }
 
 // handleMetricsStream upgrades the HTTP connection to WebSocket and streams
@@ -186,6 +188,11 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"ok"}`))
 }
 
+func (h *Handler) handleGetTemplates(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(templates.Registry())
+}
+
 func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request) {
 	// context.WithTimeout creates a child context that auto-cancels
 	// after `timeout` minutes. This context us passed to every deployer call so that if
@@ -208,6 +215,14 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 	if err := validateDesign(design); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	if design.Template != "" {
+		tmpl := templates.GetTemplate(design.Template)
+		if tmpl != nil && !tmpl.Available {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("template %q is not yet available", design.Template))
+			return
+		}
 	}
 
 	namespace := fmt.Sprintf("cloud9-%s-%d", design.Template, time.Now().Unix())
