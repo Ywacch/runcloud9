@@ -85,6 +85,48 @@ func (c *MetricsCollector) query(ctx context.Context, promql string) (float64, e
 	return val, nil
 }
 
+// queryWithFallback tries the primary PromQL first. If it errors, uses fallback.
+// If primary returns 0, tries fallback; if fallback is >0, assumes primary metrics
+// are unavailable (e.g. cAdvisor not scraped) and returns fallback.
+func (c *MetricsCollector) queryWithFallback(ctx context.Context, primary, fallback string) float64 {
+	val, err := c.query(ctx, primary)
+	if err != nil {
+		fb, _ := c.query(ctx, fallback)
+		return fb
+	}
+	if val == 0 {
+		fb, _ := c.query(ctx, fallback)
+		if fb > 0 {
+			return fb
+		}
+	}
+	return val
+}
+
+func (c *MetricsCollector) queryCPUUsageOrRequest(ctx context.Context, ns, podRe string) float64 {
+	primary := fmt.Sprintf(
+		`sum(rate(container_cpu_usage_seconds_total{namespace=%q,pod=~%q,container!="POD",container!=""}[15s]))`,
+		ns, podRe,
+	)
+	fallback := fmt.Sprintf(
+		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~%q,resource="cpu"})`,
+		ns, podRe,
+	)
+	return c.queryWithFallback(ctx, primary, fallback)
+}
+
+func (c *MetricsCollector) queryMemoryWorkingSetOrRequest(ctx context.Context, ns, podRe string) float64 {
+	primary := fmt.Sprintf(
+		`sum(container_memory_working_set_bytes{namespace=%q,pod=~%q,container!="POD",container!=""})`,
+		ns, podRe,
+	)
+	fallback := fmt.Sprintf(
+		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~%q,resource="memory"})`,
+		ns, podRe,
+	)
+	return c.queryWithFallback(ctx, primary, fallback)
+}
+
 // Collect queries all metrics for a deployment namespace and returns a snapshot.
 func (c *MetricsCollector) Collect(ctx context.Context, namespace string) (*DeploymentMetrics, error) {
 	dm := &DeploymentMetrics{
@@ -97,31 +139,22 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace string) (*Depl
 	// Application metrics from url-shortener /metrics use this label selector (K8s scrape adds namespace).
 	nsSel := fmt.Sprintf(`namespace=%q`, ns)
 
-	// DB (postgres) — resource requests from kube-state-metrics (cAdvisor unavailable on GKE Autopilot).
-	// TODO: For true real-time usage, pull container metrics from Cloud Monitoring API.
+	// DB (postgres) — prefer cAdvisor usage; fall back to kube resource requests.
 	cmDB := ComponentMetrics{Component: "db"}
-	cpu, _ := c.query(ctx, fmt.Sprintf(
-		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"postgres.*",resource="cpu"})`,
-		ns,
-	))
-	cmDB.CPUUsage = cpu
-	mem, _ := c.query(ctx, fmt.Sprintf(
-		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"postgres.*",resource="memory"})`,
-		ns,
-	))
-	cmDB.MemoryBytes = int64(mem)
+	cmDB.CPUUsage = c.queryCPUUsageOrRequest(ctx, ns, "postgres.*")
+	cmDB.MemoryBytes = int64(c.queryMemoryWorkingSetOrRequest(ctx, ns, "postgres.*"))
 
 	dbQPS, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(db_query_duration_seconds_count{%s}[30s]))`,
+		`sum(rate(db_query_duration_seconds_count{%s}[15s]))`,
 		nsSel,
 	))
 	cmDB.DbQueryRate = dbQPS
 	dbLatSum, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(db_query_duration_seconds_sum{%s}[30s]))`,
+		`sum(rate(db_query_duration_seconds_sum{%s}[15s]))`,
 		nsSel,
 	))
 	dbLatCount, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(db_query_duration_seconds_count{%s}[30s]))`,
+		`sum(rate(db_query_duration_seconds_count{%s}[15s]))`,
 		nsSel,
 	))
 	if dbLatCount > 0 {
@@ -137,52 +170,38 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace string) (*Depl
 
 	// Cache tier: cache-aside redis-* and proxy redis-internal-* (matched by redis.*) + cache-proxy-*
 	cmCache := ComponentMetrics{Component: "cache"}
-	cpu, _ = c.query(ctx, fmt.Sprintf(
-		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"redis.*|cache-proxy.*",resource="cpu"})`,
-		ns,
-	))
-	cmCache.CPUUsage = cpu
-	mem, _ = c.query(ctx, fmt.Sprintf(
-		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"redis.*|cache-proxy.*",resource="memory"})`,
-		ns,
-	))
-	cmCache.MemoryBytes = int64(mem)
+	cmCache.CPUUsage = c.queryCPUUsageOrRequest(ctx, ns, "redis.*|cache-proxy.*")
+	cmCache.MemoryBytes = int64(c.queryMemoryWorkingSetOrRequest(ctx, ns, "redis.*|cache-proxy.*"))
 	// UNDERSTAND: assign cache to dm.Components after app metrics so hit/miss counters can be mirrored.
 
 	// App-server: HTTP + cache counters from url-shortener /metrics
 	cmApp := ComponentMetrics{Component: "app-server"}
-	cpu, _ = c.query(ctx, fmt.Sprintf(
-		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"app-server.*",resource="cpu"})`,
-		ns,
-	))
-	cmApp.CPUUsage = cpu
-	mem, _ = c.query(ctx, fmt.Sprintf(
-		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"app-server.*",resource="memory"})`,
-		ns,
-	))
-	cmApp.MemoryBytes = int64(mem)
+	cmApp.CPUUsage = c.queryCPUUsageOrRequest(ctx, ns, "app-server.*")
+	cmApp.MemoryBytes = int64(c.queryMemoryWorkingSetOrRequest(ctx, ns, "app-server.*"))
 
 	rps, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(http_requests_total{%s}[30s]))`,
+		`sum(rate(http_requests_total{%s}[15s]))`,
 		nsSel,
 	))
 	cmApp.RequestRate = rps
 
 	// UNDERSTAND: histogram_quantile needs the _bucket metric, not _total.
-	p99, _ := c.query(ctx, fmt.Sprintf(
-		`histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{%s}[1m])) by (le))`,
-		nsSel,
-	))
+	latBucketRate := fmt.Sprintf(`sum(rate(http_request_duration_seconds_bucket{%s}[15s])) by (le)`, nsSel)
+	p50, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.50, %s)`, latBucketRate))
+	p95, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.95, %s)`, latBucketRate))
+	p99, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.99, %s)`, latBucketRate))
+	cmApp.P50Latency = p50
+	cmApp.P95Latency = p95
 	cmApp.P99Latency = p99
 
 	hits, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(cache_hits_total{%s}[30s]))`,
+		`sum(rate(cache_hits_total{%s}[15s]))`,
 		nsSel,
 	))
 	cmApp.CacheHits = hits
 
 	misses, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(cache_misses_total{%s}[30s]))`,
+		`sum(rate(cache_misses_total{%s}[15s]))`,
 		nsSel,
 	))
 	cmApp.CacheMisses = misses
@@ -200,7 +219,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace string) (*Depl
 	cmApp.CacheMissesLast9m = misses9m
 
 	errRate, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(http_requests_total{%s,status=~"5.."}[30s]))`,
+		`sum(rate(http_requests_total{%s,status=~"5.."}[15s]))`,
 		nsSel,
 	))
 	cmApp.ErrorRate = errRate
@@ -223,42 +242,18 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace string) (*Depl
 	dm.Components["cache"] = cmCache
 
 	cmMQ := ComponentMetrics{Component: "mq"}
-	cpu, _ = c.query(ctx, fmt.Sprintf(
-		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"rabbitmq.*",resource="cpu"})`,
-		ns,
-	))
-	cmMQ.CPUUsage = cpu
-	mem, _ = c.query(ctx, fmt.Sprintf(
-		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"rabbitmq.*",resource="memory"})`,
-		ns,
-	))
-	cmMQ.MemoryBytes = int64(mem)
+	cmMQ.CPUUsage = c.queryCPUUsageOrRequest(ctx, ns, "rabbitmq.*")
+	cmMQ.MemoryBytes = int64(c.queryMemoryWorkingSetOrRequest(ctx, ns, "rabbitmq.*"))
 	dm.Components["mq"] = cmMQ
 
 	cmWorker := ComponentMetrics{Component: "worker"}
-	cpu, _ = c.query(ctx, fmt.Sprintf(
-		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"worker.*",resource="cpu"})`,
-		ns,
-	))
-	cmWorker.CPUUsage = cpu
-	mem, _ = c.query(ctx, fmt.Sprintf(
-		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"worker.*",resource="memory"})`,
-		ns,
-	))
-	cmWorker.MemoryBytes = int64(mem)
+	cmWorker.CPUUsage = c.queryCPUUsageOrRequest(ctx, ns, "worker.*")
+	cmWorker.MemoryBytes = int64(c.queryMemoryWorkingSetOrRequest(ctx, ns, "worker.*"))
 	dm.Components["worker"] = cmWorker
 
 	cmLB := ComponentMetrics{Component: "lb"}
-	cpu, _ = c.query(ctx, fmt.Sprintf(
-		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"lb.*",resource="cpu"})`,
-		ns,
-	))
-	cmLB.CPUUsage = cpu
-	mem, _ = c.query(ctx, fmt.Sprintf(
-		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~"lb.*",resource="memory"})`,
-		ns,
-	))
-	cmLB.MemoryBytes = int64(mem)
+	cmLB.CPUUsage = c.queryCPUUsageOrRequest(ctx, ns, "lb.*")
+	cmLB.MemoryBytes = int64(c.queryMemoryWorkingSetOrRequest(ctx, ns, "lb.*"))
 	dm.Components["lb"] = cmLB
 
 	// Attach load generator stats to the metrics snapshot.

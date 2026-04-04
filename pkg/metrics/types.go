@@ -24,7 +24,9 @@ type ComponentMetrics struct {
 	RequestRate float64 `json:"requestRate"` // requests/sec, 0 if not applicable
 	// TotalRequests is sum(increase(http_requests_total[9m])) — rolling ~9m window, not full session.
 	TotalRequests float64 `json:"totalRequests"`
-	P99Latency    float64 `json:"p99Latency"`  // seconds, 0 if not applicable
+	P50Latency    float64 `json:"p50Latency"` // seconds (Prometheus histogram), 0 if N/A
+	P95Latency    float64 `json:"p95Latency"` // seconds
+	P99Latency    float64 `json:"p99Latency"` // seconds, 0 if not applicable
 	CacheHits     float64 `json:"cacheHits"`   // hits/sec, 0 if not applicable
 	CacheMisses   float64 `json:"cacheMisses"` // misses/sec, 0 if not applicable
 	// CacheHitsLast9m / CacheMissesLast9m are Prometheus increase(...[9m]) sums (estimated counts in window).
