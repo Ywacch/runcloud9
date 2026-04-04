@@ -127,6 +127,14 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 								Image:     "redis:7",
 								Ports:     []corev1.ContainerPort{{ContainerPort: 6379}},
 								Resources: resources,
+								ReadinessProbe: &corev1.Probe{
+									ProbeHandler: corev1.ProbeHandler{
+										TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(6379)},
+									},
+									InitialDelaySeconds: 2,
+									PeriodSeconds:       2,
+									FailureThreshold:    3,
+								},
 							},
 						},
 					},
@@ -180,6 +188,14 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 								Ports:     []corev1.ContainerPort{{ContainerPort: 8081}},
 								Resources: resources,
 								Env:       proxyEnv,
+								ReadinessProbe: &corev1.Probe{
+									ProbeHandler: corev1.ProbeHandler{
+										HTTPGet: &corev1.HTTPGetAction{Path: "/health", Port: intstr.FromInt32(8081)},
+									},
+									InitialDelaySeconds: 3,
+									PeriodSeconds:       2,
+									FailureThreshold:    5,
+								},
 							},
 						},
 					},
@@ -225,6 +241,14 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 							Ports:     []corev1.ContainerPort{{ContainerPort: 6379}},
 							Resources: resources,
 							Env:       envMapToK8s(envVars),
+							ReadinessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(6379)},
+								},
+								InitialDelaySeconds: 2,
+								PeriodSeconds:       2,
+								FailureThreshold:    3,
+							},
 						},
 					},
 				},
@@ -286,7 +310,8 @@ func (k *K8sDeployer) deployAppServer(ctx context.Context, cfg DeployConfig, res
 								HTTPGet: &corev1.HTTPGetAction{Path: "/health", Port: intstr.FromInt32(8080)},
 							},
 							InitialDelaySeconds: 3,
-							PeriodSeconds:       5,
+							PeriodSeconds:       2,
+							FailureThreshold:    5,
 						},
 						Env: envMapToK8s(envVars),
 					}},
@@ -383,6 +408,14 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 						Image: "nginx:alpine",
 						Ports: []corev1.ContainerPort{{ContainerPort: 80}},
 						Resources: resources,
+						ReadinessProbe: &corev1.Probe{
+							ProbeHandler: corev1.ProbeHandler{
+								TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(80)},
+							},
+							InitialDelaySeconds: 2,
+							PeriodSeconds:       2,
+							FailureThreshold:    3,
+						},
 						VolumeMounts: []corev1.VolumeMount{{
 							Name: "config", MountPath: "/etc/nginx/nginx.conf", SubPath: "nginx.conf",
 						}},
@@ -501,13 +534,37 @@ func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, 
 
 	labels := map[string]string{"app": spec.AppLabel, "deployment": cfg.Namespace}
 
-	// TCP readiness is a lightweight readiness gate for simple infra components.
-	probe := &corev1.Probe{
-		ProbeHandler: corev1.ProbeHandler{
-			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(spec.Ports[0])},
-		},
-		InitialDelaySeconds: 5,
-		PeriodSeconds:       5,
+	// TCP readiness: PostgreSQL vs RabbitMQ use different startup timings.
+	var probe *corev1.Probe
+	tcpPort := intstr.FromInt32(spec.Ports[0])
+	switch cfg.Node.Type {
+	case "db":
+		probe = &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				TCPSocket: &corev1.TCPSocketAction{Port: tcpPort},
+			},
+			InitialDelaySeconds: 5,
+			PeriodSeconds:       3,
+			FailureThreshold:    5,
+		}
+	case "mq":
+		probe = &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				TCPSocket: &corev1.TCPSocketAction{Port: tcpPort},
+			},
+			InitialDelaySeconds: 10,
+			PeriodSeconds:       3,
+			FailureThreshold:    5,
+		}
+	default:
+		probe = &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				TCPSocket: &corev1.TCPSocketAction{Port: tcpPort},
+			},
+			InitialDelaySeconds: 5,
+			PeriodSeconds:       3,
+			FailureThreshold:    5,
+		}
 	}
 
 	ports := make([]corev1.ContainerPort, len(spec.Ports))
