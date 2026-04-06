@@ -98,6 +98,33 @@ func (s *DeploymentStore) SetMetricsSummary(ctx context.Context, namespace strin
 	return nil
 }
 
+// UpdateMetricsSummary patches the metrics_summary JSONB column for a deployment.
+func (s *DeploymentStore) UpdateMetricsSummary(ctx context.Context, namespace string, summary map[string]any) error {
+	if summary == nil {
+		summary = map[string]any{}
+	}
+	_, _, err := s.client.From("cloud_deployments").
+		Update(map[string]any{"metrics_summary": summary}, "", "").
+		Eq("namespace", namespace).
+		Execute()
+	if err != nil {
+		return fmt.Errorf("store.UpdateMetricsSummary: %w", err)
+	}
+	return nil
+}
+
+// UpdateExpiresAt updates only the expires_at column for the given namespace.
+func (s *DeploymentStore) UpdateExpiresAt(ctx context.Context, namespace string, expiresAt time.Time) error {
+	_, _, err := s.client.From("cloud_deployments").
+		Update(map[string]any{"expires_at": expiresAt.Format(time.RFC3339)}, "", "").
+		Eq("namespace", namespace).
+		Execute()
+	if err != nil {
+		return fmt.Errorf("store.UpdateExpiresAt: %w", err)
+	}
+	return nil
+}
+
 // GetStaleDeployments returns rows with status IN ('running','provisioning') for recovery.
 // Caller uses ExpiresAt to either fire teardown now or re-register a timer.
 func (s *DeploymentStore) GetStaleDeployments(ctx context.Context) ([]DeploymentRow, error) {

@@ -2,6 +2,7 @@ package deployer
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 )
 
@@ -130,7 +131,170 @@ func ValidateTopology(design DeploymentDesign) error {
 		}
 	}
 
+	// UNDERSTAND: DeploymentConn uses source -> target where the source DEPENDS ON the target.
+	// Kahn's algorithm yields dependency-graph sources first, so we reverse the result to ensure
+	// infrastructure (targets) deploys before application (sources). DeploymentOrder also performs
+	// cycle detection for us.
+	if _, err := DeploymentOrder(design); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// DeploymentOrder returns nodes in dependency order (infra before app).
+// Uses Kahn's algorithm with stable tie-breaking; reverses the final result.
+// Returns an error if a cycle exists.
+func DeploymentOrder(design DeploymentDesign) ([]DeploymentNode, error) {
+	inDeg := make(map[string]int, len(design.Nodes))
+	adj := make(map[string][]string, len(design.Nodes))
+	nodeMap := make(map[string]DeploymentNode, len(design.Nodes))
+
+	for _, n := range design.Nodes {
+		inDeg[n.ID] = 0
+		nodeMap[n.ID] = n
+	}
+
+	for _, c := range design.Connections {
+		if _, ok := nodeMap[c.SourceID]; !ok {
+			return nil, fmt.Errorf("unknown node id in connections sourceId=%q", c.SourceID)
+		}
+		if _, ok := nodeMap[c.TargetID]; !ok {
+			return nil, fmt.Errorf("unknown node id in connections targetId=%q", c.TargetID)
+		}
+
+		adj[c.SourceID] = append(adj[c.SourceID], c.TargetID)
+		// Edge source -> target means "source depends on target".
+		// Kahn's algorithm counts incoming edges, so dependency nodes accumulate inDeg.
+		inDeg[c.TargetID]++
+	}
+
+	// Stable traversal: sort neighbor lists up front.
+	for k := range adj {
+		sort.Strings(adj[k])
+	}
+
+	// Queue initial nodes with in-degree 0 (no dependencies).
+	queue := make([]string, 0, len(inDeg))
+	for id, deg := range inDeg {
+		if deg == 0 {
+			queue = append(queue, id)
+		}
+	}
+	sort.Strings(queue)
+
+	ordered := make([]DeploymentNode, 0, len(design.Nodes))
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+
+		ordered = append(ordered, nodeMap[id])
+
+		for _, nid := range adj[id] {
+			inDeg[nid]--
+			if inDeg[nid] == 0 {
+				queue = append(queue, nid)
+				sort.Strings(queue)
+			}
+		}
+	}
+
+	if len(ordered) != len(design.Nodes) {
+		return nil, fmt.Errorf("topology has a cycle — cannot determine deployment order")
+	}
+
+	// Reverse: Kahn's gives sources-first; we need infra-first.
+	for i, j := 0, len(ordered)-1; i < j; i, j = i+1, j-1 {
+		ordered[i], ordered[j] = ordered[j], ordered[i]
+	}
+
+	return ordered, nil
+}
+
+// DeploymentLayers returns nodes grouped by dependency depth for parallel deploy.
+// Nodes in the same layer have no dependencies on each other; layers run sequentially,
+// and nodes within a layer may run concurrently. Layer order matches DeploymentOrder
+// (infrastructure before dependents). Uses the same edge semantics as DeploymentOrder.
+func DeploymentLayers(design DeploymentDesign) ([][]DeploymentNode, error) {
+	inDeg := make(map[string]int, len(design.Nodes))
+	adj := make(map[string][]string, len(design.Nodes))
+	nodeMap := make(map[string]DeploymentNode, len(design.Nodes))
+
+	for _, n := range design.Nodes {
+		inDeg[n.ID] = 0
+		nodeMap[n.ID] = n
+	}
+
+	for _, c := range design.Connections {
+		if _, ok := nodeMap[c.SourceID]; !ok {
+			return nil, fmt.Errorf("unknown node id in connections sourceId=%q", c.SourceID)
+		}
+		if _, ok := nodeMap[c.TargetID]; !ok {
+			return nil, fmt.Errorf("unknown node id in connections targetId=%q", c.TargetID)
+		}
+
+		adj[c.SourceID] = append(adj[c.SourceID], c.TargetID)
+		inDeg[c.TargetID]++
+	}
+
+	for k := range adj {
+		sort.Strings(adj[k])
+	}
+
+	queue := make([]string, 0, len(inDeg))
+	for id, deg := range inDeg {
+		if deg == 0 {
+			queue = append(queue, id)
+		}
+	}
+	sort.Strings(queue)
+
+	var layers [][]DeploymentNode
+	for len(queue) > 0 {
+		layerIDs := queue
+		queue = nil
+
+		layer := make([]DeploymentNode, 0, len(layerIDs))
+		for _, id := range layerIDs {
+			layer = append(layer, nodeMap[id])
+			for _, nid := range adj[id] {
+				inDeg[nid]--
+				if inDeg[nid] == 0 {
+					queue = append(queue, nid)
+				}
+			}
+		}
+		sort.Strings(queue)
+		layers = append(layers, layer)
+	}
+
+	var total int
+	for _, L := range layers {
+		total += len(L)
+	}
+	if total != len(design.Nodes) {
+		return nil, fmt.Errorf("topology has a cycle — cannot determine deployment order")
+	}
+
+	for i, j := 0, len(layers)-1; i < j; i, j = i+1, j-1 {
+		layers[i], layers[j] = layers[j], layers[i]
+	}
+
+	ordered, oerr := DeploymentOrder(design)
+	if oerr != nil {
+		return nil, oerr
+	}
+	rank := make(map[string]int, len(ordered))
+	for i, n := range ordered {
+		rank[n.ID] = i
+	}
+	for i := range layers {
+		sort.Slice(layers[i], func(a, b int) bool {
+			return rank[layers[i][a].ID] < rank[layers[i][b].ID]
+		})
+	}
+
+	return layers, nil
 }
 
 // DeriveEnvVars derives environment variables for a node based on the full deployment design.

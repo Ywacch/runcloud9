@@ -22,18 +22,19 @@ func newDB(pool *pgxpool.Pool) *DB {
 	return &DB{pool: pool}
 }
 
-func (db *DB) SaveURL(ctx context.Context, code, original string) error {
+// InsertURL inserts a row; on primary-key conflict it does nothing and returns inserted=false.
+func (db *DB) InsertURL(ctx context.Context, code, original string) (inserted bool, err error) {
 	start := time.Now()
-	defer func() { dbQueryDuration.WithLabelValues("save_url").Observe(time.Since(start).Seconds()) }()
-	// UPSERT keeps inserts idempotent (e.g. retries, concurrent writers).
-	// We only update original; hit_count/created_at should remain intact.
-	_, err := db.pool.Exec(ctx, `
+	defer func() { dbQueryDuration.WithLabelValues("insert_url").Observe(time.Since(start).Seconds()) }()
+	tag, err := db.pool.Exec(ctx, `
 		INSERT INTO urls (code, original)
 		VALUES ($1, $2)
-		ON CONFLICT (code) DO UPDATE
-		SET original = EXCLUDED.original
+		ON CONFLICT (code) DO NOTHING
 	`, code, original)
-	return err
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 func (db *DB) GetURL(ctx context.Context, code string) (URLStats, error) {

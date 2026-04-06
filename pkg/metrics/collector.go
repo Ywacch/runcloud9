@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/ywacch/cloud9/pkg/loadgen"
 )
 
 // MetricsCollector queries the Prometheus HTTP API for a specific deployment namespace.
@@ -17,12 +19,16 @@ import (
 type MetricsCollector struct {
 	prometheusURL string
 	httpClient    *http.Client
+	scrapeClient  *http.Client // short timeout for in-cluster LB / RabbitMQ HTTP scrapes
+	loadgen       *loadgen.LoadGenerator
 }
 
-func NewMetricsCollector(prometheusURL string) *MetricsCollector {
+func NewMetricsCollector(prometheusURL string, lg *loadgen.LoadGenerator) *MetricsCollector {
 	return &MetricsCollector{
 		prometheusURL: prometheusURL,
 		httpClient:    &http.Client{Timeout: 5 * time.Second},
+		scrapeClient:  &http.Client{Timeout: 2 * time.Second},
+		loadgen:       lg,
 	}
 }
 
@@ -81,6 +87,48 @@ func (c *MetricsCollector) query(ctx context.Context, promql string) (float64, e
 	return val, nil
 }
 
+// queryWithFallback tries the primary PromQL first. If it errors, uses fallback.
+// If primary returns 0, tries fallback; if fallback is >0, assumes primary metrics
+// are unavailable (e.g. cAdvisor not scraped) and returns fallback.
+func (c *MetricsCollector) queryWithFallback(ctx context.Context, primary, fallback string) float64 {
+	val, err := c.query(ctx, primary)
+	if err != nil {
+		fb, _ := c.query(ctx, fallback)
+		return fb
+	}
+	if val == 0 {
+		fb, _ := c.query(ctx, fallback)
+		if fb > 0 {
+			return fb
+		}
+	}
+	return val
+}
+
+func (c *MetricsCollector) queryCPUUsageOrRequest(ctx context.Context, ns, podRe string) float64 {
+	primary := fmt.Sprintf(
+		`sum(rate(container_cpu_usage_seconds_total{namespace=%q,pod=~%q,container!="POD",container!=""}[15s]))`,
+		ns, podRe,
+	)
+	fallback := fmt.Sprintf(
+		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~%q,resource="cpu"})`,
+		ns, podRe,
+	)
+	return c.queryWithFallback(ctx, primary, fallback)
+}
+
+func (c *MetricsCollector) queryMemoryWorkingSetOrRequest(ctx context.Context, ns, podRe string) float64 {
+	primary := fmt.Sprintf(
+		`sum(container_memory_working_set_bytes{namespace=%q,pod=~%q,container!="POD",container!=""})`,
+		ns, podRe,
+	)
+	fallback := fmt.Sprintf(
+		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~%q,resource="memory"})`,
+		ns, podRe,
+	)
+	return c.queryWithFallback(ctx, primary, fallback)
+}
+
 // Collect queries all metrics for a deployment namespace and returns a snapshot.
 func (c *MetricsCollector) Collect(ctx context.Context, namespace string) (*DeploymentMetrics, error) {
 	dm := &DeploymentMetrics{
@@ -90,103 +138,138 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace string) (*Depl
 	}
 
 	ns := namespace
+	// Application metrics from url-shortener /metrics use this label selector (K8s scrape adds namespace).
+	nsSel := fmt.Sprintf(`namespace=%q`, ns)
 
-	// DB (postgres)
+	// DB (postgres) — prefer cAdvisor usage; fall back to kube resource requests.
 	cmDB := ComponentMetrics{Component: "db"}
-	// VERIFY: Confirm `namespace` and `pod` labels on container_* series match kube-prometheus-stack
-	// relabeling (Prometheus UI → Status → Targets, then run an ad-hoc query on raw series).
-	// Adjust PromQL if labels differ before marking Week 7 complete.
-	cpu, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(container_cpu_usage_seconds_total{namespace=%q,pod=~"postgres.*",container!=""}[1m]))`,
-		ns,
+	cmDB.CPUUsage = c.queryCPUUsageOrRequest(ctx, ns, "postgres.*")
+	cmDB.MemoryBytes = int64(c.queryMemoryWorkingSetOrRequest(ctx, ns, "postgres.*"))
+
+	dbQPS, _ := c.query(ctx, fmt.Sprintf(
+		`sum(rate(db_query_duration_seconds_count{%s}[15s]))`,
+		nsSel,
 	))
-	cmDB.CPUUsage = cpu
-	mem, _ := c.query(ctx, fmt.Sprintf(
-		`sum(container_memory_working_set_bytes{namespace=%q,pod=~"postgres.*",container!=""})`,
-		ns,
+	cmDB.DbQueryRate = dbQPS
+	dbLatSum, _ := c.query(ctx, fmt.Sprintf(
+		`sum(rate(db_query_duration_seconds_sum{%s}[15s]))`,
+		nsSel,
 	))
-	cmDB.MemoryBytes = int64(mem)
+	dbLatCount, _ := c.query(ctx, fmt.Sprintf(
+		`sum(rate(db_query_duration_seconds_count{%s}[15s]))`,
+		nsSel,
+	))
+	if dbLatCount > 0 {
+		cmDB.DbQueryLatency = dbLatSum / dbLatCount
+	}
+	dbTotal, _ := c.query(ctx, fmt.Sprintf(
+		`sum(increase(db_query_duration_seconds_count{%s}[9m]))`,
+		nsSel,
+	))
+	cmDB.DbTotalQueries = dbTotal
+
 	dm.Components["db"] = cmDB
 
 	// Cache tier: cache-aside redis-* and proxy redis-internal-* (matched by redis.*) + cache-proxy-*
 	cmCache := ComponentMetrics{Component: "cache"}
-	// VERIFY: same as above for cAdvisor series in this namespace.
-	cpu, _ = c.query(ctx, fmt.Sprintf(
-		`sum(rate(container_cpu_usage_seconds_total{namespace=%q,pod=~"redis.*|cache-proxy.*",container!=""}[1m]))`,
-		ns,
-	))
-	cmCache.CPUUsage = cpu
-	mem, _ = c.query(ctx, fmt.Sprintf(
-		`sum(container_memory_working_set_bytes{namespace=%q,pod=~"redis.*|cache-proxy.*",container!=""})`,
-		ns,
-	))
-	cmCache.MemoryBytes = int64(mem)
-	dm.Components["cache"] = cmCache
+	cmCache.CPUUsage = c.queryCPUUsageOrRequest(ctx, ns, "redis.*|cache-proxy.*")
+	cmCache.MemoryBytes = int64(c.queryMemoryWorkingSetOrRequest(ctx, ns, "redis.*|cache-proxy.*"))
+	// UNDERSTAND: assign cache to dm.Components after app metrics so hit/miss counters can be mirrored.
 
 	// App-server: HTTP + cache counters from url-shortener /metrics
 	cmApp := ComponentMetrics{Component: "app-server"}
-	// VERIFY: cAdvisor CPU/memory — same label confirmation as above.
-	cpu, _ = c.query(ctx, fmt.Sprintf(
-		`sum(rate(container_cpu_usage_seconds_total{namespace=%q,pod=~"app-server.*",container!=""}[1m]))`,
-		ns,
-	))
-	cmApp.CPUUsage = cpu
-	mem, _ = c.query(ctx, fmt.Sprintf(
-		`sum(container_memory_working_set_bytes{namespace=%q,pod=~"app-server.*",container!=""})`,
-		ns,
-	))
-	cmApp.MemoryBytes = int64(mem)
-
-	// Application metrics inherit k8s scrape labels. url-shortener pods use app=app-server and
-	// names app-server-*; kube-prometheus may attach namespace+pod and/or namespace+app.
-	// Use (pod match) or (app label) so queries work across relabel variants.
-	lblPod := fmt.Sprintf(`namespace=%q,pod=~"app-server.*"`, ns)
-	lblApp := fmt.Sprintf(`namespace=%q,app="app-server"`, ns)
+	cmApp.CPUUsage = c.queryCPUUsageOrRequest(ctx, ns, "app-server.*")
+	cmApp.MemoryBytes = int64(c.queryMemoryWorkingSetOrRequest(ctx, ns, "app-server.*"))
 
 	rps, _ := c.query(ctx, fmt.Sprintf(
-		`(sum(rate(http_requests_total{%s}[30s])) or sum(rate(http_requests_total{%s}[30s])))`,
-		lblPod, lblApp,
+		`sum(rate(http_requests_total{%s}[15s]))`,
+		nsSel,
 	))
 	cmApp.RequestRate = rps
 
 	// UNDERSTAND: histogram_quantile needs the _bucket metric, not _total.
-	p99, _ := c.query(ctx, fmt.Sprintf(
-		`(histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{%s}[1m])) by (le)) or histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{%s}[1m])) by (le)))`,
-		lblPod, lblApp,
-	))
+	latBucketRate := fmt.Sprintf(`sum(rate(http_request_duration_seconds_bucket{%s}[15s])) by (le)`, nsSel)
+	p50, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.50, %s)`, latBucketRate))
+	p95, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.95, %s)`, latBucketRate))
+	p99, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.99, %s)`, latBucketRate))
+	cmApp.P50Latency = p50
+	cmApp.P95Latency = p95
 	cmApp.P99Latency = p99
 
 	hits, _ := c.query(ctx, fmt.Sprintf(
-		`(sum(rate(cache_hits_total{%s}[30s])) or sum(rate(cache_hits_total{%s}[30s])))`,
-		lblPod, lblApp,
+		`sum(rate(cache_hits_total{%s}[15s]))`,
+		nsSel,
 	))
 	cmApp.CacheHits = hits
 
 	misses, _ := c.query(ctx, fmt.Sprintf(
-		`(sum(rate(cache_misses_total{%s}[30s])) or sum(rate(cache_misses_total{%s}[30s])))`,
-		lblPod, lblApp,
+		`sum(rate(cache_misses_total{%s}[15s]))`,
+		nsSel,
 	))
 	cmApp.CacheMisses = misses
 
 	hits9m, _ := c.query(ctx, fmt.Sprintf(
-		`(sum(increase(cache_hits_total{%s}[9m])) or sum(increase(cache_hits_total{%s}[9m])))`,
-		lblPod, lblApp,
+		`sum(increase(cache_hits_total{%s}[9m]))`,
+		nsSel,
 	))
 	cmApp.CacheHitsLast9m = hits9m
 
 	misses9m, _ := c.query(ctx, fmt.Sprintf(
-		`(sum(increase(cache_misses_total{%s}[9m])) or sum(increase(cache_misses_total{%s}[9m])))`,
-		lblPod, lblApp,
+		`sum(increase(cache_misses_total{%s}[9m]))`,
+		nsSel,
 	))
 	cmApp.CacheMissesLast9m = misses9m
 
 	errRate, _ := c.query(ctx, fmt.Sprintf(
-		`(sum(rate(http_requests_total{%s,status=~"5.."}[30s])) or sum(rate(http_requests_total{%s,status=~"5.."}[30s])))`,
-		lblPod, lblApp,
+		`sum(rate(http_requests_total{%s,status=~"5.."}[15s]))`,
+		nsSel,
 	))
 	cmApp.ErrorRate = errRate
 
+	totalReqs, _ := c.query(ctx, fmt.Sprintf(
+		`sum(increase(http_requests_total{%s}[9m]))`,
+		nsSel,
+	))
+	cmApp.TotalRequests = totalReqs
+
 	dm.Components["app-server"] = cmApp
+
+	// Copy cache metrics from app-server onto the cache component so the CachePanel can display them.
+	// UNDERSTAND: cache_hits_total and cache_misses_total are emitted by the app-server (not Redis).
+	// We mirror them onto the cache component so the frontend doesn't need to cross-reference.
+	cmCache.CacheHits = cmApp.CacheHits
+	cmCache.CacheMisses = cmApp.CacheMisses
+	cmCache.CacheHitsLast9m = cmApp.CacheHitsLast9m
+	cmCache.CacheMissesLast9m = cmApp.CacheMissesLast9m
+	dm.Components["cache"] = cmCache
+
+	cmMQ := ComponentMetrics{Component: "mq"}
+	cmMQ.CPUUsage = c.queryCPUUsageOrRequest(ctx, ns, "rabbitmq.*")
+	cmMQ.MemoryBytes = int64(c.queryMemoryWorkingSetOrRequest(ctx, ns, "rabbitmq.*"))
+	cmMQ.QueueDepth, cmMQ.ProduceRate, cmMQ.ConsumeRate, cmMQ.MessagesReady, cmMQ.MessagesUnacked =
+		c.scrapeRabbitMQOverview(ctx, ns)
+	dm.Components["mq"] = cmMQ
+
+	cmWorker := ComponentMetrics{Component: "worker"}
+	cmWorker.CPUUsage = c.queryCPUUsageOrRequest(ctx, ns, "worker.*")
+	cmWorker.MemoryBytes = int64(c.queryMemoryWorkingSetOrRequest(ctx, ns, "worker.*"))
+	cmWorker.RequestRate = cmMQ.ConsumeRate
+	dm.Components["worker"] = cmWorker
+
+	cmLB := ComponentMetrics{Component: "lb"}
+	cmLB.CPUUsage = c.queryCPUUsageOrRequest(ctx, ns, "lb.*")
+	cmLB.MemoryBytes = int64(c.queryMemoryWorkingSetOrRequest(ctx, ns, "lb.*"))
+	cmLB.RequestRate = cmApp.RequestRate
+	cmLB.ActiveConnections = c.scrapeNginxStubActiveConnections(ctx, ns)
+	dm.Components["lb"] = cmLB
+
+	// Attach load generator stats to the metrics snapshot.
+	// UNDERSTAND: load stats are embedded in the existing metrics stream
+	// so the frontend gets everything on one WebSocket connection.
+	if c.loadgen != nil {
+		stats := c.loadgen.GetStats(namespace)
+		dm.LoadGen = &stats
+	}
 
 	return dm, nil
 }

@@ -50,4 +50,9 @@ var (
 		},
 		[]string{"operation"},
 	)
+
+	shortenerCodeCollisionsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "shortener_code_collisions_total",
+		Help: "Short code collisions detected while allocating a new code",
+	})
 )

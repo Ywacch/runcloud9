@@ -5,6 +5,141 @@ import (
 	"testing"
 )
 
+func TestDeploymentOrder_Chain(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "app", Type: "app-server", Name: "app"},
+			{ID: "db", Type: "db", Name: "db"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "app", TargetID: "db"},
+		},
+	}
+
+	ordered, err := DeploymentOrder(design)
+	if err != nil {
+		t.Fatalf("DeploymentOrder returned error: %v", err)
+	}
+	if len(ordered) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(ordered))
+	}
+	if ordered[0].ID != "db" || ordered[1].ID != "app" {
+		t.Fatalf("unexpected order: got [%s, %s]", ordered[0].ID, ordered[1].ID)
+	}
+
+	layers, err := DeploymentLayers(design)
+	if err != nil {
+		t.Fatalf("DeploymentLayers: %v", err)
+	}
+	if len(layers) != 2 || len(layers[0]) != 1 || len(layers[1]) != 1 {
+		t.Fatalf("layers: want 2 layers of 1 node, got %#v", layers)
+	}
+	if layers[0][0].ID != "db" || layers[1][0].ID != "app" {
+		t.Fatalf("layer order: got [%+v][%+v]", layers[0][0], layers[1][0])
+	}
+}
+
+func TestDeploymentLayers_ParallelRoots(t *testing.T) {
+	t.Parallel()
+	// lb -> app -> db and app -> cache: first deploy wave is {db, cache}, then app, then lb.
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "lb", Type: "lb", Name: "lb"},
+			{ID: "app", Type: "app-server", Name: "app"},
+			{ID: "db", Type: "db", Name: "db"},
+			{ID: "cache", Type: "cache", Name: "cache"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "lb", TargetID: "app"},
+			{SourceID: "app", TargetID: "db"},
+			{SourceID: "app", TargetID: "cache"},
+		},
+	}
+	ordered, err := DeploymentOrder(design)
+	if err != nil {
+		t.Fatal(err)
+	}
+	layers, err := DeploymentLayers(design)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var flat []string
+	for _, L := range layers {
+		for _, n := range L {
+			flat = append(flat, n.ID)
+		}
+	}
+	var want []string
+	for _, n := range ordered {
+		want = append(want, n.ID)
+	}
+	if len(flat) != len(want) {
+		t.Fatalf("flatten len: got %v want %v", flat, want)
+	}
+	for i := range flat {
+		if flat[i] != want[i] {
+			t.Fatalf("flatten[%d]: got %s want %s (full got=%v want=%v)", i, flat[i], want[i], flat, want)
+		}
+	}
+	if len(layers[0]) != 2 {
+		t.Fatalf("first layer should have db+cache parallel, got %d nodes", len(layers[0]))
+	}
+}
+
+func TestDeploymentLayers_Cycle(t *testing.T) {
+	t.Parallel()
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "a", Type: "app-server", Name: "a"},
+			{ID: "b", Type: "db", Name: "b"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "a", TargetID: "b"},
+			{SourceID: "b", TargetID: "a"},
+		},
+	}
+	if _, err := DeploymentLayers(design); err == nil {
+		t.Fatal("expected cycle error")
+	}
+}
+
+func TestDeploymentOrder_Cycle(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "a", Type: "app-server", Name: "a"},
+			{ID: "b", Type: "db", Name: "b"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "a", TargetID: "b"},
+			{SourceID: "b", TargetID: "a"},
+		},
+	}
+
+	_, err := DeploymentOrder(design)
+	if err == nil {
+		t.Fatalf("expected error for cycle, got nil")
+	}
+}
+
+func TestDeploymentOrder_StableTieBreak_NoEdges(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "b", Type: "db", Name: "b"},
+			{ID: "a", Type: "db", Name: "a"},
+			{ID: "c", Type: "db", Name: "c"},
+		},
+	}
+
+	ordered, err := DeploymentOrder(design)
+	if err != nil {
+		t.Fatalf("DeploymentOrder returned error: %v", err)
+	}
+	// Kahn with stable queue produces [a,b,c] then reversed => [c,b,a].
+	if ordered[0].ID != "c" || ordered[1].ID != "b" || ordered[2].ID != "a" {
+		t.Fatalf("unexpected order: got [%s, %s, %s]", ordered[0].ID, ordered[1].ID, ordered[2].ID)
+	}
+}
+
 func TestDeriveEnvVars_ProxyStrategyInjectsDBIntoCacheProxyNode(t *testing.T) {
 	design := DeploymentDesign{
 		Nodes: []DeploymentNode{

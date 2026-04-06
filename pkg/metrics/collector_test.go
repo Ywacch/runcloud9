@@ -6,8 +6,34 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
+
+func promVectorJSON(value string) map[string]any {
+	return map[string]any{
+		"status": "success",
+		"data": map[string]any{
+			"resultType": "vector",
+			"result": []map[string]any{
+				{
+					"metric": map[string]string{},
+					"value":  []any{float64(1), value},
+				},
+			},
+		},
+	}
+}
+
+func promEmptyJSON() map[string]any {
+	return map[string]any{
+		"status": "success",
+		"data": map[string]any{
+			"resultType": "vector",
+			"result":     []any{},
+		},
+	}
+}
 
 func TestCollect_CacheIncreaseQueries(t *testing.T) {
 	t.Parallel()
@@ -22,32 +48,15 @@ func TestCollect_CacheIncreaseQueries(t *testing.T) {
 			val = "30"
 		default:
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"status": "success",
-				"data": map[string]any{
-					"resultType": "vector",
-					"result":     []any{},
-				},
-			})
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status": "success",
-			"data": map[string]any{
-				"resultType": "vector",
-				"result": []map[string]any{
-					{
-						"metric": map[string]string{},
-						"value":  []any{float64(1), val},
-					},
-				},
-			},
-		})
+		_ = json.NewEncoder(w).Encode(promVectorJSON(val))
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL)
+	c := NewMetricsCollector(srv.URL, nil)
 	dm, err := c.Collect(context.Background(), "ns-test")
 	if err != nil {
 		t.Fatal(err)
@@ -58,5 +67,261 @@ func TestCollect_CacheIncreaseQueries(t *testing.T) {
 	}
 	if app.CacheMissesLast9m != 30 {
 		t.Fatalf("CacheMissesLast9m: want 30, got %v", app.CacheMissesLast9m)
+	}
+}
+
+func TestQueryWithFallback_PrimaryNonZeroSkipsFallback(t *testing.T) {
+	t.Parallel()
+	var n int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(q, "__PRIMARY__") {
+			_ = json.NewEncoder(w).Encode(promVectorJSON("2.5"))
+			return
+		}
+		if strings.Contains(q, "__FALLBACK__") {
+			_ = json.NewEncoder(w).Encode(promVectorJSON("99"))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(promEmptyJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil)
+	got := c.queryWithFallback(context.Background(), `sum(__PRIMARY__)`, `sum(__FALLBACK__)`)
+	if got != 2.5 {
+		t.Fatalf("want primary 2.5, got %v", got)
+	}
+	if n != 1 {
+		t.Fatalf("want 1 HTTP request (no fallback), got %d", n)
+	}
+}
+
+func TestQueryWithFallback_UsesFallbackWhenPrimaryZero(t *testing.T) {
+	t.Parallel()
+	var n int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(q, "__PRIMARY__") {
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+			return
+		}
+		if strings.Contains(q, "__FALLBACK__") {
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.25"))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(promEmptyJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil)
+	got := c.queryWithFallback(context.Background(), `sum(__PRIMARY__)`, `sum(__FALLBACK__)`)
+	if got != 0.25 {
+		t.Fatalf("want fallback 0.25, got %v", got)
+	}
+	if n != 2 {
+		t.Fatalf("want 2 HTTP requests (primary + fallback), got %d", n)
+	}
+}
+
+func TestQueryWithFallback_BothZero(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(promEmptyJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil)
+	got := c.queryWithFallback(context.Background(), `sum(__PRIMARY__)`, `sum(__FALLBACK__)`)
+	if got != 0 {
+		t.Fatalf("want 0, got %v", got)
+	}
+}
+
+func TestQuery_EmptyPrometheusURL(t *testing.T) {
+	t.Parallel()
+	c := NewMetricsCollector("", nil)
+	v, err := c.query(context.Background(), "anything")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != 0 {
+		t.Fatalf("want 0, got %v", v)
+	}
+}
+
+func TestCollect_NoDeprecatedRateWindows(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		mu.Lock()
+		queries = append(queries, q)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(promEmptyJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil)
+	_, err := c.Collect(context.Background(), "ns-prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, q := range queries {
+		if strings.Contains(q, "[30s]") {
+			t.Fatalf("query must not use [30s] window: %s", q)
+		}
+		if strings.Contains(q, "[1m]") {
+			t.Fatalf("query must not use [1m] window: %s", q)
+		}
+	}
+}
+
+func TestCollect_HistogramQuantilesUse15sBucketRate(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		mu.Lock()
+		seen = append(seen, q)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(q, "histogram_quantile(0.50") {
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.001"))
+			return
+		}
+		if strings.Contains(q, "histogram_quantile(0.95") {
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.005"))
+			return
+		}
+		if strings.Contains(q, "histogram_quantile(0.99") {
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.009"))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(promEmptyJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil)
+	dm, err := c.Collect(context.Background(), "ns-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := dm.Components["app-server"]
+	if app.P50Latency != 0.001 || app.P95Latency != 0.005 || app.P99Latency != 0.009 {
+		t.Fatalf("latencies: p50=%v p95=%v p99=%v", app.P50Latency, app.P95Latency, app.P99Latency)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, q := range seen {
+		if strings.Contains(q, "http_request_duration_seconds_bucket") && strings.Contains(q, "histogram_quantile") {
+			if !strings.Contains(q, "[15s]") {
+				t.Fatalf("histogram quantile query missing [15s] in bucket rate: %s", q)
+			}
+		}
+	}
+}
+
+func TestCollect_DBCPUUsesCadvisorWhenNonZero(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "container_cpu_usage_seconds_total") && strings.Contains(q, "postgres"):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.07"))
+		case strings.Contains(q, "kube_pod_container_resource_requests") && strings.Contains(q, `resource="cpu"`) && strings.Contains(q, "postgres"):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.25"))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil)
+	dm, err := c.Collect(context.Background(), "ns1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dm.Components["db"].CPUUsage != 0.07 {
+		t.Fatalf("db CPU: want 0.07 (cAdvisor), got %v", dm.Components["db"].CPUUsage)
+	}
+}
+
+func TestCollect_DBCPUFallbackToKubeWhenCadvisorEmpty(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "container_cpu_usage_seconds_total") && strings.Contains(q, "postgres"):
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		case strings.Contains(q, "kube_pod_container_resource_requests") && strings.Contains(q, `resource="cpu"`) && strings.Contains(q, "postgres"):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.25"))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil)
+	dm, err := c.Collect(context.Background(), "ns1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dm.Components["db"].CPUUsage != 0.25 {
+		t.Fatalf("db CPU: want 0.25 (kube fallback), got %v", dm.Components["db"].CPUUsage)
+	}
+}
+
+func TestQueryCPUUsageOrRequest_PromQLFilters(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		mu.Lock()
+		queries = append(queries, q)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(promEmptyJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil)
+	_ = c.queryCPUUsageOrRequest(context.Background(), "my-ns", "app-server.*")
+	mu.Lock()
+	defer mu.Unlock()
+	var primary string
+	for _, q := range queries {
+		if strings.Contains(q, "container_cpu_usage_seconds_total") {
+			primary = q
+			break
+		}
+	}
+	if primary == "" {
+		t.Fatalf("expected cAdvisor CPU query in %v", queries)
+	}
+	if !strings.Contains(primary, `namespace="my-ns"`) {
+		t.Fatalf("want namespace in query: %s", primary)
+	}
+	if !strings.Contains(primary, `pod=~"app-server.*"`) {
+		t.Fatalf("want pod regex in query: %s", primary)
+	}
+	if !strings.Contains(primary, `container!="POD"`) || !strings.Contains(primary, `container!=""`) {
+		t.Fatalf("want pause-container filters: %s", primary)
+	}
+	if !strings.Contains(primary, "[15s]") {
+		t.Fatalf("want [15s] rate window: %s", primary)
 	}
 }
