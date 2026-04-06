@@ -201,18 +201,6 @@ func (h *Handler) handleGetTemplates(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request) {
-	// context.WithTimeout creates a child context that auto-cancels
-	// after `timeout` minutes. This context us passed to every deployer call so that if
-	// the whole operation takes too long, all in-flight work gets cancelled.
-	// Always defer cancel() immediately after WithTimeout because if you forget,
-	// the context leaks until the parent is cancelled.
-	timeout := 2 * time.Minute
-	if os.Getenv("DEPLOYER") == "k8s" {
-		timeout = 5 * time.Minute
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
-	defer cancel()
-
 	var design deployer.DeploymentDesign
 	if err := json.NewDecoder(r.Body).Decode(&design); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
@@ -244,7 +232,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusInternalServerError, "invalid design")
 			return
 		}
-		_, err := h.store.CreateDeployment(ctx, store.CreateDeploymentParams{
+		_, err := h.store.CreateDeployment(r.Context(), store.CreateDeploymentParams{
 			Namespace: namespace,
 			Template:  design.Template,
 			Archetype: design.Archetype,
@@ -259,29 +247,44 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	result, err := h.orchestrate(ctx, design, namespace)
-	if err != nil {
-		log.Printf("orchestration failed for namespace=%s: %v", namespace, err)
-		if h.store != nil {
-			_ = h.store.UpdateStatus(context.Background(), namespace, "failed")
-		}
-		writeError(w, http.StatusInternalServerError, "deployment failed")
-		return
-	}
-
-	if h.store != nil {
-		_ = h.store.UpdateStatus(context.Background(), namespace, "running")
-		_ = h.store.UpdateMetricsSummary(context.Background(), namespace, map[string]any{
-			"seeded": result.Seeded,
-		})
-	}
-	if h.scheduler != nil {
-		h.scheduler.Schedule(namespace, expiresAt)
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"deploymentId": namespace,
+		"namespace":    namespace,
+		"status":       "provisioning",
+	})
+
+	// Continue orchestration in the background after returning the response.
+	go func(design deployer.DeploymentDesign, namespace string) {
+		timeout := 2 * time.Minute
+		if os.Getenv("DEPLOYER") == "k8s" {
+			timeout = 5 * time.Minute
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		result, err := h.orchestrate(ctx, design, namespace)
+		if err != nil {
+			log.Printf("orchestration failed for namespace=%s: %v", namespace, err)
+			if h.store != nil {
+				_ = h.store.UpdateStatus(context.Background(), namespace, "failed")
+			}
+			return
+		}
+
+		runExpiresAt := time.Now().Add(9 * time.Minute)
+		if h.store != nil {
+			_ = h.store.UpdateStatus(context.Background(), namespace, "running")
+			_ = h.store.UpdateExpiresAt(context.Background(), namespace, runExpiresAt)
+			_ = h.store.UpdateMetricsSummary(context.Background(), namespace, map[string]any{
+				"seeded": result.Seeded,
+			})
+		}
+		if h.scheduler != nil {
+			h.scheduler.Schedule(namespace, runExpiresAt)
+		}
+	}(design, namespace)
 }
 
 // orchestrate deploys nodes in dependency layers; nodes within a layer run in parallel.
