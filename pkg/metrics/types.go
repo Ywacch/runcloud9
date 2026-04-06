@@ -37,6 +37,18 @@ type ComponentMetrics struct {
 	DbQueryRate    float64 `json:"dbQueryRate"`    // queries/sec
 	DbQueryLatency float64 `json:"dbQueryLatency"` // seconds (avg)
 	DbTotalQueries float64 `json:"dbTotalQueries"` // increase(count[9m])
+	// Postgres exporter (when scraped); complements DbQueryRate from app metrics.
+	DbActiveConnections float64 `json:"dbActiveConnections,omitempty"`
+	MaxConnections      float64 `json:"maxConnections,omitempty"`
+	// Redis exporter keyspace rates (supplement app-reported cache hit/miss).
+	RedisKeyspaceHits   float64 `json:"redisKeyspaceHits,omitempty"`
+	RedisKeyspaceMisses float64 `json:"redisKeyspaceMisses,omitempty"`
+	// kube_pod_container_resource_limits / redis maxmemory (capacity denominator for UI %).
+	CPULimit    float64 `json:"cpuLimit,omitempty"`
+	MemoryLimit int64   `json:"memoryLimit,omitempty"`
+	// True when usage came from kube resource requests (no real-time series).
+	CPUIsEstimated bool `json:"cpuIsEstimated,omitempty"`
+	MemIsEstimated bool `json:"memIsEstimated,omitempty"`
 	// LB (nginx stub_status) + mirrored app RPS; MQ management API; worker mirrors MQ consume rate.
 	ActiveConnections float64 `json:"activeConnections"`
 	QueueDepth        float64 `json:"queueDepth"`
@@ -44,6 +56,9 @@ type ComponentMetrics struct {
 	ConsumeRate       float64 `json:"consumeRate"`
 	MessagesReady     float64 `json:"messagesReady"`
 	MessagesUnacked   float64 `json:"messagesUnacked"`
+	// LB config from deploy-time ConfigMap annotations (not Prometheus).
+	LBAlgorithm string   `json:"lbAlgorithm,omitempty"`
+	LBBackends  []string `json:"lbBackends,omitempty"`
 }
 
 func emptyPeakSummary() map[string]any {

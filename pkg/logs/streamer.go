@@ -33,6 +33,18 @@ var componentPodLabels = map[string]string{
 	"lb":         "app=lb",
 }
 
+// componentContainerName maps component name to the primary container name
+// inside its pod. Required when pods have sidecar containers (e.g. exporters)
+// because K8s refuses to stream logs without an explicit container name.
+var componentContainerName = map[string]string{
+	"db":         "postgres",
+	"cache":      "redis",
+	"app-server": "app-server",
+	"mq":         "rabbitmq",
+	"worker":     "worker",
+	"lb":         "nginx",
+}
+
 // StreamLogs finds all pods in the namespace, starts one goroutine per pod
 // streaming logs, and writes parsed LogLines to the WebSocket connection.
 //
@@ -94,8 +106,9 @@ func StreamLogs(ctx context.Context, conn *websocket.Conn, clientset kubernetes.
 			continue
 		}
 
+		containerName := componentContainerName[component] // primary container, not exporter sidecar
 		for _, pod := range pods.Items {
-			go streamPodLogs(ctx, clientset, namespace, pod.Name, component, writeCh)
+			go streamPodLogs(ctx, clientset, namespace, pod.Name, component, containerName, writeCh)
 		}
 	}
 
@@ -106,9 +119,11 @@ func StreamLogs(ctx context.Context, conn *websocket.Conn, clientset kubernetes.
 // Follow=true keeps the stream open — new log lines are pushed as they
 // are written to stdout. TailLines sends the last N lines on connect so the user
 // sees recent history before live streaming begins.
-func streamPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace, podName, component string, writeCh chan<- LogLine) {
+// containerName specifies which container to stream from in multi-container pods.
+func streamPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace, podName, component, containerName string, writeCh chan<- LogLine) {
 	tailLines := logTailLines
 	req := clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
+		Container: containerName,
 		Follow:    true,
 		TailLines: &tailLines,
 	})

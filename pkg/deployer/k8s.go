@@ -223,8 +223,16 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 		return k.waitForReady(ctx, cfg.Namespace, "cache-proxy")
 	}
 
-	// Cache-aside: single Redis pod/service.
+	// Cache-aside: single Redis pod/service + redis_exporter sidecar for Prometheus.
 	labels := map[string]string{"app": "redis", "deployment": cfg.Namespace}
+
+	redisExporter := corev1.Container{
+		Name:      "redis-exporter",
+		Image:     "oliver006/redis_exporter:v1.67.0",
+		Ports:     []corev1.ContainerPort{{ContainerPort: 9121}},
+		Resources: ExporterResources(),
+		Env:       []corev1.EnvVar{{Name: "REDIS_ADDR", Value: "localhost:6379"}},
+	}
 
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "redis", Namespace: cfg.Namespace},
@@ -232,7 +240,14 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 			Replicas: ptr(replicas),
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+					Annotations: map[string]string{
+						"prometheus.io/scrape": "true",
+						"prometheus.io/port":   "9121",
+						"prometheus.io/path":   "/metrics",
+					},
+				},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
 						{
@@ -250,6 +265,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 								FailureThreshold:    3,
 							},
 						},
+						redisExporter,
 					},
 				},
 			},
@@ -386,8 +402,15 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 	nginxConf := generateNginxConfig(backends, algo)
 
 	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: "lb-config", Namespace: cfg.Namespace},
-		Data:       map[string]string{"nginx.conf": nginxConf},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "lb-config",
+			Namespace: cfg.Namespace,
+			Annotations: map[string]string{
+				"cloud9.io/lb-algorithm": algo,
+				"cloud9.io/lb-backends":  strings.Join(backends, ","),
+			},
+		},
+		Data: map[string]string{"nginx.conf": nginxConf},
 	}
 	_, err := k.clientset.CoreV1().ConfigMaps(cfg.Namespace).Create(ctx, cm, metav1.CreateOptions{})
 	if err != nil {
@@ -576,22 +599,47 @@ func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, 
 		ports[i] = corev1.ContainerPort{ContainerPort: p}
 	}
 
+	podAnnotations := make(map[string]string)
+	if spec.Annotations != nil {
+		for k, v := range spec.Annotations {
+			podAnnotations[k] = v
+		}
+	}
+	if spec.Exporter != nil {
+		exp := spec.Exporter
+		podAnnotations["prometheus.io/scrape"] = "true"
+		podAnnotations["prometheus.io/port"] = strconv.Itoa(int(exp.Port))
+		podAnnotations["prometheus.io/path"] = exp.MetricsPath
+	}
+
+	containers := []corev1.Container{{
+		Name:            spec.AppLabel,
+		Image:           spec.Image,
+		Ports:           ports,
+		Resources:       resources,
+		Env:             envMapToK8s(allEnv),
+		ReadinessProbe: probe,
+	}}
+	if spec.Exporter != nil {
+		exp := spec.Exporter
+		containers = append(containers, corev1.Container{
+			Name:      exp.Name,
+			Image:     exp.Image,
+			Ports:     []corev1.ContainerPort{{ContainerPort: exp.Port}},
+			Resources: ExporterResources(),
+			Env:       envMapToK8s(exp.Env),
+		})
+	}
+
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: spec.AppLabel, Namespace: cfg.Namespace},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: ptr(replicas),
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: spec.Annotations},
+				ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: podAnnotations},
 				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{{
-						Name:            spec.AppLabel,
-						Image:           spec.Image,
-						Ports:           ports,
-						Resources:       resources,
-						Env:             envMapToK8s(allEnv),
-						ReadinessProbe: probe,
-					}},
+					Containers: containers,
 				},
 			},
 		},

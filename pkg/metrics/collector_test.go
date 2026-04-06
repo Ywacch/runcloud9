@@ -56,7 +56,7 @@ func TestCollect_CacheIncreaseQueries(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil)
 	dm, err := c.Collect(context.Background(), "ns-test")
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +89,7 @@ func TestQueryWithFallback_PrimaryNonZeroSkipsFallback(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil)
 	got := c.queryWithFallback(context.Background(), `sum(__PRIMARY__)`, `sum(__FALLBACK__)`)
 	if got != 2.5 {
 		t.Fatalf("want primary 2.5, got %v", got)
@@ -118,7 +118,7 @@ func TestQueryWithFallback_UsesFallbackWhenPrimaryZero(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil)
 	got := c.queryWithFallback(context.Background(), `sum(__PRIMARY__)`, `sum(__FALLBACK__)`)
 	if got != 0.25 {
 		t.Fatalf("want fallback 0.25, got %v", got)
@@ -136,7 +136,7 @@ func TestQueryWithFallback_BothZero(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil)
 	got := c.queryWithFallback(context.Background(), `sum(__PRIMARY__)`, `sum(__FALLBACK__)`)
 	if got != 0 {
 		t.Fatalf("want 0, got %v", got)
@@ -145,7 +145,7 @@ func TestQueryWithFallback_BothZero(t *testing.T) {
 
 func TestQuery_EmptyPrometheusURL(t *testing.T) {
 	t.Parallel()
-	c := NewMetricsCollector("", nil)
+	c := NewMetricsCollector("", nil, nil)
 	v, err := c.query(context.Background(), "anything")
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestCollect_NoDeprecatedRateWindows(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil)
 	_, err := c.Collect(context.Background(), "ns-prod")
 	if err != nil {
 		t.Fatal(err)
@@ -177,8 +177,9 @@ func TestCollect_NoDeprecatedRateWindows(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	for _, q := range queries {
-		if strings.Contains(q, "[30s]") {
-			t.Fatalf("query must not use [30s] window: %s", q)
+		// Rate windows were widened to [30s] for reliable samples vs 10s scrape intervals.
+		if strings.Contains(q, "[15s]") {
+			t.Fatalf("query must not use deprecated [15s] rate window: %s", q)
 		}
 		if strings.Contains(q, "[1m]") {
 			t.Fatalf("query must not use [1m] window: %s", q)
@@ -186,7 +187,7 @@ func TestCollect_NoDeprecatedRateWindows(t *testing.T) {
 	}
 }
 
-func TestCollect_HistogramQuantilesUse15sBucketRate(t *testing.T) {
+func TestCollect_HistogramQuantilesUse30sBucketRate(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex
 	var seen []string
@@ -212,7 +213,7 @@ func TestCollect_HistogramQuantilesUse15sBucketRate(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil)
 	dm, err := c.Collect(context.Background(), "ns-x")
 	if err != nil {
 		t.Fatal(err)
@@ -225,8 +226,8 @@ func TestCollect_HistogramQuantilesUse15sBucketRate(t *testing.T) {
 	defer mu.Unlock()
 	for _, q := range seen {
 		if strings.Contains(q, "http_request_duration_seconds_bucket") && strings.Contains(q, "histogram_quantile") {
-			if !strings.Contains(q, "[15s]") {
-				t.Fatalf("histogram quantile query missing [15s] in bucket rate: %s", q)
+			if !strings.Contains(q, "[30s]") {
+				t.Fatalf("histogram quantile query missing [30s] in bucket rate: %s", q)
 			}
 		}
 	}
@@ -238,9 +239,9 @@ func TestCollect_DBCPUUsesCadvisorWhenNonZero(t *testing.T) {
 		q := r.URL.Query().Get("query")
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case strings.Contains(q, "container_cpu_usage_seconds_total") && strings.Contains(q, "postgres"):
+		case strings.Contains(q, "container_cpu_usage_seconds_total") && strings.Contains(q, `container="postgres"`):
 			_ = json.NewEncoder(w).Encode(promVectorJSON("0.07"))
-		case strings.Contains(q, "kube_pod_container_resource_requests") && strings.Contains(q, `resource="cpu"`) && strings.Contains(q, "postgres"):
+		case strings.Contains(q, "kube_pod_container_resource_requests") && strings.Contains(q, `resource="cpu"`) && strings.Contains(q, `container="postgres"`):
 			_ = json.NewEncoder(w).Encode(promVectorJSON("0.25"))
 		default:
 			_ = json.NewEncoder(w).Encode(promEmptyJSON())
@@ -248,7 +249,7 @@ func TestCollect_DBCPUUsesCadvisorWhenNonZero(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil)
 	dm, err := c.Collect(context.Background(), "ns1")
 	if err != nil {
 		t.Fatal(err)
@@ -264,9 +265,9 @@ func TestCollect_DBCPUFallbackToKubeWhenCadvisorEmpty(t *testing.T) {
 		q := r.URL.Query().Get("query")
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case strings.Contains(q, "container_cpu_usage_seconds_total") && strings.Contains(q, "postgres"):
+		case strings.Contains(q, "container_cpu_usage_seconds_total") && strings.Contains(q, `container="postgres"`):
 			_ = json.NewEncoder(w).Encode(promEmptyJSON())
-		case strings.Contains(q, "kube_pod_container_resource_requests") && strings.Contains(q, `resource="cpu"`) && strings.Contains(q, "postgres"):
+		case strings.Contains(q, "kube_pod_container_resource_requests") && strings.Contains(q, `resource="cpu"`) && strings.Contains(q, `container="postgres"`):
 			_ = json.NewEncoder(w).Encode(promVectorJSON("0.25"))
 		default:
 			_ = json.NewEncoder(w).Encode(promEmptyJSON())
@@ -274,17 +275,21 @@ func TestCollect_DBCPUFallbackToKubeWhenCadvisorEmpty(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil)
 	dm, err := c.Collect(context.Background(), "ns1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dm.Components["db"].CPUUsage != 0.25 {
-		t.Fatalf("db CPU: want 0.25 (kube fallback), got %v", dm.Components["db"].CPUUsage)
+	db := dm.Components["db"]
+	if db.CPUUsage != 0.25 {
+		t.Fatalf("db CPU: want 0.25 (kube fallback), got %v", db.CPUUsage)
+	}
+	if !db.CPUIsEstimated {
+		t.Fatal("db CPUIsEstimated: want true when kube fallback used")
 	}
 }
 
-func TestQueryCPUUsageOrRequest_PromQLFilters(t *testing.T) {
+func TestQueryCPUPair_PromQLFilters(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex
 	var queries []string
@@ -298,8 +303,8 @@ func TestQueryCPUUsageOrRequest_PromQLFilters(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil)
-	_ = c.queryCPUUsageOrRequest(context.Background(), "my-ns", "app-server.*")
+	c := NewMetricsCollector(srv.URL, nil, nil)
+	_, _ = c.queryCPUPair(context.Background(), "my-ns", "app-server.*", "app-server")
 	mu.Lock()
 	defer mu.Unlock()
 	var primary string
@@ -318,10 +323,10 @@ func TestQueryCPUUsageOrRequest_PromQLFilters(t *testing.T) {
 	if !strings.Contains(primary, `pod=~"app-server.*"`) {
 		t.Fatalf("want pod regex in query: %s", primary)
 	}
-	if !strings.Contains(primary, `container!="POD"`) || !strings.Contains(primary, `container!=""`) {
-		t.Fatalf("want pause-container filters: %s", primary)
+	if !strings.Contains(primary, `container="app-server"`) {
+		t.Fatalf("want main container filter: %s", primary)
 	}
-	if !strings.Contains(primary, "[15s]") {
-		t.Fatalf("want [15s] rate window: %s", primary)
+	if !strings.Contains(primary, "[30s]") {
+		t.Fatalf("want [30s] rate window: %s", primary)
 	}
 }

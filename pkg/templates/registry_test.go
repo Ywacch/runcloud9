@@ -11,6 +11,9 @@ func TestGetTemplate(t *testing.T) {
 	if u == nil || !u.Available || u.Name != "URL Shortener" {
 		t.Fatalf("url-shortener: %+v", u)
 	}
+	if u.SeedConfig == nil || u.SeedConfig.DumpPath != "url-shortener/urls.dump" {
+		t.Fatalf("url-shortener seed config: %+v", u.SeedConfig)
+	}
 	e := GetTemplate("ecommerce")
 	if e == nil || e.Available {
 		t.Fatalf("ecommerce should exist and be unavailable: %+v", e)

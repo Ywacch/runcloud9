@@ -170,7 +170,7 @@ func main() {
 	if prometheusURL == "" && os.Getenv("DEPLOYER") == "k8s" {
 		prometheusURL = "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
 	}
-	metricsCollector = metrics.NewMetricsCollector(prometheusURL, lg)
+	metricsCollector = metrics.NewMetricsCollector(prometheusURL, lg, clientset)
 
 	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed, metricsCollector, clientset, lg)
 	mux := http.NewServeMux()

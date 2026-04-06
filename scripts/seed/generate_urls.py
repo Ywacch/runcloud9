@@ -16,13 +16,13 @@ fake = Faker()
 # ──────────────────────────────────────────────────────────────────────
 CONTAINER_NAME = "cloud9-seed-postgres"
 PG_IMAGE = "postgres:15"
-PG_USER = "syscrack"
-PG_PASS = "syscrack"
-PG_DB = "syscrack"
+PG_USER = os.environ.get("SEED_DB_USER", "syscrack")
+PG_PASS = os.environ.get("SEED_DB_PASSWORD", "syscrack")
+PG_DB = os.environ.get("SEED_DB_NAME", "syscrack")
 PG_PORT = "5433"  # Use non-default port to avoid clashing with any local postgres
 
 BUCKET_NAME = os.environ.get("SEED_BUCKET_NAME", "cloud9-seed-data")
-DUMP_PATH = "url-shortener/urls.dump"
+DUMP_PATH = os.environ.get("SEED_DUMP_PATH", "url-shortener/urls.dump")
 LOCAL_DUMP = os.path.join(tempfile.gettempdir(), "urls.dump")
 
 ROW_COUNT = 1_000_000

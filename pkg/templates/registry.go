@@ -1,5 +1,13 @@
 package templates
 
+// SeedConfig defines how to seed a template's database after deployment (backend-only).
+type SeedConfig struct {
+	DBType    string `json:"dbType"`
+	DumpPath  string `json:"dumpPath"`
+	Container string `json:"container"`
+	PodLabel  string `json:"podLabel"`
+}
+
 // TemplateSpec is the single source of truth for a template's metadata.
 type TemplateSpec struct {
 	ID          string          `json:"id"`
@@ -11,6 +19,7 @@ type TemplateSpec struct {
 	Premium     bool            `json:"premium"`
 	Tags        []string        `json:"tags"`
 	Topology    []TopologyHint  `json:"topology"`
+	SeedConfig  *SeedConfig     `json:"-"`
 }
 
 // TopologyHint is a simplified node for the frontend's mini preview.
@@ -36,6 +45,12 @@ func Registry() []TemplateSpec {
 				{Type: "compute", Position: [2]float64{2, 0}},
 				{Type: "cache", Position: [2]float64{4, -1}},
 				{Type: "database", Position: [2]float64{4, 1}},
+			},
+			SeedConfig: &SeedConfig{
+				DBType:    "postgres",
+				DumpPath:  "url-shortener/urls.dump",
+				Container: "postgres",
+				PodLabel:  "app=postgres",
 			},
 		},
 		{

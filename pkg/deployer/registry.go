@@ -5,6 +5,15 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
+// ExporterSpec defines a Prometheus metrics sidecar injected next to the main container.
+type ExporterSpec struct {
+	Name        string
+	Image       string
+	Port        int32
+	MetricsPath string
+	Env         map[string]string
+}
+
 // ComponentSpec describes a simple infrastructure component.
 // The deployer creates a Deployment + optional Service from this spec.
 type ComponentSpec struct {
@@ -17,6 +26,7 @@ type ComponentSpec struct {
 	NeedsService bool
 	Resources    corev1.ResourceRequirements
 	Annotations  map[string]string
+	Exporter     *ExporterSpec
 }
 
 // DefaultResources returns the standard 250m/512Mi resource spec.
@@ -63,6 +73,20 @@ func ResourceProfile(profile string) corev1.ResourceRequirements {
 	}
 }
 
+// ExporterResources returns minimal resources for metrics sidecars (GKE Autopilot floors ~50m/52Mi).
+func ExporterResources() corev1.ResourceRequirements {
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("50m"),
+			corev1.ResourceMemory: resource.MustParse("64Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("50m"),
+			corev1.ResourceMemory: resource.MustParse("64Mi"),
+		},
+	}
+}
+
 // componentRegistry maps node types to their infrastructure specs.
 // Only simple, off-the-shelf components go here. Complex types (cache, app-server,
 // worker, lb) use explicit deploy functions.
@@ -80,6 +104,15 @@ var componentRegistry = map[string]ComponentSpec{
 		},
 		NeedsService: true,
 		Resources:    DefaultResources(),
+		Exporter: &ExporterSpec{
+			Name:        "postgres-exporter",
+			Image:       "quay.io/prometheuscommunity/postgres-exporter:v0.16.0",
+			Port:        9187,
+			MetricsPath: "/metrics",
+			Env: map[string]string{
+				"DATA_SOURCE_NAME": "postgresql://syscrack:syscrack@localhost:5432/syscrack?sslmode=disable",
+			},
+		},
 	},
 	"mq": {
 		AppLabel: "rabbitmq",

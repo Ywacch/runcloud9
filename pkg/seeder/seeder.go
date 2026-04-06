@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	cloudstorage "cloud.google.com/go/storage"
+	"github.com/ywacch/cloud9/pkg/templates"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -28,36 +29,61 @@ func NewSeeder(clientset kubernetes.Interface, bucketName string) *Seeder {
 	return &Seeder{clientset: clientset, bucketName: bucketName}
 }
 
+// DBCredentials are used for pg_restore inside the postgres pod.
+type DBCredentials struct {
+	User     string
+	Password string
+	Database string
+}
+
+func defaultDBCredentials() DBCredentials {
+	user := os.Getenv("SEED_DB_USER")
+	if user == "" {
+		user = "syscrack"
+	}
+	pass := os.Getenv("SEED_DB_PASSWORD")
+	if pass == "" {
+		pass = "syscrack"
+	}
+	db := os.Getenv("SEED_DB_NAME")
+	if db == "" {
+		db = "syscrack"
+	}
+	return DBCredentials{User: user, Password: pass, Database: db}
+}
+
 func (s *Seeder) SeedDatabase(ctx context.Context, namespace, template string) error {
-	dumpPath, err := dumpPathForTemplate(template)
-	if err != nil {
-		return fmt.Errorf("seeder: dumpPathForTemplate: %w", err)
+	tmpl := templates.GetTemplate(template)
+	if tmpl == nil || tmpl.SeedConfig == nil {
+		return fmt.Errorf("seeder: no seed config for template %q", template)
+	}
+	cfg := tmpl.SeedConfig
+	if cfg.DBType != "" && cfg.DBType != "postgres" {
+		return fmt.Errorf("seeder: unsupported db type %q", cfg.DBType)
 	}
 
-	dumpFile, err := s.downloadDump(ctx, dumpPath)
+	dumpFile, err := s.downloadDump(ctx, cfg.DumpPath)
 	if err != nil {
 		return fmt.Errorf("seeder: download dump: %w", err)
 	}
 	defer os.Remove(dumpFile)
 
 	pods, err := s.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "app=postgres",
+		LabelSelector: cfg.PodLabel,
 	})
 	if err != nil {
 		return fmt.Errorf("seeder: list pods: %w", err)
 	}
 	if len(pods.Items) == 0 {
-		return fmt.Errorf("seeder: postgres pod not found in namespace=%s", namespace)
+		return fmt.Errorf("seeder: no pod matching %q in namespace=%s", cfg.PodLabel, namespace)
 	}
 	podName := pods.Items[0].Name
 
-	// Copy dump into the postgres pod.
-	if err := s.copyFileToPod(ctx, namespace, podName, dumpFile); err != nil {
+	if err := s.copyFileToPod(ctx, namespace, podName, cfg.Container, dumpFile); err != nil {
 		return fmt.Errorf("seeder: copy dump to pod: %w", err)
 	}
 
-	// Run pg_restore inside the pod.
-	if err := s.runPgRestore(ctx, namespace, podName); err != nil {
+	if err := s.runPgRestore(ctx, namespace, podName, cfg.Container); err != nil {
 		return fmt.Errorf("seeder: pg_restore: %w", err)
 	}
 
@@ -90,7 +116,7 @@ func (s *Seeder) downloadDump(ctx context.Context, dumpPath string) (string, err
 	return tmp.Name(), nil
 }
 
-func (s *Seeder) copyFileToPod(ctx context.Context, namespace, podName, localPath string) error {
+func (s *Seeder) copyFileToPod(ctx context.Context, namespace, podName, container, localPath string) error {
 	f, err := os.Open(localPath)
 	if err != nil {
 		return fmt.Errorf("open dump file: %w", err)
@@ -110,7 +136,7 @@ func (s *Seeder) copyFileToPod(ctx context.Context, namespace, podName, localPat
 		SubResource("exec")
 
 	opts := &corev1.PodExecOptions{
-		Container: "postgres",
+		Container: container,
 		Command:   []string{"sh", "-c", "cat > /tmp/seed.dump"},
 		Stdin:     true,
 		Stdout:    false,
@@ -136,10 +162,23 @@ func (s *Seeder) copyFileToPod(ctx context.Context, namespace, podName, localPat
 	return nil
 }
 
-func (s *Seeder) runPgRestore(ctx context.Context, namespace, podName string) error {
+func (s *Seeder) runPgRestore(ctx context.Context, namespace, podName, container string) error {
 	execCfg, err := kubeExecConfig()
 	if err != nil {
 		return fmt.Errorf("kube exec config: %w", err)
+	}
+
+	creds := defaultDBCredentials()
+	// Use argv form (env + pg_restore) to avoid shell quoting issues with passwords.
+	cmd := []string{
+		"env",
+		fmt.Sprintf("PGPASSWORD=%s", creds.Password),
+		"pg_restore",
+		"-U", creds.User,
+		"-d", creds.Database,
+		"--clean",
+		"--if-exists",
+		"/tmp/seed.dump",
 	}
 
 	req := s.clientset.CoreV1().RESTClient().
@@ -150,8 +189,8 @@ func (s *Seeder) runPgRestore(ctx context.Context, namespace, podName string) er
 		SubResource("exec")
 
 	opts := &corev1.PodExecOptions{
-		Container: "postgres",
-		Command: []string{"sh", "-c", "PGPASSWORD=syscrack pg_restore -U syscrack -d syscrack --clean --if-exists /tmp/seed.dump"},
+		Container: container,
+		Command:   cmd,
 		Stdin:     false,
 		Stdout:    true,
 		Stderr:    true,
@@ -176,15 +215,6 @@ func (s *Seeder) runPgRestore(ctx context.Context, namespace, podName string) er
 	return nil
 }
 
-func dumpPathForTemplate(template string) (string, error) {
-	switch template {
-	case "url-shortener":
-		return "url-shortener/urls.dump", nil
-	default:
-		return "", fmt.Errorf("unsupported template for seeding: %s", template)
-	}
-}
-
 func kubeExecConfig() (*rest.Config, error) {
 	// Prefer KUBECONFIG when set (also lets you target GKE with a specific config file).
 	if kubeconfigPath := os.Getenv("KUBECONFIG"); kubeconfigPath != "" {
@@ -200,4 +230,3 @@ func kubeExecConfig() (*rest.Config, error) {
 	// Fallback for in-cluster usage.
 	return rest.InClusterConfig()
 }
-
