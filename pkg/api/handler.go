@@ -270,6 +270,21 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 			if h.store != nil {
 				_ = h.store.UpdateStatus(context.Background(), namespace, "failed")
 			}
+			failedTeardownAt := time.Now().Add(30 * time.Second)
+			if h.scheduler != nil {
+				h.scheduler.Schedule(namespace, failedTeardownAt)
+			} else {
+				go func(ns string) {
+					time.Sleep(30 * time.Second)
+					d, ok := h.deployers["db"]
+					if !ok {
+						d = &deployer.LocalDeployer{NodeType: "db"}
+					}
+					if tdErr := d.Teardown(context.Background(), ns); tdErr != nil {
+						log.Printf("failed deployment teardown failed for namespace=%s: %v", ns, tdErr)
+					}
+				}(namespace)
+			}
 			return
 		}
 

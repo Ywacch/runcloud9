@@ -7,13 +7,23 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
+)
+
+// Provisioning waits: fail fast on clearly unrecoverable container config, debounce CrashLoopBackOff
+// so transient blips do not abort before Kubernetes has retried, but broken apps do not burn the
+// full orchestration context (~5m on k8s). Image pull backoffs are left to the parent context.
+const (
+	waitReadyCrashLoopDebounce   = 45 * time.Second
+	waitReadyRestartFailThreshold int32 = 3
 )
 
 // K8sDeployer is the real Kubernetes implementation of ComponentDeployer.
@@ -69,6 +79,58 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 	}
 }
 
+func terminalContainerWaitingReason(reason string) bool {
+	switch reason {
+	case "CreateContainerConfigError", "InvalidImageName":
+		return true
+	default:
+		return false
+	}
+}
+
+// detectWaitReadyFailure returns a non-nil error if the pod will not become ready without intervention.
+// crashLoopSince tracks the first time we saw CrashLoopBackOff for a pod UID (cleared when it clears).
+func detectWaitReadyFailure(pod *corev1.Pod, appLabel string, crashLoopSince map[types.UID]time.Time) error {
+	var crashLooping bool
+	scan := func(css []corev1.ContainerStatus) error {
+		for _, cs := range css {
+			if w := cs.State.Waiting; w != nil {
+				if terminalContainerWaitingReason(w.Reason) {
+					return fmt.Errorf("pod %s/%s container %s: %s — %s",
+						pod.Namespace, pod.Name, cs.Name, w.Reason, strings.TrimSpace(w.Message))
+				}
+				if w.Reason == "CrashLoopBackOff" {
+					crashLooping = true
+					if cs.RestartCount >= waitReadyRestartFailThreshold {
+						return fmt.Errorf("pod %s/%s container %s in CrashLoopBackOff after %d restarts: %s",
+							pod.Namespace, pod.Name, cs.Name, cs.RestartCount, strings.TrimSpace(w.Message))
+					}
+				}
+			}
+		}
+		return nil
+	}
+	if err := scan(pod.Status.InitContainerStatuses); err != nil {
+		return err
+	}
+	if err := scan(pod.Status.ContainerStatuses); err != nil {
+		return err
+	}
+	if crashLooping {
+		if _, ok := crashLoopSince[pod.UID]; !ok {
+			crashLoopSince[pod.UID] = time.Now()
+			return nil
+		}
+		if time.Since(crashLoopSince[pod.UID]) >= waitReadyCrashLoopDebounce {
+			return fmt.Errorf("pod %s/%s: CrashLoopBackOff persisted %v waiting for %s (image or app misconfiguration likely)",
+				pod.Namespace, pod.Name, waitReadyCrashLoopDebounce, appLabel)
+		}
+		return nil
+	}
+	delete(crashLoopSince, pod.UID)
+	return nil
+}
+
 func (k *K8sDeployer) waitForReady(ctx context.Context, namespace string, appLabel string) error {
 	// Watch gives us a stream of events (ADDED, MODIFIED, DELETED)
 	// for pods matching our label selector. We block on this stream until
@@ -80,6 +142,8 @@ func (k *K8sDeployer) waitForReady(ctx context.Context, namespace string, appLab
 		return fmt.Errorf("watch pods: %w", err)
 	}
 	defer watcher.Stop()
+
+	crashLoopSince := make(map[types.UID]time.Time)
 
 	for {
 		select {
@@ -95,6 +159,9 @@ func (k *K8sDeployer) waitForReady(ctx context.Context, namespace string, appLab
 				if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
 					return nil // pod is ready
 				}
+			}
+			if err := detectWaitReadyFailure(pod, appLabel, crashLoopSince); err != nil {
+				return fmt.Errorf("waiting for %s ready: %w", appLabel, err)
 			}
 		case <-ctx.Done():
 			// UNDERSTAND: ctx.Done() closes when the context is cancelled or times out.
