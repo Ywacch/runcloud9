@@ -87,6 +87,13 @@ func ExporterResources() corev1.ResourceRequirements {
 	}
 }
 
+const (
+	imageRedis     = "redis:7"
+	imageNginx     = "nginx:alpine"
+	imageNginxFull = "nginx:latest"
+	imageBusybox   = "busybox:latest"
+)
+
 // componentRegistry maps node types to their infrastructure specs.
 // Only simple, off-the-shelf components go here. Complex types (cache, app-server,
 // worker, lb) use explicit deploy functions.

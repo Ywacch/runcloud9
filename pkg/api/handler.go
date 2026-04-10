@@ -394,6 +394,10 @@ func validateDesign(d deployer.DeploymentDesign) error {
 	if err := deployer.ValidateTopology(d); err != nil {
 		return err
 	}
+	assessment := deployer.AssessTopology(d)
+	if assessment.Verdict == deployer.VerdictInvalid {
+		return fmt.Errorf("%s", assessment.Explanation)
+	}
 	return nil
 }
 

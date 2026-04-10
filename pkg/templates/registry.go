@@ -1,5 +1,7 @@
 package templates
 
+import "os"
+
 // SeedConfig defines how to seed a template's database after deployment (backend-only).
 type SeedConfig struct {
 	DBType    string `json:"dbType"`
@@ -10,16 +12,20 @@ type SeedConfig struct {
 
 // TemplateSpec is the single source of truth for a template's metadata.
 type TemplateSpec struct {
-	ID          string          `json:"id"`
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Components  int             `json:"components"`
-	Bottleneck  string          `json:"bottleneck"`
-	Available   bool            `json:"available"`
-	Premium     bool            `json:"premium"`
-	Tags        []string        `json:"tags"`
-	Topology    []TopologyHint  `json:"topology"`
-	SeedConfig  *SeedConfig     `json:"-"`
+	ID             string          `json:"id"`
+	Name           string          `json:"name"`
+	Description    string          `json:"description"`
+	Components     int             `json:"components"`
+	Bottleneck     string          `json:"bottleneck"`
+	Available      bool            `json:"available"`
+	Premium        bool            `json:"premium"`
+	Tags           []string        `json:"tags"`
+	Topology       []TopologyHint  `json:"topology"`
+	AppServerImage string          `json:"-"`
+	WorkerImage    string          `json:"-"`
+	Simulatable    bool            `json:"simulatable"`
+	Deployable     bool            `json:"deployable"`
+	SeedConfig     *SeedConfig     `json:"-"`
 }
 
 // TopologyHint is a simplified node for the frontend's mini preview.
@@ -28,18 +34,35 @@ type TopologyHint struct {
 	Position [2]float64 `json:"position"` // x, z for 2D preview
 }
 
+func imageFor(name string) string {
+	registry := os.Getenv("TEMPLATE_IMAGE_REGISTRY")
+	if registry == "" {
+		registry = "europe-west1-docker.pkg.dev/ganymede-cloud/cloud9-images"
+	}
+	tag := ":v1"
+	switch name {
+	case "url-shortener":
+		tag = ":v5"
+	}
+	return registry + "/" + name + tag
+}
+
 // Registry returns all registered templates.
 func Registry() []TemplateSpec {
 	return []TemplateSpec{
 		{
-			ID:          "url-shortener",
-			Name:        "URL Shortener",
-			Description: "Classic read-heavy cache-aside pattern with PostgreSQL + Redis. Demonstrates cache hit/miss ratios, DB query amplification on cache miss, and strategy tradeoffs.",
-			Components:  4,
-			Bottleneck:  "Cache miss → DB query amplification",
-			Available:   true,
-			Premium:     false,
-			Tags:        []string{"caching", "read-heavy", "beginner"},
+			ID:             "url-shortener",
+			Name:           "URL Shortener",
+			Description:    "Classic read-heavy cache-aside pattern with PostgreSQL + Redis. Demonstrates cache hit/miss ratios, DB query amplification on cache miss, and strategy tradeoffs.",
+			Components:     4,
+			Bottleneck:     "Cache miss → DB query amplification",
+			Available:      true,
+			Premium:        false,
+			Tags:           []string{"caching", "read-heavy", "beginner"},
+			AppServerImage: imageFor("url-shortener"),
+			WorkerImage:    "",
+			Simulatable:    true,
+			Deployable:     true,
 			Topology: []TopologyHint{
 				{Type: "load_balancer", Position: [2]float64{0, 0}},
 				{Type: "compute", Position: [2]float64{2, 0}},
@@ -54,14 +77,18 @@ func Registry() []TemplateSpec {
 			},
 		},
 		{
-			ID:          "ecommerce",
-			Name:        "E-Commerce",
-			Description: "Multi-server product catalog with shared database and cache layer. Tests load balancer distribution and write contention.",
-			Components:  5,
-			Bottleneck:  "Write contention on shared database",
-			Available:   false,
-			Premium:     false,
-			Tags:        []string{"multi-server", "write-heavy", "intermediate"},
+			ID:             "ecommerce",
+			Name:           "E-Commerce",
+			Description:    "Multi-server product catalog with shared database and cache layer. Tests load balancer distribution and write contention.",
+			Components:     5,
+			Bottleneck:     "Write contention on shared database",
+			Available:      false,
+			Premium:        false,
+			Tags:           []string{"multi-server", "write-heavy", "intermediate"},
+			AppServerImage: imageFor("ecommerce"),
+			WorkerImage:    imageFor("ecommerce-worker"),
+			Simulatable:    true,
+			Deployable:     false,
 			Topology: []TopologyHint{
 				{Type: "load_balancer", Position: [2]float64{0, 0}},
 				{Type: "compute", Position: [2]float64{2, -1}},
@@ -71,14 +98,18 @@ func Registry() []TemplateSpec {
 			},
 		},
 		{
-			ID:          "social-feed",
-			Name:        "Social Feed",
-			Description: "Fan-out architecture with message queue and async worker for feed generation. Demonstrates consumer lag, backpressure, and queue depth under load.",
-			Components:  6,
-			Bottleneck:  "Consumer lag under high fan-out",
-			Available:   false,
-			Premium:     false,
-			Tags:        []string{"async", "fan-out", "advanced"},
+			ID:             "social-feed",
+			Name:           "Social Feed",
+			Description:    "Fan-out architecture with message queue and async worker for feed generation. Demonstrates consumer lag, backpressure, and queue depth under load.",
+			Components:     6,
+			Bottleneck:     "Consumer lag under high fan-out",
+			Available:      false,
+			Premium:        false,
+			Tags:           []string{"async", "fan-out", "advanced"},
+			AppServerImage: imageFor("social-feed"),
+			WorkerImage:    imageFor("fanout-worker"),
+			Simulatable:    true,
+			Deployable:     false,
 			Topology: []TopologyHint{
 				{Type: "load_balancer", Position: [2]float64{0, 0}},
 				{Type: "compute", Position: [2]float64{2, 0}},
@@ -102,8 +133,26 @@ func GetTemplate(id string) *TemplateSpec {
 	return nil
 }
 
-// IsDeployable returns true if the template exists and is available.
+// GetAppServerImage returns the Docker image for the template's app-server, or "" if unknown.
+func GetAppServerImage(templateID string) string {
+	t := GetTemplate(templateID)
+	if t == nil {
+		return ""
+	}
+	return t.AppServerImage
+}
+
+// GetWorkerImage returns the Docker image for the template's worker, or "" if none / unknown.
+func GetWorkerImage(templateID string) string {
+	t := GetTemplate(templateID)
+	if t == nil {
+		return ""
+	}
+	return t.WorkerImage
+}
+
+// IsDeployable returns true if the template exists and the backend can provision real K8s resources for it.
 func IsDeployable(id string) bool {
 	t := GetTemplate(id)
-	return t != nil && t.Available
+	return t != nil && t.Deployable
 }

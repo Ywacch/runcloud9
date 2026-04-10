@@ -16,6 +16,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/ywacch/cloud9/pkg/templates"
 )
 
 // Provisioning waits: fail fast on clearly unrecoverable container config, debounce CrashLoopBackOff
@@ -177,7 +179,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 
 	if requiresProxy(cfg.Node) {
 		// Proxy strategies deploy two workloads from the single canvas cache node:
-		// 1) internal Redis (simple redis:7)
+		// 1) internal Redis (imageRedis)
 		// 2) caching-proxy (HTTP->Redis->DB wrapper)
 		redisLabels := map[string]string{"app": "redis-internal", "deployment": cfg.Namespace}
 		internalRedisDep := &appsv1.Deployment{
@@ -191,7 +193,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 						Containers: []corev1.Container{
 							{
 								Name:      "redis",
-								Image:     "redis:7",
+								Image:     imageRedis,
 								Ports:     []corev1.ContainerPort{{ContainerPort: 6379}},
 								Resources: resources,
 								ReadinessProbe: &corev1.Probe{
@@ -435,7 +437,7 @@ func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, resour
 		Env:       envMapToK8s(envVars),
 	}
 	// busybox exits immediately without a long-running command — keep pod Ready for QA placeholders.
-	if img == "busybox:latest" || strings.HasSuffix(img, "/busybox:latest") {
+	if img == imageBusybox || strings.HasSuffix(img, "/"+imageBusybox) {
 		ctr.Command = []string{"sleep"}
 		ctr.Args = []string{"infinity"}
 	}
@@ -495,7 +497,7 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{{
 						Name:  "nginx",
-						Image: "nginx:alpine",
+						Image: imageNginx,
 						Ports: []corev1.ContainerPort{{ContainerPort: 80}},
 						Resources: resources,
 						ReadinessProbe: &corev1.Probe{
@@ -758,33 +760,19 @@ func (k *K8sDeployer) Teardown(ctx context.Context, namespace string) error {
 func ptr(i int32) *int32 { return &i }
 
 func appServerImage(template string) string {
-	registry := os.Getenv("TEMPLATE_IMAGE_REGISTRY")
-	if registry == "" {
-		registry = "europe-west1-docker.pkg.dev/ganymede-cloud/cloud9-images"
+	img := templates.GetAppServerImage(template)
+	if img == "" {
+		return imageNginxFull
 	}
-	switch template {
-	case "url-shortener":
-		// Built/pushed as part of Week 8.
-		return registry + "/url-shortener:v5"
-	default:
-		// Fallback so other templates still deploy in Week 6.
-		return "nginx:latest"
-	}
+	return img
 }
 
 func workerImage(template string) string {
-	registry := os.Getenv("TEMPLATE_IMAGE_REGISTRY")
-	if registry == "" {
-		registry = "europe-west1-docker.pkg.dev/ganymede-cloud/cloud9-images"
+	img := templates.GetWorkerImage(template)
+	if img == "" {
+		return imageBusybox
 	}
-	switch template {
-	case "twitter-fanout":
-		return registry + "/fanout-worker:v1"
-	case "e-commerce":
-		return registry + "/fulfillment-worker:v1"
-	default:
-		return "busybox:latest"
-	}
+	return img
 }
 
 func cacheImage(strategy string) string {
@@ -797,7 +785,7 @@ func cacheImage(strategy string) string {
 	case "write-through", "write-behind", "read-through":
 		return registry + "/caching-proxy:v1"
 	default:
-		return "redis:7"
+		return imageRedis
 	}
 }
 
