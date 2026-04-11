@@ -1,0 +1,29 @@
+id: url-shortener
+name: URL Shortener
+description: >-
+  Classic read-heavy cache-aside pattern with PostgreSQL + Redis.
+  Demonstrates cache hit/miss ratios, DB query amplification on cache miss,
+  and strategy tradeoffs.
+components: 4
+bottleneck: "Cache miss → DB query amplification"
+available: true
+premium: false
+tags: [caching, read-heavy, beginner]
+simulatable: true
+deployable: true
+imageKey: url-shortener
+workerImageKey: ""
+topology:
+  - type: load_balancer
+    position: [0, 0]
+  - type: compute
+    position: [2, 0]
+  - type: cache
+    position: [4, -1]
+  - type: database
+    position: [4, 1]
+seed:
+  dbType: postgres
+  dumpPath: url-shortener/urls.dump
+  container: postgres
+  podLabel: app=postgres

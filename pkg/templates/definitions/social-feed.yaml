@@ -1,0 +1,27 @@
+id: social-feed
+name: Social Feed
+description: >-
+  Fan-out architecture with message queue and async worker for feed generation.
+  Demonstrates consumer lag, backpressure, and queue depth under load.
+components: 6
+bottleneck: "Consumer lag under high fan-out"
+available: false
+premium: false
+tags: [async, fan-out, advanced]
+simulatable: true
+deployable: false
+imageKey: social-feed
+workerImageKey: fanout-worker
+topology:
+  - type: load_balancer
+    position: [0, 0]
+  - type: compute
+    position: [2, 0]
+  - type: message_queue
+    position: [4, -1]
+  - type: worker
+    position: [6, -1]
+  - type: cache
+    position: [4, 1]
+  - type: database
+    position: [6, 1]

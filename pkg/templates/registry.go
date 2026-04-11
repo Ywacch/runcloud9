@@ -1,6 +1,18 @@
 package templates
 
-import "os"
+import (
+	"embed"
+	"fmt"
+	"os"
+	"path"
+	"sort"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+
+//go:embed definitions/*.yaml
+var definitionsFS embed.FS
 
 // SeedConfig defines how to seed a template's database after deployment (backend-only).
 type SeedConfig struct {
@@ -12,26 +24,142 @@ type SeedConfig struct {
 
 // TemplateSpec is the single source of truth for a template's metadata.
 type TemplateSpec struct {
-	ID             string          `json:"id"`
-	Name           string          `json:"name"`
-	Description    string          `json:"description"`
-	Components     int             `json:"components"`
-	Bottleneck     string          `json:"bottleneck"`
-	Available      bool            `json:"available"`
-	Premium        bool            `json:"premium"`
-	Tags           []string        `json:"tags"`
-	Topology       []TopologyHint  `json:"topology"`
-	AppServerImage string          `json:"-"`
-	WorkerImage    string          `json:"-"`
-	Simulatable    bool            `json:"simulatable"`
-	Deployable     bool            `json:"deployable"`
-	SeedConfig     *SeedConfig     `json:"-"`
+	ID             string         `json:"id"`
+	Name           string         `json:"name"`
+	Description    string         `json:"description"`
+	Components     int            `json:"components"`
+	Bottleneck     string         `json:"bottleneck"`
+	Available      bool           `json:"available"`
+	Premium        bool           `json:"premium"`
+	Tags           []string       `json:"tags"`
+	Topology       []TopologyHint `json:"topology"`
+	AppServerImage string         `json:"-"`
+	WorkerImage    string         `json:"-"`
+	Simulatable    bool           `json:"simulatable"`
+	Deployable     bool           `json:"deployable"`
+	SeedConfig     *SeedConfig    `json:"-"`
 }
 
 // TopologyHint is a simplified node for the frontend's mini preview.
 type TopologyHint struct {
 	Type     string     `json:"type"`
 	Position [2]float64 `json:"position"` // x, z for 2D preview
+}
+
+// templateDef mirrors embedded YAML before conversion to TemplateSpec.
+type templateDef struct {
+	ID             string `yaml:"id"`
+	Name           string `yaml:"name"`
+	Description    string `yaml:"description"`
+	Components     int    `yaml:"components"`
+	Bottleneck     string `yaml:"bottleneck"`
+	Available      bool   `yaml:"available"`
+	Premium        bool   `yaml:"premium"`
+	Tags           []string `yaml:"tags"`
+	Simulatable    bool     `yaml:"simulatable"`
+	Deployable     bool     `yaml:"deployable"`
+	ImageKey       string   `yaml:"imageKey"`
+	WorkerImageKey string   `yaml:"workerImageKey"`
+	Topology       []struct {
+		Type     string     `yaml:"type"`
+		Position [2]float64 `yaml:"position"`
+	} `yaml:"topology"`
+	Seed *struct {
+		DBType    string `yaml:"dbType"`
+		DumpPath  string `yaml:"dumpPath"`
+		Container string `yaml:"container"`
+		PodLabel  string `yaml:"podLabel"`
+	} `yaml:"seed"`
+}
+
+var loadedTemplates []TemplateSpec
+
+func init() {
+	loadedTemplates = loadEmbeddedTemplates()
+}
+
+func loadEmbeddedTemplates() []TemplateSpec {
+	entries, err := definitionsFS.ReadDir("definitions")
+	if err != nil {
+		panic("templates: read embedded definitions: " + err.Error())
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+
+	out := make([]TemplateSpec, 0, len(names))
+	for _, name := range names {
+		data, err := definitionsFS.ReadFile(path.Join("definitions", name))
+		if err != nil {
+			panic(fmt.Sprintf("templates: read %s: %v", name, err))
+		}
+		var def templateDef
+		if err := yaml.Unmarshal(data, &def); err != nil {
+			panic(fmt.Sprintf("templates: yaml %s: %v", name, err))
+		}
+		out = append(out, defToSpec(&def))
+	}
+	// Stable public order (matches historical hardcoded slice; tests rely on it).
+	order := map[string]int{
+		"url-shortener": 0,
+		"ecommerce":     1,
+		"social-feed":   2,
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		oi, okI := order[out[i].ID]
+		oj, okJ := order[out[j].ID]
+		switch {
+		case !okI && !okJ:
+			return out[i].ID < out[j].ID
+		case !okI:
+			return false
+		case !okJ:
+			return true
+		default:
+			return oi < oj
+		}
+	})
+	return out
+}
+
+func defToSpec(def *templateDef) TemplateSpec {
+	spec := TemplateSpec{
+		ID:             def.ID,
+		Name:           def.Name,
+		Description:    def.Description,
+		Components:     def.Components,
+		Bottleneck:     def.Bottleneck,
+		Available:      def.Available,
+		Premium:        def.Premium,
+		Tags:           def.Tags,
+		Simulatable:    def.Simulatable,
+		Deployable:     def.Deployable,
+		AppServerImage: imageFor(def.ImageKey),
+		Topology:       make([]TopologyHint, 0, len(def.Topology)),
+	}
+	if def.WorkerImageKey != "" {
+		spec.WorkerImage = imageFor(def.WorkerImageKey)
+	}
+	for _, th := range def.Topology {
+		spec.Topology = append(spec.Topology, TopologyHint{
+			Type:     th.Type,
+			Position: th.Position,
+		})
+	}
+	if def.Seed != nil {
+		spec.SeedConfig = &SeedConfig{
+			DBType:    def.Seed.DBType,
+			DumpPath:  def.Seed.DumpPath,
+			Container: def.Seed.Container,
+			PodLabel:  def.Seed.PodLabel,
+		}
+	}
+	return spec
 }
 
 func imageFor(name string) string {
@@ -47,84 +175,16 @@ func imageFor(name string) string {
 	return registry + "/" + name + tag
 }
 
-// Registry returns all registered templates.
+// Registry returns all registered templates (embedded free definitions).
 func Registry() []TemplateSpec {
-	return []TemplateSpec{
-		{
-			ID:             "url-shortener",
-			Name:           "URL Shortener",
-			Description:    "Classic read-heavy cache-aside pattern with PostgreSQL + Redis. Demonstrates cache hit/miss ratios, DB query amplification on cache miss, and strategy tradeoffs.",
-			Components:     4,
-			Bottleneck:     "Cache miss → DB query amplification",
-			Available:      true,
-			Premium:        false,
-			Tags:           []string{"caching", "read-heavy", "beginner"},
-			AppServerImage: imageFor("url-shortener"),
-			WorkerImage:    "",
-			Simulatable:    true,
-			Deployable:     true,
-			Topology: []TopologyHint{
-				{Type: "load_balancer", Position: [2]float64{0, 0}},
-				{Type: "compute", Position: [2]float64{2, 0}},
-				{Type: "cache", Position: [2]float64{4, -1}},
-				{Type: "database", Position: [2]float64{4, 1}},
-			},
-			SeedConfig: &SeedConfig{
-				DBType:    "postgres",
-				DumpPath:  "url-shortener/urls.dump",
-				Container: "postgres",
-				PodLabel:  "app=postgres",
-			},
-		},
-		{
-			ID:             "ecommerce",
-			Name:           "E-Commerce",
-			Description:    "Multi-server product catalog with shared database and cache layer. Tests load balancer distribution and write contention.",
-			Components:     5,
-			Bottleneck:     "Write contention on shared database",
-			Available:      false,
-			Premium:        false,
-			Tags:           []string{"multi-server", "write-heavy", "intermediate"},
-			AppServerImage: imageFor("ecommerce"),
-			WorkerImage:    imageFor("ecommerce-worker"),
-			Simulatable:    true,
-			Deployable:     false,
-			Topology: []TopologyHint{
-				{Type: "load_balancer", Position: [2]float64{0, 0}},
-				{Type: "compute", Position: [2]float64{2, -1}},
-				{Type: "compute", Position: [2]float64{2, 1}},
-				{Type: "cache", Position: [2]float64{4, 0}},
-				{Type: "database", Position: [2]float64{6, 0}},
-			},
-		},
-		{
-			ID:             "social-feed",
-			Name:           "Social Feed",
-			Description:    "Fan-out architecture with message queue and async worker for feed generation. Demonstrates consumer lag, backpressure, and queue depth under load.",
-			Components:     6,
-			Bottleneck:     "Consumer lag under high fan-out",
-			Available:      false,
-			Premium:        false,
-			Tags:           []string{"async", "fan-out", "advanced"},
-			AppServerImage: imageFor("social-feed"),
-			WorkerImage:    imageFor("fanout-worker"),
-			Simulatable:    true,
-			Deployable:     false,
-			Topology: []TopologyHint{
-				{Type: "load_balancer", Position: [2]float64{0, 0}},
-				{Type: "compute", Position: [2]float64{2, 0}},
-				{Type: "message_queue", Position: [2]float64{4, -1}},
-				{Type: "worker", Position: [2]float64{6, -1}},
-				{Type: "cache", Position: [2]float64{4, 1}},
-				{Type: "database", Position: [2]float64{6, 1}},
-			},
-		},
-	}
+	out := make([]TemplateSpec, len(loadedTemplates))
+	copy(out, loadedTemplates)
+	return out
 }
 
 // GetTemplate returns a specific template by ID, or nil if not found.
 func GetTemplate(id string) *TemplateSpec {
-	for _, t := range Registry() {
+	for _, t := range loadedTemplates {
 		if t.ID == id {
 			copy := t
 			return &copy
