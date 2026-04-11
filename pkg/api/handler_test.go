@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ywacch/cloud9/pkg/deployer"
+	"github.com/ywacch/cloud9/pkg/loadgen"
 )
 
 func TestHandleGetTemplates(t *testing.T) {
@@ -46,6 +47,42 @@ func TestHandleGetTemplates(t *testing.T) {
 	}
 }
 
+func TestHandleCreateDeployment_UnknownTemplate(t *testing.T) {
+	t.Parallel()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := deployer.DeploymentDesign{
+		Template:  "not-a-real-template-id",
+		Archetype: "standard",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app", Type: "app-server", Name: "app", Config: map[string]interface{}{}},
+			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app", TargetID: "db"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var er struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &er)
+	if er.Error == "" || !strings.Contains(er.Error, "not registered") {
+		t.Fatalf("error message: %q", er.Error)
+	}
+}
+
 func TestHandleCreateDeployment_UnavailableRegistryTemplate(t *testing.T) {
 	t.Parallel()
 	h := NewHandler(nil, nil, nil, nil, nil, nil, nil)
@@ -80,4 +117,83 @@ func TestHandleCreateDeployment_UnavailableRegistryTemplate(t *testing.T) {
 	if er.Error == "" || !strings.Contains(er.Error, "not yet available") {
 		t.Fatalf("error message: %q", er.Error)
 	}
+}
+
+func TestHandleStartLoadGen_RequiresTemplate(t *testing.T) {
+	t.Parallel()
+	lg := loadgen.NewLoadGenerator()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, lg)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	// Empty body => EOF => DefaultProfile with no template; nil store => cannot fill from DB.
+	req := httptest.NewRequest(http.MethodPost, "/deployments/ns-empty/loadgen", strings.NewReader(""))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var er struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &er)
+	if !strings.Contains(er.Error, "requires a template") {
+		t.Fatalf("error message: %q", er.Error)
+	}
+}
+
+func TestHandleStartLoadGen_UnsupportedTemplate(t *testing.T) {
+	t.Parallel()
+	lg := loadgen.NewLoadGenerator()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, lg)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := `{"template":"ecommerce","rps":10}`
+	req := httptest.NewRequest(http.MethodPost, "/deployments/ns1/loadgen", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var er struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &er)
+	if !strings.Contains(er.Error, "no endpoint definitions") {
+		t.Fatalf("error message: %q", er.Error)
+	}
+}
+
+func TestHandleStartLoadGen_URLShortenerOK(t *testing.T) {
+	t.Parallel()
+	lg := loadgen.NewLoadGenerator()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, lg)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := `{"template":"url-shortener","rps":5}`
+	req := httptest.NewRequest(http.MethodPost, "/deployments/ns-ok/loadgen", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Status   string `json:"status"`
+		Template string `json:"template"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Status != "started" || out.Template != "url-shortener" {
+		t.Fatalf("response: %+v", out)
+	}
+	lg.Stop("ns-ok")
 }

@@ -212,12 +212,14 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if design.Template != "" {
-		tmpl := templates.GetTemplate(design.Template)
-		if tmpl != nil && !tmpl.Available {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("template %q is not yet available", design.Template))
-			return
-		}
+	tmpl := templates.GetTemplate(design.Template)
+	if tmpl == nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("template %q is not registered — select a valid template", design.Template))
+		return
+	}
+	if !tmpl.Available {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("template %q is not yet available", design.Template))
+		return
 	}
 
 	namespace := fmt.Sprintf("cloud9-%s-%d", design.Template, time.Now().Unix())
@@ -461,7 +463,13 @@ func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 		profile.Template = row.Template
 	}
 	if profile.Template == "" {
-		profile.Template = "url-shortener"
+		writeError(w, http.StatusBadRequest, "load generator requires a template — ensure the deployment has a valid template set")
+		return
+	}
+
+	if specs, ok := loadgen.TemplateEndpoints[profile.Template]; !ok || len(specs) == 0 {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("load generator does not yet support template %q — it has no endpoint definitions", profile.Template))
+		return
 	}
 
 	profile = loadgen.NormalizeProfile(profile)
