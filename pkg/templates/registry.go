@@ -3,11 +3,13 @@ package templates
 import (
 	"embed"
 	"fmt"
+	"log"
 	"os"
 	"path"
 	"sort"
 	"strings"
 
+	"github.com/supabase-community/supabase-go"
 	"gopkg.in/yaml.v3"
 )
 
@@ -72,10 +74,31 @@ type templateDef struct {
 	} `yaml:"seed"`
 }
 
+// embeddedFree is the in-repo YAML definitions (always available).
+var embeddedFree []TemplateSpec
+
+// loadedTemplates is embedded free templates plus optional Supabase premium rows after InitRegistry.
 var loadedTemplates []TemplateSpec
 
 func init() {
-	loadedTemplates = loadEmbeddedTemplates()
+	embeddedFree = loadEmbeddedTemplates()
+	loadedTemplates = append([]TemplateSpec(nil), embeddedFree...)
+}
+
+// InitRegistry merges embedded free templates with premium rows from Supabase.
+// Call once at process startup after the Supabase client exists. If client is nil, only free templates load.
+func InitRegistry(client *supabase.Client) {
+	free := append([]TemplateSpec(nil), embeddedFree...)
+	premium, err := FetchRemoteTemplates(client)
+	if err != nil {
+		log.Printf("templates: premium fetch returned error (using free only): %v", err)
+		premium = nil
+	}
+	merged := make([]TemplateSpec, 0, len(free)+len(premium))
+	merged = append(merged, free...)
+	merged = append(merged, premium...)
+	loadedTemplates = merged
+	log.Printf("templates: registry loaded %d free + %d premium (%d total)", len(free), len(premium), len(merged))
 }
 
 func loadEmbeddedTemplates() []TemplateSpec {
@@ -175,7 +198,7 @@ func imageFor(name string) string {
 	return registry + "/" + name + tag
 }
 
-// Registry returns all registered templates (embedded free definitions).
+// Registry returns all registered templates (free + optional premium after InitRegistry).
 func Registry() []TemplateSpec {
 	out := make([]TemplateSpec, len(loadedTemplates))
 	copy(out, loadedTemplates)

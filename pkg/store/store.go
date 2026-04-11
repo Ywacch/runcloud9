@@ -46,6 +46,14 @@ func NewDeploymentStore(supabaseURL, serviceRoleKey string) (*DeploymentStore, e
 	return &DeploymentStore{client: client}, nil
 }
 
+// SupabaseClient exposes the client for bootstrap code (e.g. premium template registry).
+func (s *DeploymentStore) SupabaseClient() *supabase.Client {
+	if s == nil {
+		return nil
+	}
+	return s.client
+}
+
 // CreateDeployment inserts a new row with status='provisioning' and returns the new row ID.
 func (s *DeploymentStore) CreateDeployment(ctx context.Context, params CreateDeploymentParams) (string, error) {
 	userIDVal := any(params.UserID)

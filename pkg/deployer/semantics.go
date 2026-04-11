@@ -1,6 +1,9 @@
 package deployer
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // ConnectionRule classifies a directed edge (sourceType -> targetType) for semantic validation.
 type ConnectionRule struct {
@@ -19,8 +22,10 @@ type TopologyAssessment struct {
 }
 
 const (
-	VerdictFull    = "full"
-	VerdictInvalid = "invalid"
+	VerdictFull     = "full"
+	VerdictPartial  = "partial"
+	VerdictSimulate = "simulate"
+	VerdictInvalid  = "invalid"
 )
 
 var connectionRules map[[2]string]ConnectionRule
@@ -124,6 +129,23 @@ func isSemanticComponentType(t string) bool {
 	}
 }
 
+func dedupeExplanations(msgs []string) []string {
+	seen := make(map[string]struct{}, len(msgs))
+	out := make([]string, 0, len(msgs))
+	for _, msg := range msgs {
+		msg = strings.TrimSpace(msg)
+		if msg == "" {
+			continue
+		}
+		if _, ok := seen[msg]; ok {
+			continue
+		}
+		seen[msg] = struct{}{}
+		out = append(out, msg)
+	}
+	return out
+}
+
 // AssessTopology validates connection semantics and runs whole-design ambiguity checks.
 // Canvas-only nodes such as "client" (traffic source) are ignored for edge rules.
 func AssessTopology(design DeploymentDesign) TopologyAssessment {
@@ -131,6 +153,9 @@ func AssessTopology(design DeploymentDesign) TopologyAssessment {
 	for _, n := range design.Nodes {
 		nodeMap[n.ID] = n
 	}
+
+	unsupportedNodeIDs := make(map[string]struct{})
+	var unsupportedReasons []string
 
 	for _, conn := range design.Connections {
 		src, ok := nodeMap[conn.SourceID]
@@ -184,10 +209,9 @@ func AssessTopology(design DeploymentDesign) TopologyAssessment {
 			if msg == "" {
 				msg = fmt.Sprintf("connection %s → %s is valid but not supported yet", src.Type, tgt.Type)
 			}
-			return TopologyAssessment{
-				Verdict:     VerdictInvalid,
-				Explanation: msg,
-			}
+			unsupportedNodeIDs[src.ID] = struct{}{}
+			unsupportedNodeIDs[tgt.ID] = struct{}{}
+			unsupportedReasons = append(unsupportedReasons, msg)
 		}
 	}
 
@@ -225,13 +249,50 @@ func AssessTopology(design DeploymentDesign) TopologyAssessment {
 		}
 	}
 
-	deployable := make([]DeploymentNode, len(design.Nodes))
-	copy(deployable, design.Nodes)
+	if len(unsupportedReasons) == 0 {
+		deployable := make([]DeploymentNode, len(design.Nodes))
+		copy(deployable, design.Nodes)
+		return TopologyAssessment{
+			Deployable:  deployable,
+			Simulatable: nil,
+			Unsupported: nil,
+			Verdict:     VerdictFull,
+			Explanation: "All components deployable",
+		}
+	}
+
+	uniq := dedupeExplanations(unsupportedReasons)
+	joined := strings.Join(uniq, "; ")
+
+	var deployableNodes, simulatableNodes []DeploymentNode
+	for _, n := range design.Nodes {
+		if _, hit := unsupportedNodeIDs[n.ID]; hit {
+			simulatableNodes = append(simulatableNodes, n)
+		} else {
+			deployableNodes = append(deployableNodes, n)
+		}
+	}
+
+	if len(deployableNodes) > 0 && len(simulatableNodes) > 0 {
+		return TopologyAssessment{
+			Deployable:  deployableNodes,
+			Simulatable: simulatableNodes,
+			Unsupported: simulatableNodes,
+			Verdict:     VerdictPartial,
+			Explanation: fmt.Sprintf(
+				"Some connections use features not yet supported for deployment: %s. These components can be simulated instead.",
+				joined,
+			),
+		}
+	}
 	return TopologyAssessment{
-		Deployable:  deployable,
-		Simulatable: nil,
-		Unsupported: nil,
-		Verdict:     VerdictFull,
-		Explanation: "All components deployable",
+		Deployable:  nil,
+		Simulatable: simulatableNodes,
+		Unsupported: simulatableNodes,
+		Verdict:     VerdictSimulate,
+		Explanation: fmt.Sprintf(
+			"This design cannot be fully deployed yet: %s. Use simulation to explore the topology.",
+			joined,
+		),
 	}
 }

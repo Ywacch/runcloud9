@@ -225,8 +225,39 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("template %q is not yet deployable — it can only be used in simulation mode", design.Template))
 		return
 	}
+	if tmpl.Premium {
+		userID := getUserID(r)
+		if userID == "" {
+			writeError(w, http.StatusUnauthorized, "premium templates require authentication")
+			return
+		}
+		// TODO: check user's subscription tier from Supabase profiles table
+		writeError(w, http.StatusForbidden, fmt.Sprintf(
+			"template %q is a premium template — upgrade to Cloud9 Premium to deploy it",
+			design.Template,
+		))
+		return
+	}
 
 	assessment := deployer.AssessTopology(design)
+	if assessment.Verdict == deployer.VerdictInvalid {
+		writeError(w, http.StatusBadRequest, assessment.Explanation)
+		return
+	}
+	if assessment.Verdict != deployer.VerdictFull {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"deploymentId": "",
+			"namespace":    "",
+			"status":       "simulation_recommended",
+			"assessment": map[string]any{
+				"verdict":     assessment.Verdict,
+				"explanation": assessment.Explanation,
+			},
+		})
+		return
+	}
 
 	namespace := fmt.Sprintf("cloud9-%s-%d", design.Template, time.Now().Unix())
 	expiresAt := time.Now().Add(9 * time.Minute)

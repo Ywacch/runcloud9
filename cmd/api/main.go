@@ -14,6 +14,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/seeder"
 	"github.com/ywacch/cloud9/pkg/store"
+	"github.com/ywacch/cloud9/pkg/templates"
 	"github.com/ywacch/cloud9/pkg/teardown"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -119,6 +120,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to init store: %v", err)
 	}
+
+	templates.InitRegistry(deploymentStore.SupabaseClient())
 
 	lg := loadgen.NewLoadGenerator()
 	var metricsCollector *metrics.MetricsCollector

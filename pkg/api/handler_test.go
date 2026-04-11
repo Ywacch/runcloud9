@@ -83,6 +83,62 @@ func TestHandleCreateDeployment_UnknownTemplate(t *testing.T) {
 	}
 }
 
+func TestHandleCreateDeployment_SimulationRecommended_PartialTopology(t *testing.T) {
+	t.Parallel()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "standard",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "a", Type: "app-server", Name: "a", Config: map[string]interface{}{}},
+			{ID: "b", Type: "app-server", Name: "b", Config: map[string]interface{}{}},
+			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "a", TargetID: "b"},
+			{SourceID: "a", TargetID: "db"},
+			{SourceID: "b", TargetID: "db"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		DeploymentID string `json:"deploymentId"`
+		Namespace    string `json:"namespace"`
+		Status       string `json:"status"`
+		Assessment   struct {
+			Verdict     string `json:"verdict"`
+			Explanation string `json:"explanation"`
+		} `json:"assessment"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Status != "simulation_recommended" {
+		t.Fatalf("status: got %q", out.Status)
+	}
+	if out.DeploymentID != "" || out.Namespace != "" {
+		t.Fatalf("expected empty deployment id/namespace, got %q %q", out.DeploymentID, out.Namespace)
+	}
+	if out.Assessment.Verdict != deployer.VerdictPartial {
+		t.Fatalf("verdict: got %q", out.Assessment.Verdict)
+	}
+	if out.Assessment.Explanation == "" {
+		t.Fatal("empty assessment explanation")
+	}
+}
+
 func TestHandleCreateDeployment_UnavailableRegistryTemplate(t *testing.T) {
 	t.Parallel()
 	h := NewHandler(nil, nil, nil, nil, nil, nil, nil)

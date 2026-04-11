@@ -221,7 +221,38 @@ func TestAssessTopology_AppServerToAppServerNotWired(t *testing.T) {
 		},
 	}
 	a := AssessTopology(d)
-	if a.Verdict != VerdictInvalid || !strings.Contains(a.Explanation, "not wired") {
+	if a.Verdict != VerdictPartial {
 		t.Fatalf("got verdict=%q explanation=%q", a.Verdict, a.Explanation)
+	}
+	if !strings.Contains(a.Explanation, "not wired") && !strings.Contains(a.Explanation, "simulated") {
+		t.Fatalf("explanation: %q", a.Explanation)
+	}
+	if len(a.Deployable) != 1 || a.Deployable[0].Type != "db" {
+		t.Fatalf("deployable: %+v", a.Deployable)
+	}
+	if len(a.Simulatable) != 2 {
+		t.Fatalf("simulatable: %+v", a.Simulatable)
+	}
+}
+
+func TestAssessTopology_LbToLbSimulateOnly(t *testing.T) {
+	d := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "lb1", Type: "lb", Name: "lb1"},
+			{ID: "lb2", Type: "lb", Name: "lb2"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "lb1", TargetID: "lb2"},
+		},
+	}
+	a := AssessTopology(d)
+	if a.Verdict != VerdictSimulate {
+		t.Fatalf("got verdict=%q explanation=%q", a.Verdict, a.Explanation)
+	}
+	if !strings.Contains(a.Explanation, "Chained load balancers") {
+		t.Fatalf("explanation: %q", a.Explanation)
+	}
+	if len(a.Deployable) != 0 || len(a.Simulatable) != 2 {
+		t.Fatalf("deployable=%d simulatable=%d", len(a.Deployable), len(a.Simulatable))
 	}
 }
