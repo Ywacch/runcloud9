@@ -221,6 +221,12 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("template %q is not yet available", design.Template))
 		return
 	}
+	if !tmpl.Deployable {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("template %q is not yet deployable — it can only be used in simulation mode", design.Template))
+		return
+	}
+
+	assessment := deployer.AssessTopology(design)
 
 	namespace := fmt.Sprintf("cloud9-%s-%d", design.Template, time.Now().Unix())
 	expiresAt := time.Now().Add(9 * time.Minute)
@@ -255,6 +261,10 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		"deploymentId": namespace,
 		"namespace":    namespace,
 		"status":       "provisioning",
+		"assessment": map[string]any{
+			"verdict":     assessment.Verdict,
+			"explanation": assessment.Explanation,
+		},
 	})
 
 	// Continue orchestration in the background after returning the response.
