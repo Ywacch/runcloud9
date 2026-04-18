@@ -1,0 +1,25 @@
+id: ecommerce
+name: E-Commerce
+description: >-
+  Multi-server product catalog with shared database and cache layer.
+  Tests load balancer distribution and write contention.
+components: 5
+bottleneck: "Write contention on shared database"
+available: false
+premium: false
+tags: [multi-server, write-heavy, intermediate]
+simulatable: true
+deployable: false
+imageKey: ecommerce
+workerImageKey: ecommerce-worker
+topology:
+  - type: load_balancer
+    position: [0, 0]
+  - type: compute
+    position: [2, -1]
+  - type: compute
+    position: [2, 1]
+  - type: cache
+    position: [4, 0]
+  - type: database
+    position: [6, 0]

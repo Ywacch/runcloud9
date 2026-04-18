@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -84,15 +85,6 @@ func resolveProxyTarget(component string, design map[string]any) (host string, p
 	}
 }
 
-func buildProxyURL(namespace, host string, port int, proxyPath string) string {
-	base := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", host, namespace, port)
-	proxyPath = strings.TrimPrefix(proxyPath, "/")
-	if proxyPath == "" {
-		return base
-	}
-	return base + "/" + proxyPath
-}
-
 // handleProxy forwards HTTP to a component Service inside the deployment namespace.
 // Routes: /deployments/{id}/proxy/{component} and /deployments/{id}/proxy/{component}/{path...}
 func (h *Handler) handleProxy(w http.ResponseWriter, r *http.Request) {
@@ -113,6 +105,10 @@ func (h *Handler) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "only GET, POST, and OPTIONS are allowed via proxy")
+		return
+	}
+	if h.clientset == nil {
+		writeError(w, http.StatusServiceUnavailable, "kubernetes client unavailable for proxy")
 		return
 	}
 
@@ -141,47 +137,61 @@ func (h *Handler) handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	targetURL := buildProxyURL(namespace, svcHost, svcPort, proxyPath)
-
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	var body io.Reader
+	var body []byte
 	if r.Body != nil {
-		body = http.MaxBytesReader(w, r.Body, 1<<20)
+		limitedBody := http.MaxBytesReader(w, r.Body, 1<<20)
+		defer limitedBody.Close()
+		raw, readErr := io.ReadAll(limitedBody)
+		if readErr != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", readErr))
+			return
+		}
+		body = raw
 	}
 
-	proxyReq, err := http.NewRequestWithContext(ctx, r.Method, targetURL, body)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create proxy request")
-		return
+	// Route via K8s API server service proxy so local-dev (outside cluster DNS) also works.
+	svcTarget := fmt.Sprintf("%s:%d", svcHost, svcPort)
+	proxyPath = strings.TrimPrefix(proxyPath, "/")
+	restReq := h.clientset.CoreV1().RESTClient().
+		Verb(r.Method).
+		Namespace(namespace).
+		Resource("services").
+		Name(svcTarget).
+		SubResource("proxy")
+	if proxyPath != "" {
+		restReq = restReq.Suffix(proxyPath)
+	}
+	if len(body) > 0 {
+		restReq = restReq.Body(bytes.NewReader(body))
 	}
 	if ct := r.Header.Get("Content-Type"); ct != "" {
-		proxyReq.Header.Set("Content-Type", ct)
+		restReq = restReq.SetHeader("Content-Type", ct)
 	}
 	if accept := r.Header.Get("Accept"); accept != "" {
-		proxyReq.Header.Set("Accept", accept)
+		restReq = restReq.SetHeader("Accept", accept)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(proxyReq)
+	result := restReq.Do(ctx)
+	statusCode := 0
+	result.StatusCode(&statusCode)
+	rawBody, err := result.Raw()
 	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("proxy request failed: %v", err))
+		if statusCode == 0 {
+			statusCode = http.StatusBadGateway
+		}
+		writeError(w, statusCode, fmt.Sprintf("proxy request failed: %v", err))
 		return
 	}
-	defer resp.Body.Close()
-
-	for k, vv := range resp.Header {
-		if _, skip := hopByHopResponseHeaders[http.CanonicalHeaderKey(k)]; skip {
-			continue
-		}
-		for _, v := range vv {
-			w.Header().Add(k, v)
-		}
-	}
 	setProxyCORS(w, r)
+	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Cloud9-Proxied", "true")
-	w.WriteHeader(resp.StatusCode)
-
-	_, _ = io.Copy(w, io.LimitReader(resp.Body, 5<<20))
+	if statusCode > 0 {
+		w.WriteHeader(statusCode)
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
+	_, _ = w.Write(rawBody)
 }

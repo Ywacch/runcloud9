@@ -7,13 +7,25 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/ywacch/cloud9/pkg/templates"
+)
+
+// Provisioning waits: fail fast on clearly unrecoverable container config, debounce CrashLoopBackOff
+// so transient blips do not abort before Kubernetes has retried, but broken apps do not burn the
+// full orchestration context (~5m on k8s). Image pull backoffs are left to the parent context.
+const (
+	waitReadyCrashLoopDebounce   = 45 * time.Second
+	waitReadyRestartFailThreshold int32 = 3
 )
 
 // K8sDeployer is the real Kubernetes implementation of ComponentDeployer.
@@ -69,6 +81,58 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 	}
 }
 
+func terminalContainerWaitingReason(reason string) bool {
+	switch reason {
+	case "CreateContainerConfigError", "InvalidImageName":
+		return true
+	default:
+		return false
+	}
+}
+
+// detectWaitReadyFailure returns a non-nil error if the pod will not become ready without intervention.
+// crashLoopSince tracks the first time we saw CrashLoopBackOff for a pod UID (cleared when it clears).
+func detectWaitReadyFailure(pod *corev1.Pod, appLabel string, crashLoopSince map[types.UID]time.Time) error {
+	var crashLooping bool
+	scan := func(css []corev1.ContainerStatus) error {
+		for _, cs := range css {
+			if w := cs.State.Waiting; w != nil {
+				if terminalContainerWaitingReason(w.Reason) {
+					return fmt.Errorf("pod %s/%s container %s: %s — %s",
+						pod.Namespace, pod.Name, cs.Name, w.Reason, strings.TrimSpace(w.Message))
+				}
+				if w.Reason == "CrashLoopBackOff" {
+					crashLooping = true
+					if cs.RestartCount >= waitReadyRestartFailThreshold {
+						return fmt.Errorf("pod %s/%s container %s in CrashLoopBackOff after %d restarts: %s",
+							pod.Namespace, pod.Name, cs.Name, cs.RestartCount, strings.TrimSpace(w.Message))
+					}
+				}
+			}
+		}
+		return nil
+	}
+	if err := scan(pod.Status.InitContainerStatuses); err != nil {
+		return err
+	}
+	if err := scan(pod.Status.ContainerStatuses); err != nil {
+		return err
+	}
+	if crashLooping {
+		if _, ok := crashLoopSince[pod.UID]; !ok {
+			crashLoopSince[pod.UID] = time.Now()
+			return nil
+		}
+		if time.Since(crashLoopSince[pod.UID]) >= waitReadyCrashLoopDebounce {
+			return fmt.Errorf("pod %s/%s: CrashLoopBackOff persisted %v waiting for %s (image or app misconfiguration likely)",
+				pod.Namespace, pod.Name, waitReadyCrashLoopDebounce, appLabel)
+		}
+		return nil
+	}
+	delete(crashLoopSince, pod.UID)
+	return nil
+}
+
 func (k *K8sDeployer) waitForReady(ctx context.Context, namespace string, appLabel string) error {
 	// Watch gives us a stream of events (ADDED, MODIFIED, DELETED)
 	// for pods matching our label selector. We block on this stream until
@@ -80,6 +144,8 @@ func (k *K8sDeployer) waitForReady(ctx context.Context, namespace string, appLab
 		return fmt.Errorf("watch pods: %w", err)
 	}
 	defer watcher.Stop()
+
+	crashLoopSince := make(map[types.UID]time.Time)
 
 	for {
 		select {
@@ -96,6 +162,9 @@ func (k *K8sDeployer) waitForReady(ctx context.Context, namespace string, appLab
 					return nil // pod is ready
 				}
 			}
+			if err := detectWaitReadyFailure(pod, appLabel, crashLoopSince); err != nil {
+				return fmt.Errorf("waiting for %s ready: %w", appLabel, err)
+			}
 		case <-ctx.Done():
 			// UNDERSTAND: ctx.Done() closes when the context is cancelled or times out.
 			// We return ctx.Err() not a custom error — callers use errors.Is(err, context.DeadlineExceeded)
@@ -110,7 +179,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 
 	if requiresProxy(cfg.Node) {
 		// Proxy strategies deploy two workloads from the single canvas cache node:
-		// 1) internal Redis (simple redis:7)
+		// 1) internal Redis (imageRedis)
 		// 2) caching-proxy (HTTP->Redis->DB wrapper)
 		redisLabels := map[string]string{"app": "redis-internal", "deployment": cfg.Namespace}
 		internalRedisDep := &appsv1.Deployment{
@@ -124,7 +193,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 						Containers: []corev1.Container{
 							{
 								Name:      "redis",
-								Image:     "redis:7",
+								Image:     imageRedis,
 								Ports:     []corev1.ContainerPort{{ContainerPort: 6379}},
 								Resources: resources,
 								ReadinessProbe: &corev1.Probe{
@@ -223,8 +292,16 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 		return k.waitForReady(ctx, cfg.Namespace, "cache-proxy")
 	}
 
-	// Cache-aside: single Redis pod/service.
+	// Cache-aside: single Redis pod/service + redis_exporter sidecar for Prometheus.
 	labels := map[string]string{"app": "redis", "deployment": cfg.Namespace}
+
+	redisExporter := corev1.Container{
+		Name:      "redis-exporter",
+		Image:     "oliver006/redis_exporter:v1.67.0",
+		Ports:     []corev1.ContainerPort{{ContainerPort: 9121}},
+		Resources: ExporterResources(),
+		Env:       []corev1.EnvVar{{Name: "REDIS_ADDR", Value: "localhost:6379"}},
+	}
 
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "redis", Namespace: cfg.Namespace},
@@ -232,7 +309,14 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 			Replicas: ptr(replicas),
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+					Annotations: map[string]string{
+						"prometheus.io/scrape": "true",
+						"prometheus.io/port":   "9121",
+						"prometheus.io/path":   "/metrics",
+					},
+				},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
 						{
@@ -250,6 +334,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 								FailureThreshold:    3,
 							},
 						},
+						redisExporter,
 					},
 				},
 			},
@@ -352,7 +437,7 @@ func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, resour
 		Env:       envMapToK8s(envVars),
 	}
 	// busybox exits immediately without a long-running command — keep pod Ready for QA placeholders.
-	if img == "busybox:latest" || strings.HasSuffix(img, "/busybox:latest") {
+	if img == imageBusybox || strings.HasSuffix(img, "/"+imageBusybox) {
 		ctr.Command = []string{"sleep"}
 		ctr.Args = []string{"infinity"}
 	}
@@ -386,8 +471,15 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 	nginxConf := generateNginxConfig(backends, algo)
 
 	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: "lb-config", Namespace: cfg.Namespace},
-		Data:       map[string]string{"nginx.conf": nginxConf},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "lb-config",
+			Namespace: cfg.Namespace,
+			Annotations: map[string]string{
+				"cloud9.io/lb-algorithm": algo,
+				"cloud9.io/lb-backends":  strings.Join(backends, ","),
+			},
+		},
+		Data: map[string]string{"nginx.conf": nginxConf},
 	}
 	_, err := k.clientset.CoreV1().ConfigMaps(cfg.Namespace).Create(ctx, cm, metav1.CreateOptions{})
 	if err != nil {
@@ -405,7 +497,7 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{{
 						Name:  "nginx",
-						Image: "nginx:alpine",
+						Image: imageNginx,
 						Ports: []corev1.ContainerPort{{ContainerPort: 80}},
 						Resources: resources,
 						ReadinessProbe: &corev1.Probe{
@@ -576,22 +668,47 @@ func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, 
 		ports[i] = corev1.ContainerPort{ContainerPort: p}
 	}
 
+	podAnnotations := make(map[string]string)
+	if spec.Annotations != nil {
+		for k, v := range spec.Annotations {
+			podAnnotations[k] = v
+		}
+	}
+	if spec.Exporter != nil {
+		exp := spec.Exporter
+		podAnnotations["prometheus.io/scrape"] = "true"
+		podAnnotations["prometheus.io/port"] = strconv.Itoa(int(exp.Port))
+		podAnnotations["prometheus.io/path"] = exp.MetricsPath
+	}
+
+	containers := []corev1.Container{{
+		Name:            spec.AppLabel,
+		Image:           spec.Image,
+		Ports:           ports,
+		Resources:       resources,
+		Env:             envMapToK8s(allEnv),
+		ReadinessProbe: probe,
+	}}
+	if spec.Exporter != nil {
+		exp := spec.Exporter
+		containers = append(containers, corev1.Container{
+			Name:      exp.Name,
+			Image:     exp.Image,
+			Ports:     []corev1.ContainerPort{{ContainerPort: exp.Port}},
+			Resources: ExporterResources(),
+			Env:       envMapToK8s(exp.Env),
+		})
+	}
+
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: spec.AppLabel, Namespace: cfg.Namespace},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: ptr(replicas),
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: spec.Annotations},
+				ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: podAnnotations},
 				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{{
-						Name:            spec.AppLabel,
-						Image:           spec.Image,
-						Ports:           ports,
-						Resources:       resources,
-						Env:             envMapToK8s(allEnv),
-						ReadinessProbe: probe,
-					}},
+					Containers: containers,
 				},
 			},
 		},
@@ -643,33 +760,19 @@ func (k *K8sDeployer) Teardown(ctx context.Context, namespace string) error {
 func ptr(i int32) *int32 { return &i }
 
 func appServerImage(template string) string {
-	registry := os.Getenv("TEMPLATE_IMAGE_REGISTRY")
-	if registry == "" {
-		registry = "europe-west1-docker.pkg.dev/ganymede-cloud/cloud9-images"
+	img := templates.GetAppServerImage(template)
+	if img == "" {
+		return imageNginxFull
 	}
-	switch template {
-	case "url-shortener":
-		// Built/pushed as part of Week 8.
-		return registry + "/url-shortener:v5"
-	default:
-		// Fallback so other templates still deploy in Week 6.
-		return "nginx:latest"
-	}
+	return img
 }
 
 func workerImage(template string) string {
-	registry := os.Getenv("TEMPLATE_IMAGE_REGISTRY")
-	if registry == "" {
-		registry = "europe-west1-docker.pkg.dev/ganymede-cloud/cloud9-images"
+	img := templates.GetWorkerImage(template)
+	if img == "" {
+		return imageBusybox
 	}
-	switch template {
-	case "twitter-fanout":
-		return registry + "/fanout-worker:v1"
-	case "e-commerce":
-		return registry + "/fulfillment-worker:v1"
-	default:
-		return "busybox:latest"
-	}
+	return img
 }
 
 func cacheImage(strategy string) string {
@@ -682,7 +785,7 @@ func cacheImage(strategy string) string {
 	case "write-through", "write-behind", "read-through":
 		return registry + "/caching-proxy:v1"
 	default:
-		return "redis:7"
+		return imageRedis
 	}
 }
 

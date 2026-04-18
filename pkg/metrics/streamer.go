@@ -81,7 +81,7 @@ func StreamMetrics(ctx context.Context, conn *websocket.Conn, collector *Metrics
 		case <-ticker.C:
 			col := collector
 			if col == nil {
-				col = NewMetricsCollector("", nil)
+				col = NewMetricsCollector("", nil, nil)
 			}
 			dm, err := col.Collect(ctx, namespace)
 			if err != nil {

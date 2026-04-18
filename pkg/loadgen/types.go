@@ -65,6 +65,7 @@ func DefaultProfile() LoadProfile {
 }
 
 // NormalizeProfile applies defaults and merges distribution from TemplateEndpoints when needed.
+// Template must already be set by the API (from the request body or deployment row); this function never invents a template name.
 func NormalizeProfile(p LoadProfile) LoadProfile {
 	def := DefaultProfile()
 	if p.RPS <= 0 {

@@ -212,12 +212,51 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if design.Template != "" {
-		tmpl := templates.GetTemplate(design.Template)
-		if tmpl != nil && !tmpl.Available {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("template %q is not yet available", design.Template))
+	tmpl := templates.GetTemplate(design.Template)
+	if tmpl == nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("template %q is not registered — select a valid template", design.Template))
+		return
+	}
+	if !tmpl.Available {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("template %q is not yet available", design.Template))
+		return
+	}
+	if !tmpl.Deployable {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("template %q is not yet deployable — it can only be used in simulation mode", design.Template))
+		return
+	}
+	if tmpl.Premium {
+		userID := getUserID(r)
+		if userID == "" {
+			writeError(w, http.StatusUnauthorized, "premium templates require authentication")
 			return
 		}
+		// TODO: check user's subscription tier from Supabase profiles table
+		writeError(w, http.StatusForbidden, fmt.Sprintf(
+			"template %q is a premium template — upgrade to Cloud9 Premium to deploy it",
+			design.Template,
+		))
+		return
+	}
+
+	assessment := deployer.AssessTopology(design)
+	if assessment.Verdict == deployer.VerdictInvalid {
+		writeError(w, http.StatusBadRequest, assessment.Explanation)
+		return
+	}
+	if assessment.Verdict != deployer.VerdictFull {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"deploymentId": "",
+			"namespace":    "",
+			"status":       "simulation_recommended",
+			"assessment": map[string]any{
+				"verdict":     assessment.Verdict,
+				"explanation": assessment.Explanation,
+			},
+		})
+		return
 	}
 
 	namespace := fmt.Sprintf("cloud9-%s-%d", design.Template, time.Now().Unix())
@@ -253,6 +292,10 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		"deploymentId": namespace,
 		"namespace":    namespace,
 		"status":       "provisioning",
+		"assessment": map[string]any{
+			"verdict":     assessment.Verdict,
+			"explanation": assessment.Explanation,
+		},
 	})
 
 	// Continue orchestration in the background after returning the response.
@@ -269,6 +312,21 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 			log.Printf("orchestration failed for namespace=%s: %v", namespace, err)
 			if h.store != nil {
 				_ = h.store.UpdateStatus(context.Background(), namespace, "failed")
+			}
+			failedTeardownAt := time.Now().Add(30 * time.Second)
+			if h.scheduler != nil {
+				h.scheduler.Schedule(namespace, failedTeardownAt)
+			} else {
+				go func(ns string) {
+					time.Sleep(30 * time.Second)
+					d, ok := h.deployers["db"]
+					if !ok {
+						d = &deployer.LocalDeployer{NodeType: "db"}
+					}
+					if tdErr := d.Teardown(context.Background(), ns); tdErr != nil {
+						log.Printf("failed deployment teardown failed for namespace=%s: %v", ns, tdErr)
+					}
+				}(namespace)
 			}
 			return
 		}
@@ -379,6 +437,10 @@ func validateDesign(d deployer.DeploymentDesign) error {
 	if err := deployer.ValidateTopology(d); err != nil {
 		return err
 	}
+	assessment := deployer.AssessTopology(d)
+	if assessment.Verdict == deployer.VerdictInvalid {
+		return fmt.Errorf("%s", assessment.Explanation)
+	}
 	return nil
 }
 
@@ -442,7 +504,13 @@ func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 		profile.Template = row.Template
 	}
 	if profile.Template == "" {
-		profile.Template = "url-shortener"
+		writeError(w, http.StatusBadRequest, "load generator requires a template — ensure the deployment has a valid template set")
+		return
+	}
+
+	if specs, ok := loadgen.TemplateEndpoints[profile.Template]; !ok || len(specs) == 0 {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("load generator does not yet support template %q — it has no endpoint definitions", profile.Template))
+		return
 	}
 
 	profile = loadgen.NormalizeProfile(profile)

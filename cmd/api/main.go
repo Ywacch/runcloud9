@@ -14,6 +14,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/seeder"
 	"github.com/ywacch/cloud9/pkg/store"
+	"github.com/ywacch/cloud9/pkg/templates"
 	"github.com/ywacch/cloud9/pkg/teardown"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -120,6 +121,8 @@ func main() {
 		log.Fatalf("failed to init store: %v", err)
 	}
 
+	templates.InitRegistry(deploymentStore.SupabaseClient())
+
 	lg := loadgen.NewLoadGenerator()
 	var metricsCollector *metrics.MetricsCollector
 
@@ -170,7 +173,7 @@ func main() {
 	if prometheusURL == "" && os.Getenv("DEPLOYER") == "k8s" {
 		prometheusURL = "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
 	}
-	metricsCollector = metrics.NewMetricsCollector(prometheusURL, lg)
+	metricsCollector = metrics.NewMetricsCollector(prometheusURL, lg, clientset)
 
 	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed, metricsCollector, clientset, lg)
 	mux := http.NewServeMux()
