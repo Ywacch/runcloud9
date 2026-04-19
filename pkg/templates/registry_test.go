@@ -47,8 +47,8 @@ func TestIsDeployable(t *testing.T) {
 
 func TestRegistryLen(t *testing.T) {
 	t.Parallel()
-	if len(Registry()) != 3 {
-		t.Fatalf("want 3 templates, got %d", len(Registry()))
+	if len(Registry()) != 4 {
+		t.Fatalf("want 4 templates, got %d", len(Registry()))
 	}
 }
 
@@ -81,7 +81,7 @@ func TestImageFor_RegistryEnv(t *testing.T) {
 	// Not parallel: mutates process env; parallel tests would race on TEMPLATE_IMAGE_REGISTRY.
 	t.Setenv("TEMPLATE_IMAGE_REGISTRY", "reg.example/test")
 	got := imageFor("ecommerce")
-	wantPrefix := "reg.example/test/ecommerce:v1"
+	wantPrefix := "reg.example/test/ecommerce:v2"
 	if got != wantPrefix {
 		t.Fatalf("imageFor with env: got %q want %q", got, wantPrefix)
 	}
