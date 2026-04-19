@@ -43,6 +43,7 @@ type MetricsCollector struct {
 	clientset     kubernetes.Interface // optional: LB metadata from ConfigMap
 	eventBus      *EventBus
 	thresholds    *ThresholdDetector
+	cascade       *CascadeDetector
 }
 
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
@@ -55,6 +56,7 @@ func NewMetricsCollector(prometheusURL string, lg *loadgen.LoadGenerator, client
 		clientset:     clientset,
 		eventBus:      eventBus,
 		thresholds:    NewThresholdDetector(),
+		cascade:       NewCascadeDetector(),
 	}
 }
 
@@ -68,6 +70,9 @@ func (c *MetricsCollector) Cleanup(namespace string) {
 	}
 	if c.thresholds != nil {
 		c.thresholds.Cleanup(namespace)
+	}
+	if c.cascade != nil {
+		c.cascade.Cleanup(namespace)
 	}
 }
 
@@ -560,6 +565,9 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	}
 	if c.thresholds != nil {
 		ev = append(ev, c.thresholds.Eval(namespace, dm)...)
+	}
+	if c.cascade != nil {
+		ev = append(ev, c.cascade.Eval(namespace, dm)...)
 	}
 	dm.Events = ev
 
