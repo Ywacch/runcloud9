@@ -126,3 +126,26 @@ func TestBuildTargeter_EmptyPoolCheckoutBodyReplacesParam(t *testing.T) {
 		t.Fatalf("checkout body missing product_id: %s", string(tgt.Body))
 	}
 }
+
+func TestBuildTargeter_SetsXRequestIDHeader(t *testing.T) {
+	t.Parallel()
+	specs := []EndpointSpec{
+		{Method: "GET", PathTemplate: "/health", Weight: 1},
+	}
+	targeter := buildTargeter("http://example.test", specs, map[string][]string{})
+	var a, b vegeta.Target
+	if err := targeter(&a); err != nil {
+		t.Fatalf("targeter: %v", err)
+	}
+	if err := targeter(&b); err != nil {
+		t.Fatalf("targeter: %v", err)
+	}
+	rida := a.Header.Get("X-Request-ID")
+	ridb := b.Header.Get("X-Request-ID")
+	if rida == "" || ridb == "" {
+		t.Fatalf("want X-Request-ID on target, got a=%q b=%q", rida, ridb)
+	}
+	if rida == ridb {
+		t.Fatalf("expected unique IDs per request, got duplicate %q", rida)
+	}
+}

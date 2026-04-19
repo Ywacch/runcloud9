@@ -406,6 +406,9 @@ func buildTargeter(baseURL string, specs []EndpointSpec, pools map[string][]stri
 		}
 		tgt.URL = baseURL + path
 
+		rid := fmt.Sprintf("%x", rand.Uint64())
+		h := http.Header{}
+		h.Set("X-Request-ID", rid)
 		if selected.BodyTemplate != "" {
 			body := strings.ReplaceAll(selected.BodyTemplate, "{{.Rand}}", fmt.Sprintf("%d", rand.Intn(1000000)))
 			if selected.ParamName != "" {
@@ -417,11 +420,11 @@ func buildTargeter(baseURL string, specs []EndpointSpec, pools map[string][]stri
 				body = strings.ReplaceAll(body, "{{.Param}}", paramValue)
 			}
 			tgt.Body = []byte(body)
-			tgt.Header = http.Header{"Content-Type": []string{"application/json"}}
+			h.Set("Content-Type", "application/json")
 		} else {
 			tgt.Body = nil
-			tgt.Header = nil
 		}
+		tgt.Header = h
 		return nil
 	}
 }

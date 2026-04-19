@@ -24,16 +24,21 @@ func newCache(client *redis.Client, stampedeProtection bool) *Cache {
 }
 
 func (c *Cache) Get(ctx context.Context, code string) (string, bool) {
+	start := time.Now()
 	val, err := c.client.Get(ctx, code).Result()
 	if err == redis.Nil || err != nil {
+		logCacheGet(ctx, code, false, start)
 		return "", false
 	}
+	logCacheGet(ctx, code, true, start)
 	return val, true
 }
 
 func (c *Cache) Set(ctx context.Context, code string, url string, ttl time.Duration) error {
-	// Cache errors are never fatal in handlers; callers decide how to log.
-	return c.client.Set(ctx, code, url, ttl).Err()
+	start := time.Now()
+	err := c.client.Set(ctx, code, url, ttl).Err()
+	logCacheSet(ctx, code, start)
+	return err
 }
 
 // GetProtected wraps Get with a per-key mutex.
