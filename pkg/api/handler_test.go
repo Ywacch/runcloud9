@@ -36,14 +36,20 @@ func TestHandleGetTemplates(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 3 {
-		t.Fatalf("want 3 templates, got %d", len(list))
+	if len(list) != 4 {
+		t.Fatalf("want 4 templates, got %d", len(list))
 	}
 	if list[0].ID != "url-shortener" || !list[0].Available {
 		t.Fatalf("first template: %+v", list[0])
 	}
 	if list[1].ID != "ecommerce" || !list[1].Available {
 		t.Fatalf("ecommerce should be available: %+v", list[1])
+	}
+	if list[2].ID != "social-feed" || !list[2].Available {
+		t.Fatalf("social-feed should be available: %+v", list[2])
+	}
+	if list[3].ID != "social-feed-pull" || !list[3].Available {
+		t.Fatalf("social-feed-pull should be available: %+v", list[3])
 	}
 }
 
@@ -215,7 +221,8 @@ func TestHandleStartLoadGen_UnsupportedTemplate(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	body := `{"template":"social-feed","rps":10}`
+	// Template id must exist in the deployment registry but have no loadgen endpoints.
+	body := `{"template":"not-in-loadgen-registry","rps":10}`
 	req := httptest.NewRequest(http.MethodPost, "/deployments/ns1/loadgen", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
