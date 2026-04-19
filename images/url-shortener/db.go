@@ -25,7 +25,10 @@ func newDB(pool *pgxpool.Pool) *DB {
 // InsertURL inserts a row; on primary-key conflict it does nothing and returns inserted=false.
 func (db *DB) InsertURL(ctx context.Context, code, original string) (inserted bool, err error) {
 	start := time.Now()
-	defer func() { dbQueryDuration.WithLabelValues("insert_url").Observe(time.Since(start).Seconds()) }()
+	defer func() {
+		dbQueryDuration.WithLabelValues("insert_url").Observe(time.Since(start).Seconds())
+		logDBOp(ctx, "insert_url", start)
+	}()
 	tag, err := db.pool.Exec(ctx, `
 		INSERT INTO urls (code, original)
 		VALUES ($1, $2)
@@ -39,7 +42,10 @@ func (db *DB) InsertURL(ctx context.Context, code, original string) (inserted bo
 
 func (db *DB) GetURL(ctx context.Context, code string) (URLStats, error) {
 	start := time.Now()
-	defer func() { dbQueryDuration.WithLabelValues("get_url").Observe(time.Since(start).Seconds()) }()
+	defer func() {
+		dbQueryDuration.WithLabelValues("get_url").Observe(time.Since(start).Seconds())
+		logDBOp(ctx, "get_url", start)
+	}()
 	row := db.pool.QueryRow(ctx, `
 		SELECT code, original, hit_count, created_at
 		FROM urls
@@ -55,7 +61,10 @@ func (db *DB) GetURL(ctx context.Context, code string) (URLStats, error) {
 
 func (db *DB) IncrementHitCount(ctx context.Context, code string) error {
 	start := time.Now()
-	defer func() { dbQueryDuration.WithLabelValues("increment_hit").Observe(time.Since(start).Seconds()) }()
+	defer func() {
+		dbQueryDuration.WithLabelValues("increment_hit").Observe(time.Since(start).Seconds())
+		logDBOp(ctx, "increment_hit", start)
+	}()
 	_, err := db.pool.Exec(ctx, `
 		UPDATE urls
 		SET hit_count = hit_count + 1
@@ -66,7 +75,10 @@ func (db *DB) IncrementHitCount(ctx context.Context, code string) error {
 
 func (db *DB) URLExists(ctx context.Context, code string) (bool, error) {
 	start := time.Now()
-	defer func() { dbQueryDuration.WithLabelValues("url_exists").Observe(time.Since(start).Seconds()) }()
+	defer func() {
+		dbQueryDuration.WithLabelValues("url_exists").Observe(time.Since(start).Seconds())
+		logDBOp(ctx, "url_exists", start)
+	}()
 	var exists bool
 	err := db.pool.QueryRow(ctx, `
 		SELECT EXISTS(

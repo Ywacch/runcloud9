@@ -198,7 +198,10 @@ func (db *DB) SeedIfEmpty(ctx context.Context) error {
 
 func (db *DB) GetUser(ctx context.Context, id int) (User, error) {
 	start := time.Now()
-	defer func() { dbQueryDuration.WithLabelValues("get_user").Observe(time.Since(start).Seconds()) }()
+	defer func() {
+		dbQueryDuration.WithLabelValues("get_user").Observe(time.Since(start).Seconds())
+		logDBOp(ctx, "get_user", start)
+	}()
 	var u User
 	err := db.pool.QueryRow(ctx, `SELECT id, username, bio FROM users WHERE id=$1`, id).Scan(&u.ID, &u.Username, &u.Bio)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -209,7 +212,10 @@ func (db *DB) GetUser(ctx context.Context, id int) (User, error) {
 
 func (db *DB) InsertPost(ctx context.Context, userID int, content string) (Post, error) {
 	start := time.Now()
-	defer func() { dbQueryDuration.WithLabelValues("insert_post").Observe(time.Since(start).Seconds()) }()
+	defer func() {
+		dbQueryDuration.WithLabelValues("insert_post").Observe(time.Since(start).Seconds())
+		logDBOp(ctx, "insert_post", start)
+	}()
 	var p Post
 	err := db.pool.QueryRow(ctx,
 		`INSERT INTO posts (user_id, content) VALUES ($1, $2) RETURNING id, user_id, content, created_at`,
@@ -220,7 +226,10 @@ func (db *DB) InsertPost(ctx context.Context, userID int, content string) (Post,
 
 func (db *DB) GetFeedPull(ctx context.Context, userID, limit int) ([]FeedItem, error) {
 	start := time.Now()
-	defer func() { dbQueryDuration.WithLabelValues("get_feed_pull").Observe(time.Since(start).Seconds()) }()
+	defer func() {
+		dbQueryDuration.WithLabelValues("get_feed_pull").Observe(time.Since(start).Seconds())
+		logDBOp(ctx, "get_feed_pull", start)
+	}()
 	rows, err := db.pool.Query(ctx, `
 		SELECT p.id, p.user_id, u.username, p.content, p.created_at
 		FROM posts p
@@ -247,7 +256,10 @@ func (db *DB) GetFeedPull(ctx context.Context, userID, limit int) ([]FeedItem, e
 
 func (db *DB) GetFeedPush(ctx context.Context, userID, limit int) ([]FeedItem, error) {
 	start := time.Now()
-	defer func() { dbQueryDuration.WithLabelValues("get_feed_push").Observe(time.Since(start).Seconds()) }()
+	defer func() {
+		dbQueryDuration.WithLabelValues("get_feed_push").Observe(time.Since(start).Seconds())
+		logDBOp(ctx, "get_feed_push", start)
+	}()
 	rows, err := db.pool.Query(ctx, `
 		SELECT fi.post_id, fi.author_id, u.username, fi.content, fi.created_at
 		FROM feed_items fi
@@ -273,7 +285,10 @@ func (db *DB) GetFeedPush(ctx context.Context, userID, limit int) ([]FeedItem, e
 
 func (db *DB) GetFollowers(ctx context.Context, userID int) ([]int, error) {
 	start := time.Now()
-	defer func() { dbQueryDuration.WithLabelValues("get_followers").Observe(time.Since(start).Seconds()) }()
+	defer func() {
+		dbQueryDuration.WithLabelValues("get_followers").Observe(time.Since(start).Seconds())
+		logDBOp(ctx, "get_followers", start)
+	}()
 	rows, err := db.pool.Query(ctx, `SELECT follower_id FROM follows WHERE following_id = $1`, userID)
 	if err != nil {
 		return nil, err
@@ -292,7 +307,10 @@ func (db *DB) GetFollowers(ctx context.Context, userID int) ([]int, error) {
 
 func (db *DB) InsertFeedItem(ctx context.Context, userID, postID, authorID int, content string, createdAt time.Time) error {
 	start := time.Now()
-	defer func() { dbQueryDuration.WithLabelValues("insert_feed_item").Observe(time.Since(start).Seconds()) }()
+	defer func() {
+		dbQueryDuration.WithLabelValues("insert_feed_item").Observe(time.Since(start).Seconds())
+		logDBOp(ctx, "insert_feed_item", start)
+	}()
 	_, err := db.pool.Exec(ctx,
 		`INSERT INTO feed_items (user_id, post_id, author_id, content, created_at) VALUES ($1, $2, $3, $4, $5)`,
 		userID, postID, authorID, content, createdAt,

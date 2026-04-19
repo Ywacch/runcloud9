@@ -24,22 +24,31 @@ func newCache(client *redis.Client, stampedeProtection bool) *Cache {
 }
 
 func (c *Cache) Get(ctx context.Context, key string) (string, bool) {
+	start := time.Now()
 	val, err := c.client.Get(ctx, key).Result()
 	if err == redis.Nil || err != nil {
+		logCacheGet(ctx, key, false, start)
 		return "", false
 	}
+	logCacheGet(ctx, key, true, start)
 	return val, true
 }
 
 func (c *Cache) Set(ctx context.Context, key string, value string, ttl time.Duration) error {
-	return c.client.Set(ctx, key, value, ttl).Err()
+	start := time.Now()
+	err := c.client.Set(ctx, key, value, ttl).Err()
+	logCacheSet(ctx, key, start)
+	return err
 }
 
 func (c *Cache) Delete(ctx context.Context, keys ...string) error {
 	if len(keys) == 0 {
 		return nil
 	}
-	return c.client.Del(ctx, keys...).Err()
+	start := time.Now()
+	err := c.client.Del(ctx, keys...).Err()
+	logCacheDelete(ctx, start)
+	return err
 }
 
 func (c *Cache) GetProtected(ctx context.Context, key string, fetchFn func() (string, error)) (string, error) {
