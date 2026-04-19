@@ -13,7 +13,18 @@ type DeploymentMetrics struct {
 	Namespace       string                      `json:"namespace"`
 	Components      map[string]ComponentMetrics `json:"components"`
 	TemplateMetrics map[string]float64          `json:"templateMetrics,omitempty"`
+	Events          []Event                     `json:"events,omitempty"`
 	LoadGen         *loadgen.LoadStats          `json:"loadgen,omitempty"`
+}
+
+// Event annotates the metrics timeline (loadgen, thresholds, future cascades).
+type Event struct {
+	Timestamp   time.Time `json:"timestamp"`
+	Type        string    `json:"type"` // "action" | "threshold" | "cascade"
+	Source      string    `json:"source"`
+	Component   string    `json:"component,omitempty"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
 }
 
 // ComparisonMetrics is reserved for side-by-side deployment streams (future).

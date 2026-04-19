@@ -41,15 +41,33 @@ type MetricsCollector struct {
 	scrapeClient  *http.Client // short timeout for in-cluster LB / RabbitMQ HTTP scrapes
 	loadgen       *loadgen.LoadGenerator
 	clientset     kubernetes.Interface // optional: LB metadata from ConfigMap
+	eventBus      *EventBus
+	thresholds    *ThresholdDetector
 }
 
-func NewMetricsCollector(prometheusURL string, lg *loadgen.LoadGenerator, clientset kubernetes.Interface) *MetricsCollector {
+// NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
+func NewMetricsCollector(prometheusURL string, lg *loadgen.LoadGenerator, clientset kubernetes.Interface, eventBus *EventBus) *MetricsCollector {
 	return &MetricsCollector{
 		prometheusURL: prometheusURL,
 		httpClient:    &http.Client{Timeout: 5 * time.Second},
 		scrapeClient:  &http.Client{Timeout: 2 * time.Second},
 		loadgen:       lg,
 		clientset:     clientset,
+		eventBus:      eventBus,
+		thresholds:    NewThresholdDetector(),
+	}
+}
+
+// Cleanup removes per-namespace event and threshold state (call when a deployment ends).
+func (c *MetricsCollector) Cleanup(namespace string) {
+	if c == nil {
+		return
+	}
+	if c.eventBus != nil {
+		c.eventBus.Cleanup(namespace)
+	}
+	if c.thresholds != nil {
+		c.thresholds.Cleanup(namespace)
 	}
 }
 
@@ -535,6 +553,15 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		stats := c.loadgen.GetStats(namespace)
 		dm.LoadGen = &stats
 	}
+
+	var ev []Event
+	if c.eventBus != nil {
+		ev = append(ev, c.eventBus.Drain(namespace)...)
+	}
+	if c.thresholds != nil {
+		ev = append(ev, c.thresholds.Eval(namespace, dm)...)
+	}
+	dm.Events = ev
 
 	return dm, nil
 }

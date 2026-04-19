@@ -38,6 +38,7 @@ type Handler struct {
 	metricsCollector *metrics.MetricsCollector
 	clientset        kubernetes.Interface
 	loadgen          *loadgen.LoadGenerator
+	eventBus         *metrics.EventBus
 }
 
 var wsUpgrader = websocket.Upgrader{
@@ -56,6 +57,7 @@ func NewHandler(
 	metricsCollector *metrics.MetricsCollector,
 	clientset kubernetes.Interface,
 	lg *loadgen.LoadGenerator,
+	eventBus *metrics.EventBus,
 ) *Handler {
 	return &Handler{
 		deployers:        deployers,
@@ -65,6 +67,7 @@ func NewHandler(
 		metricsCollector: metricsCollector,
 		clientset:        clientset,
 		loadgen:          lg,
+		eventBus:         eventBus,
 	}
 }
 
@@ -564,6 +567,16 @@ func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.eventBus != nil {
+		h.eventBus.Emit(namespace, metrics.Event{
+			Timestamp:   time.Now(),
+			Type:        "action",
+			Source:      "loadgen",
+			Title:       "Load generator started",
+			Description: fmt.Sprintf("template=%s rps=%d durationSeconds=%d", profile.Template, profile.RPS, profile.DurationSeconds),
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -589,6 +602,15 @@ func (h *Handler) handleStopLoadGen(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.loadgen.Stop(namespace)
+	if h.eventBus != nil {
+		h.eventBus.Emit(namespace, metrics.Event{
+			Timestamp:   time.Now(),
+			Type:        "action",
+			Source:      "loadgen",
+			Title:       "Load generator stopped",
+			Description: "Traffic generation halted for this deployment",
+		})
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -630,6 +652,9 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 			}
 			_ = h.store.SetMetricsSummary(r.Context(), namespace, summary)
 		}
+	}
+	if h.metricsCollector != nil {
+		h.metricsCollector.Cleanup(namespace)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
