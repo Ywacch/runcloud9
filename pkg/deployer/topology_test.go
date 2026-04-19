@@ -318,6 +318,51 @@ func TestDeriveEnvVars_AppServerConnectedToDBAndCache(t *testing.T) {
 	}
 }
 
+// Ecommerce-style: mq -> worker -> db; MQ env must come from the inbound mq edge.
+func TestDeriveEnvVars_WorkerGetsMQFromInboundEdge(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "mq1", Type: "mq", Name: "mq"},
+			{ID: "w1", Type: "worker", Name: "worker"},
+			{ID: "d1", Type: "db", Name: "db"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "mq1", TargetID: "w1"},
+			{SourceID: "w1", TargetID: "d1"},
+		},
+	}
+	worker := design.Nodes[1]
+	env := DeriveEnvVars(worker, design)
+	if env["MQ_HOST"] != "mq" {
+		t.Fatalf("expected MQ_HOST=mq, got %q", env["MQ_HOST"])
+	}
+	if env["MQ_PORT"] != "5672" {
+		t.Fatalf("expected MQ_PORT=5672, got %q", env["MQ_PORT"])
+	}
+	if env["DB_HOST"] != "db" {
+		t.Fatalf("expected DB_HOST=db from worker->db, got %q", env["DB_HOST"])
+	}
+}
+
+func TestDeriveEnvVars_AppServerGetsMQFromOutboundEdge(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "a1", Type: "app-server", Name: "app"},
+			{ID: "mq1", Type: "mq", Name: "mq"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "a1", TargetID: "mq1"},
+		},
+	}
+	env := DeriveEnvVars(design.Nodes[0], design)
+	if env["MQ_HOST"] != "mq" {
+		t.Fatalf("expected MQ_HOST=mq, got %q", env["MQ_HOST"])
+	}
+	if env["MQ_PORT"] != "5672" {
+		t.Fatalf("expected MQ_PORT=5672, got %q", env["MQ_PORT"])
+	}
+}
+
 func TestValidateTopology_ProxyWithoutDBConnection(t *testing.T) {
 	design := DeploymentDesign{
 		Nodes: []DeploymentNode{

@@ -1,0 +1,28 @@
+id: social-feed-pull
+name: "Social Feed (Pull)"
+description: >-
+  Fan-out on read: feeds are generated on demand by joining posts and follows.
+  Simple architecture but reads get expensive as follower counts grow.
+  Compare with Push variant to see the tradeoff.
+components: 4
+bottleneck: "JOIN query latency scaling with follower count"
+available: true
+premium: false
+tags: [read-heavy, beginner]
+simulatable: true
+deployable: true
+imageKey: social-feed
+seed:
+  dbType: postgres
+  dumpPath: social-feed/social-feed.dump
+  container: postgres
+  podLabel: app=postgres
+topology:
+  - type: load_balancer
+    position: [0, 0]
+  - type: compute
+    position: [2, 0]
+  - type: cache
+    position: [4, 0]
+  - type: database
+    position: [6, 0]

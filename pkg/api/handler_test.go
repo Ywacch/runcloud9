@@ -42,8 +42,8 @@ func TestHandleGetTemplates(t *testing.T) {
 	if list[0].ID != "url-shortener" || !list[0].Available {
 		t.Fatalf("first template: %+v", list[0])
 	}
-	if list[1].ID != "ecommerce" || list[1].Available {
-		t.Fatalf("ecommerce should be unavailable: %+v", list[1])
+	if list[1].ID != "ecommerce" || !list[1].Available {
+		t.Fatalf("ecommerce should be available: %+v", list[1])
 	}
 }
 
@@ -163,15 +163,23 @@ func TestHandleCreateDeployment_UnavailableRegistryTemplate(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status: want 400, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status: want 201, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var er struct {
-		Error string `json:"error"`
+
+	var out struct {
+		DeploymentID string `json:"deploymentId"`
+		Namespace    string `json:"namespace"`
+		Status       string `json:"status"`
 	}
-	_ = json.Unmarshal(rec.Body.Bytes(), &er)
-	if er.Error == "" || !strings.Contains(er.Error, "not yet available") {
-		t.Fatalf("error message: %q", er.Error)
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Status != "provisioning" {
+		t.Fatalf("status: got %q", out.Status)
+	}
+	if out.DeploymentID == "" || out.Namespace == "" {
+		t.Fatalf("expected deployment id/namespace, got %q / %q", out.DeploymentID, out.Namespace)
 	}
 }
 
@@ -207,7 +215,7 @@ func TestHandleStartLoadGen_UnsupportedTemplate(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	body := `{"template":"ecommerce","rps":10}`
+	body := `{"template":"social-feed","rps":10}`
 	req := httptest.NewRequest(http.MethodPost, "/deployments/ns1/loadgen", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()

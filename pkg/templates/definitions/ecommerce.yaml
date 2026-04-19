@@ -3,15 +3,21 @@ name: E-Commerce
 description: >-
   Multi-server product catalog with shared database and cache layer.
   Tests load balancer distribution and write contention.
+  Add a message queue and worker for async order processing.
 components: 5
 bottleneck: "Write contention on shared database"
-available: false
+available: true
 premium: false
 tags: [multi-server, write-heavy, intermediate]
 simulatable: true
-deployable: false
+deployable: true
 imageKey: ecommerce
 workerImageKey: ecommerce-worker
+seed:
+  dbType: postgres
+  dumpPath: ecommerce/ecommerce.dump
+  container: postgres
+  podLabel: app=postgres
 topology:
   - type: load_balancer
     position: [0, 0]

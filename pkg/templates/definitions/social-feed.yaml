@@ -1,17 +1,23 @@
 id: social-feed
-name: Social Feed
+name: "Social Feed (Push)"
 description: >-
-  Fan-out architecture with message queue and async worker for feed generation.
+  Fan-out on write: new posts are pushed to every follower's pre-computed feed
+  via a message queue and worker. Reads are O(1) but writes create amplification.
   Demonstrates consumer lag, backpressure, and queue depth under load.
 components: 6
 bottleneck: "Consumer lag under high fan-out"
-available: false
+available: true
 premium: false
 tags: [async, fan-out, advanced]
 simulatable: true
-deployable: false
+deployable: true
 imageKey: social-feed
 workerImageKey: fanout-worker
+seed:
+  dbType: postgres
+  dumpPath: social-feed/social-feed.dump
+  container: postgres
+  podLabel: app=postgres
 topology:
   - type: load_balancer
     position: [0, 0]
