@@ -57,7 +57,7 @@ func TestCollect_CacheIncreaseQueries(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, nil)
-	dm, err := c.Collect(context.Background(), "ns-test")
+	dm, err := c.Collect(context.Background(), "ns-test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestCollect_NoDeprecatedRateWindows(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, nil)
-	_, err := c.Collect(context.Background(), "ns-prod")
+	_, err := c.Collect(context.Background(), "ns-prod", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestCollect_HistogramQuantilesUse30sBucketRate(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, nil)
-	dm, err := c.Collect(context.Background(), "ns-x")
+	dm, err := c.Collect(context.Background(), "ns-x", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestCollect_DBCPUUsesCadvisorWhenNonZero(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, nil)
-	dm, err := c.Collect(context.Background(), "ns1")
+	dm, err := c.Collect(context.Background(), "ns1", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestCollect_DBCPUFallbackToKubeWhenCadvisorEmpty(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, nil)
-	dm, err := c.Collect(context.Background(), "ns1")
+	dm, err := c.Collect(context.Background(), "ns1", "")
 	if err != nil {
 		t.Fatal(err)
 	}

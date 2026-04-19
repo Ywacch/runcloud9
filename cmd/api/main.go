@@ -133,9 +133,13 @@ func main() {
 		ctx := context.Background()
 		// Collect final metrics snapshot and merge into existing summary (preserves 'seeded' and other fields).
 		if metricsCollector != nil {
-			dm, err := metricsCollector.Collect(ctx, namespace)
+			tpl := ""
+			row, rowErr := deploymentStore.GetDeployment(ctx, namespace)
+			if rowErr == nil {
+				tpl = row.Template
+			}
+			dm, err := metricsCollector.Collect(ctx, namespace, tpl)
 			if err == nil && dm != nil {
-				row, rowErr := deploymentStore.GetDeployment(ctx, namespace)
 				summary := make(map[string]any)
 				if rowErr == nil && row.MetricsSummary != nil {
 					for k, v := range row.MetricsSummary {
