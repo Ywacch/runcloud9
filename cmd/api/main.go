@@ -14,8 +14,8 @@ import (
 	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/seeder"
 	"github.com/ywacch/cloud9/pkg/store"
-	"github.com/ywacch/cloud9/pkg/templates"
 	"github.com/ywacch/cloud9/pkg/teardown"
+	"github.com/ywacch/cloud9/pkg/templates"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
@@ -50,9 +50,9 @@ func buildDeployers() (map[string]deployer.ComponentDeployer, kubernetes.Interfa
 		}, nil
 	}
 
-	// UNDERSTAND: KUBECONFIG env var lets you point at a specific config file.
+	// KUBECONFIG env var lets you point at a specific config file.
 	// Useful when running multiple clusters (minikube + GKE) simultaneously.
-	// Falls back to ~/.kube/config if not set — same as kubectl default behaviour.
+	// Falls back to ~/.kube/config if not set, same as kubectl default behaviour.
 	kubeconfigPath := os.Getenv("KUBECONFIG")
 	if kubeconfigPath == "" {
 		kubeconfigPath = filepath.Join(homedir.HomeDir(), ".kube", "config")
@@ -78,7 +78,7 @@ func buildDeployers() (map[string]deployer.ComponentDeployer, kubernetes.Interfa
 }
 
 // recoverDeployments re-registers teardown timers for active deployments on startup.
-// UNDERSTAND: if the server restarts mid-deployment, time.AfterFunc timers are gone.
+// If the server restarts mid-deployment, time.AfterFunc timers are gone.
 // We scan for running/provisioning deployments and either fire teardown now (if expired)
 // or re-register a timer for the remaining duration.
 func recoverDeployments(ctx context.Context, s *store.DeploymentStore, sched *teardown.Scheduler) {

@@ -22,11 +22,11 @@ func TestGetTemplate(t *testing.T) {
 		t.Fatalf("url-shortener simulatable/deployable: %+v", u)
 	}
 	e := GetTemplate("ecommerce")
-	if e == nil || e.Available {
-		t.Fatalf("ecommerce should exist and be unavailable: %+v", e)
+	if e == nil || !e.Available {
+		t.Fatalf("ecommerce should exist and be available: %+v", e)
 	}
-	if !e.Simulatable || e.Deployable {
-		t.Fatalf("ecommerce should be simulatable and not deployable: %+v", e)
+	if !e.Simulatable || !e.Deployable {
+		t.Fatalf("ecommerce should be simulatable and deployable: %+v", e)
 	}
 	// Returned pointer must not alias the next call.
 	u2 := GetTemplate("url-shortener")
@@ -40,8 +40,8 @@ func TestIsDeployable(t *testing.T) {
 	if !IsDeployable("url-shortener") {
 		t.Fatal("url-shortener should be deployable")
 	}
-	if IsDeployable("ecommerce") || IsDeployable("nope") {
-		t.Fatal("ecommerce and unknown should not be deployable")
+	if !IsDeployable("ecommerce") || IsDeployable("nope") {
+		t.Fatal("ecommerce should be deployable; unknown should not be deployable")
 	}
 }
 

@@ -50,13 +50,13 @@ type TopologyHint struct {
 
 // templateDef mirrors embedded YAML before conversion to TemplateSpec.
 type templateDef struct {
-	ID             string `yaml:"id"`
-	Name           string `yaml:"name"`
-	Description    string `yaml:"description"`
-	Components     int    `yaml:"components"`
-	Bottleneck     string `yaml:"bottleneck"`
-	Available      bool   `yaml:"available"`
-	Premium        bool   `yaml:"premium"`
+	ID             string   `yaml:"id"`
+	Name           string   `yaml:"name"`
+	Description    string   `yaml:"description"`
+	Components     int      `yaml:"components"`
+	Bottleneck     string   `yaml:"bottleneck"`
+	Available      bool     `yaml:"available"`
+	Premium        bool     `yaml:"premium"`
 	Tags           []string `yaml:"tags"`
 	Simulatable    bool     `yaml:"simulatable"`
 	Deployable     bool     `yaml:"deployable"`
@@ -132,6 +132,7 @@ func loadEmbeddedTemplates() []TemplateSpec {
 		"url-shortener": 0,
 		"ecommerce":     1,
 		"social-feed":   2,
+		"social-feed-pull": 3,
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		oi, okI := order[out[i].ID]
@@ -194,6 +195,14 @@ func imageFor(name string) string {
 	switch name {
 	case "url-shortener":
 		tag = ":v5"
+	case "ecommerce":
+		tag = ":v2"
+	case "ecommerce-worker":
+		tag = ":v1"
+	case "social-feed":
+		tag = ":v1"
+	case "fanout-worker":
+		tag = ":v1"
 	}
 	return registry + "/" + name + tag
 }

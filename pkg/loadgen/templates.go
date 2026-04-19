@@ -21,7 +21,84 @@ var TemplateEndpoints = map[string][]EndpointSpec{
 			Weight:       20,
 		},
 	},
-	// Future: "social-feed", "e-commerce", etc. — add pool HTTP handlers on each app image.
+	"ecommerce": {
+		{
+			Method:       "GET",
+			PathTemplate: "/catalog",
+			Weight:       40,
+		},
+		{
+			Method:       "GET",
+			PathTemplate: "/products/{productId}",
+			ParamName:    "productId",
+			PoolEndpoint: "/product-pool",
+			PoolField:    "productIds",
+			Weight:       30,
+		},
+		{
+			Method:       "POST",
+			PathTemplate: "/checkout",
+			BodyTemplate: `{"product_id":{{.Param}}, "quantity":1}`,
+			ParamName:    "productId",
+			PoolEndpoint: "/product-pool",
+			PoolField:    "productIds",
+			Weight:       30,
+		},
+	},
+	"social-feed": {
+		{
+			Method:       "GET",
+			PathTemplate: "/feed/{userId}",
+			ParamName:    "userId",
+			PoolEndpoint: "/user-pool",
+			PoolField:    "userIds",
+			Weight:       60,
+		},
+		{
+			Method:       "POST",
+			PathTemplate: "/post",
+			BodyTemplate: `{"user_id":{{.Param}}, "content":"Load test post {{.Rand}}"}`,
+			ParamName:    "userId",
+			PoolEndpoint: "/user-pool",
+			PoolField:    "userIds",
+			Weight:       30,
+		},
+		{
+			Method:       "GET",
+			PathTemplate: "/users/{userId}",
+			ParamName:    "userId",
+			PoolEndpoint: "/user-pool",
+			PoolField:    "userIds",
+			Weight:       10,
+		},
+	},
+	"social-feed-pull": {
+		{
+			Method:       "GET",
+			PathTemplate: "/feed/{userId}",
+			ParamName:    "userId",
+			PoolEndpoint: "/user-pool",
+			PoolField:    "userIds",
+			Weight:       60,
+		},
+		{
+			Method:       "POST",
+			PathTemplate: "/post",
+			BodyTemplate: `{"user_id":{{.Param}}, "content":"Load test post {{.Rand}}"}`,
+			ParamName:    "userId",
+			PoolEndpoint: "/user-pool",
+			PoolField:    "userIds",
+			Weight:       30,
+		},
+		{
+			Method:       "GET",
+			PathTemplate: "/users/{userId}",
+			ParamName:    "userId",
+			PoolEndpoint: "/user-pool",
+			PoolField:    "userIds",
+			Weight:       10,
+		},
+	},
 }
 
 // cloneEndpointSpecs returns a deep copy of registry specs for a template (safe to mutate weights).

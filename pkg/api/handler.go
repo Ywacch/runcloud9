@@ -21,8 +21,8 @@ import (
 	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/seeder"
 	"github.com/ywacch/cloud9/pkg/store"
-	"github.com/ywacch/cloud9/pkg/templates"
 	"github.com/ywacch/cloud9/pkg/teardown"
+	"github.com/ywacch/cloud9/pkg/templates"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -71,6 +71,7 @@ func NewHandler(
 // RegisterRoutes attaches handlers to the mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /deployments", h.handleCreateDeployment)
+	mux.HandleFunc("GET /deployments", h.handleListDeployments)
 	mux.HandleFunc("GET /deployments/{id}", h.handleGetDeployment)
 	mux.HandleFunc("DELETE /deployments/{id}", h.handleDeleteDeployment)
 	mux.HandleFunc("GET /deployments/{id}/metrics", h.handleMetricsStream)
@@ -162,6 +163,39 @@ func (h *Handler) handleGetDeployment(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *Handler) handleListDeployments(w http.ResponseWriter, r *http.Request) {
+	if h.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "deployment store unavailable")
+		return
+	}
+
+	// If auth is present, return only the caller's deployments; otherwise return all active deployments.
+	// Todo: signed out users shouldnt be able to access or run deployments
+	userID := getUserID(r)
+
+	rows, err := h.store.ListActiveDeployments(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Keep response shape stable for the frontend rejoin logic.
+	resp := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		resp = append(resp, map[string]any{
+			"id":        row.ID,
+			"namespace": row.Namespace,
+			"template":  row.Template,
+			"status":    row.Status,
+			"expiresAt": row.ExpiresAt.UTC().Format(time.RFC3339),
+			"createdAt": row.CreatedAt.UTC().Format(time.RFC3339),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // handleLogsStream upgrades the HTTP connection to WebSocket and streams

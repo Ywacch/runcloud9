@@ -389,6 +389,22 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 		}
 	}
 
+	// Workers consume from the queue via inbound edges (mq -> worker), not outbound to mq.
+	if node.Type == "worker" {
+		for _, conn := range design.Connections {
+			if conn.TargetID != node.ID {
+				continue
+			}
+			src, ok := nodeMap[conn.SourceID]
+			if !ok || src.Type != "mq" {
+				continue
+			}
+			env["MQ_HOST"] = "mq"
+			env["MQ_PORT"] = "5672"
+			break
+		}
+	}
+
 	// Step 3 — node-local behaviour flags from config.
 	switch node.Type {
 	case "app-server":

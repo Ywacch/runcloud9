@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -295,6 +297,10 @@ func fetchPoolOnce(baseURL, endpoint, field string) []string {
 		return nil
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		slog.Warn("failed to fetch pool: non-2xx response", "endpoint", endpoint, "status", resp.StatusCode)
+		return nil
+	}
 
 	var raw map[string]json.RawMessage
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
@@ -302,13 +308,43 @@ func fetchPoolOnce(baseURL, endpoint, field string) []string {
 	}
 	data, ok := raw[field]
 	if !ok {
+		slog.Warn("pool field missing in response", "endpoint", endpoint, "field", field)
 		return nil
 	}
-	var values []string
-	if err := json.Unmarshal(data, &values); err != nil {
+	values, ok := parsePoolValues(data)
+	if !ok {
+		slog.Warn("pool field has unsupported type", "endpoint", endpoint, "field", field)
 		return nil
 	}
 	return values
+}
+
+func parsePoolValues(data json.RawMessage) ([]string, bool) {
+	var stringsOnly []string
+	if err := json.Unmarshal(data, &stringsOnly); err == nil {
+		return stringsOnly, true
+	}
+
+	var mixed []any
+	if err := json.Unmarshal(data, &mixed); err != nil {
+		return nil, false
+	}
+	out := make([]string, 0, len(mixed))
+	for _, v := range mixed {
+		switch t := v.(type) {
+		case string:
+			out = append(out, t)
+		case float64:
+			if math.Trunc(t) == t {
+				out = append(out, strconv.FormatInt(int64(t), 10))
+			} else {
+				out = append(out, strconv.FormatFloat(t, 'f', -1, 64))
+			}
+		default:
+			return nil, false
+		}
+	}
+	return out, true
 }
 
 // buildTargeter creates a vegeta.Targeter from generic EndpointSpecs.
@@ -359,14 +395,14 @@ func buildTargeter(baseURL string, specs []EndpointSpec, pools map[string][]stri
 		if selected.ParamName != "" {
 			placeholder := "{" + selected.ParamName + "}"
 			pool := pools[selected.ParamName]
+			paramValue := fallbackParamValue(selected.ParamName)
 			if len(pool) > 0 {
 				i := rrIndex[selected.ParamName]
 				rrIndex[selected.ParamName] = i + 1
 				idx := int(i % uint64(len(pool)))
-				path = strings.Replace(path, placeholder, pool[idx], 1)
-			} else {
-				path = strings.Replace(path, placeholder, generateLoadCode(), 1)
+				paramValue = pool[idx]
 			}
+			path = strings.Replace(path, placeholder, paramValue, 1)
 		}
 		tgt.URL = baseURL + path
 
@@ -374,9 +410,11 @@ func buildTargeter(baseURL string, specs []EndpointSpec, pools map[string][]stri
 			body := strings.ReplaceAll(selected.BodyTemplate, "{{.Rand}}", fmt.Sprintf("%d", rand.Intn(1000000)))
 			if selected.ParamName != "" {
 				pool := pools[selected.ParamName]
+				paramValue := fallbackParamValue(selected.ParamName)
 				if len(pool) > 0 {
-					body = strings.ReplaceAll(body, "{{.Param}}", pool[rand.Intn(len(pool))])
+					paramValue = pool[rand.Intn(len(pool))]
 				}
+				body = strings.ReplaceAll(body, "{{.Param}}", paramValue)
 			}
 			tgt.Body = []byte(body)
 			tgt.Header = http.Header{"Content-Type": []string{"application/json"}}
@@ -395,6 +433,16 @@ func generateLoadCode() string {
 		code[i] = charset[rand.Intn(len(charset))]
 	}
 	return string(code)
+}
+
+func fallbackParamValue(paramName string) string {
+	switch strings.ToLower(paramName) {
+	case "productid":
+		// Keep ecommerce placeholders syntactically valid for path+JSON bodies.
+		return strconv.Itoa(1 + rand.Intn(1000))
+	default:
+		return generateLoadCode()
+	}
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }

@@ -14,6 +14,17 @@ type DeploymentStore struct {
 	client *supabase.Client
 }
 
+// ActiveDeploymentRow is a lightweight view used by the "rejoin" flow.
+// It intentionally omits the Design column so list queries stay cheap.
+type ActiveDeploymentRow struct {
+	ID        string    `json:"id"`
+	Namespace string    `json:"namespace"`
+	Template  string    `json:"template"`
+	Status    string    `json:"status"`
+	ExpiresAt time.Time `json:"expires_at"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // CreateDeploymentParams are the inputs for creating a deployment row.
 type CreateDeploymentParams struct {
 	Namespace string
@@ -168,4 +179,28 @@ func (s *DeploymentStore) GetDeployment(ctx context.Context, namespace string) (
 		return DeploymentRow{}, fmt.Errorf("store.GetDeployment: not found")
 	}
 	return rows[0], nil
+}
+
+// ListActiveDeployments returns deployments with status IN ('running','provisioning').
+// If userID is non-empty, it filters by user_id.
+func (s *DeploymentStore) ListActiveDeployments(ctx context.Context, userID string) ([]ActiveDeploymentRow, error) {
+	q := s.client.From("cloud_deployments").
+		Select("id,namespace,template,status,expires_at,created_at", "exact", false).
+		In("status", []string{"running", "provisioning"})
+
+	if userID != "" {
+		q = q.Eq("user_id", userID)
+	}
+
+	data, _, err := q.Execute()
+	if err != nil {
+		return nil, fmt.Errorf("store.ListActiveDeployments: %w", err)
+	}
+
+	var rows []ActiveDeploymentRow
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return nil, fmt.Errorf("store.ListActiveDeployments: parse: %w", err)
+	}
+
+	return rows, nil
 }
