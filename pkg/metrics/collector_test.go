@@ -289,6 +289,25 @@ func TestCollect_DBCPUFallbackToKubeWhenCadvisorEmpty(t *testing.T) {
 	}
 }
 
+func TestCollect_SetsLBConnectionLimit(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(promEmptyJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil)
+	dm, err := c.Collect(context.Background(), "ns-cap", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lb := dm.Components["lb"]
+	if lb.LBConnectionLimit != nginxWorkerConnections {
+		t.Fatalf("LBConnectionLimit: want %v, got %v", nginxWorkerConnections, lb.LBConnectionLimit)
+	}
+}
+
 func TestQueryCPUPair_PromQLFilters(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex

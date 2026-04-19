@@ -82,3 +82,35 @@ func (c *MetricsCollector) scrapeRabbitMQOverview(ctx context.Context, namespace
 		float64(overview.QueueTotals.MessagesReady),
 		float64(overview.QueueTotals.MessagesUnacked)
 }
+
+type rabbitNodeSnapshot struct {
+	MemUsed  int64 `json:"mem_used"`
+	MemLimit int64 `json:"mem_limit"`
+}
+
+// scrapeRabbitMQNodes reads /api/nodes from the management plugin; returns first node's mem_used/mem_limit, or 0,0 on failure.
+func (c *MetricsCollector) scrapeRabbitMQNodes(ctx context.Context, namespace string) (memUsed, memLimit float64) {
+	if c == nil || c.scrapeClient == nil {
+		return 0, 0
+	}
+	u := fmt.Sprintf("http://mq.%s.svc.cluster.local:15672/api/nodes", namespace)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return 0, 0
+	}
+	req.SetBasicAuth(rabbitMQMgmtUser, rabbitMQMgmtPass)
+	resp, err := c.scrapeClient.Do(req)
+	if err != nil {
+		return 0, 0
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0
+	}
+	var nodes []rabbitNodeSnapshot
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&nodes); err != nil || len(nodes) == 0 {
+		return 0, 0
+	}
+	n := nodes[0]
+	return float64(n.MemUsed), float64(n.MemLimit)
+}

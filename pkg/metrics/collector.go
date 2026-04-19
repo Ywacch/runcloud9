@@ -279,6 +279,9 @@ func (c *MetricsCollector) lbMetadataFromCluster(ctx context.Context, namespace 
 	return algorithm, backends
 }
 
+// nginxWorkerConnections matches worker_connections in pkg/deployer/k8s.go (LB nginx template).
+const nginxWorkerConnections = 1024
+
 // Collect queries all metrics for a deployment namespace and returns a snapshot.
 // template is the deployment template id (e.g. social-feed); empty skips template-specific PromQL.
 func (c *MetricsCollector) Collect(ctx context.Context, namespace, template string) (*DeploymentMetrics, error) {
@@ -450,6 +453,14 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmCache.RedisKeyspaceHits = rh
 	cmCache.RedisKeyspaceMisses = rm
 
+	if c.prometheusURL != "" {
+		if mc, _ := c.query(ctx, fmt.Sprintf(`max(redis_config_maxclients{namespace=%q})`, ns)); mc > 0 {
+			cmCache.RedisMaxClients = mc
+		} else if mc2, _ := c.query(ctx, fmt.Sprintf(`max(redis_connected_clients_limit{namespace=%q})`, ns)); mc2 > 0 {
+			cmCache.RedisMaxClients = mc2
+		}
+	}
+
 	dm.Components["cache"] = cmCache
 
 	cmMQ := ComponentMetrics{Component: "mq"}
@@ -463,6 +474,14 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmMQ.MemoryLimit = c.kubeLimitMem(ctx, ns, "rabbitmq.*", "rabbitmq")
 	cmMQ.QueueDepth, cmMQ.ProduceRate, cmMQ.ConsumeRate, cmMQ.MessagesReady, cmMQ.MessagesUnacked =
 		c.scrapeRabbitMQOverview(ctx, ns)
+	mqMemUsed, mqMemLim := c.scrapeRabbitMQNodes(ctx, ns)
+	cmMQ.MQMemoryUsed = mqMemUsed
+	cmMQ.MQMemoryLimit = mqMemLim
+	if cmMQ.ConsumeRate > 0 {
+		cmMQ.MQSaturationRatio = cmMQ.ProduceRate / cmMQ.ConsumeRate
+	} else if cmMQ.ProduceRate > 0 {
+		cmMQ.MQSaturationRatio = 10
+	}
 	dm.Components["mq"] = cmMQ
 
 	cmWorker := ComponentMetrics{Component: "worker"}
@@ -475,6 +494,13 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmWorker.CPULimit = c.kubeLimitCPU(ctx, ns, "worker.*", "worker")
 	cmWorker.MemoryLimit = c.kubeLimitMem(ctx, ns, "worker.*", "worker")
 	cmWorker.RequestRate = cmMQ.ConsumeRate
+	if cmMQ.QueueDepth > 0 {
+		sat := cmMQ.QueueDepth / 100.0
+		if sat > 1.0 {
+			sat = 1.0
+		}
+		cmWorker.WorkerSaturation = sat
+	}
 	dm.Components["worker"] = cmWorker
 
 	cmLB := ComponentMetrics{Component: "lb"}
@@ -488,6 +514,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmLB.MemoryLimit = c.kubeLimitMem(ctx, ns, "lb.*", "nginx")
 	cmLB.RequestRate = cmApp.RequestRate
 	cmLB.ActiveConnections = c.scrapeNginxStubActiveConnections(ctx, ns)
+	cmLB.LBConnectionLimit = nginxWorkerConnections
 	algo, backends := c.lbMetadataFromCluster(ctx, ns)
 	cmLB.LBAlgorithm = algo
 	cmLB.LBBackends = backends
