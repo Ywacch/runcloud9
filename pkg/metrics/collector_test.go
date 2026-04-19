@@ -56,7 +56,7 @@ func TestCollect_CacheIncreaseQueries(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil)
 	dm, err := c.Collect(context.Background(), "ns-test", "")
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +89,7 @@ func TestQueryWithFallback_PrimaryNonZeroSkipsFallback(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil)
 	got := c.queryWithFallback(context.Background(), `sum(__PRIMARY__)`, `sum(__FALLBACK__)`)
 	if got != 2.5 {
 		t.Fatalf("want primary 2.5, got %v", got)
@@ -118,7 +118,7 @@ func TestQueryWithFallback_UsesFallbackWhenPrimaryZero(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil)
 	got := c.queryWithFallback(context.Background(), `sum(__PRIMARY__)`, `sum(__FALLBACK__)`)
 	if got != 0.25 {
 		t.Fatalf("want fallback 0.25, got %v", got)
@@ -136,7 +136,7 @@ func TestQueryWithFallback_BothZero(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil)
 	got := c.queryWithFallback(context.Background(), `sum(__PRIMARY__)`, `sum(__FALLBACK__)`)
 	if got != 0 {
 		t.Fatalf("want 0, got %v", got)
@@ -145,7 +145,7 @@ func TestQueryWithFallback_BothZero(t *testing.T) {
 
 func TestQuery_EmptyPrometheusURL(t *testing.T) {
 	t.Parallel()
-	c := NewMetricsCollector("", nil, nil)
+	c := NewMetricsCollector("", nil, nil, nil)
 	v, err := c.query(context.Background(), "anything")
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestCollect_NoDeprecatedRateWindows(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil)
 	_, err := c.Collect(context.Background(), "ns-prod", "")
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +213,7 @@ func TestCollect_HistogramQuantilesUse30sBucketRate(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil)
 	dm, err := c.Collect(context.Background(), "ns-x", "")
 	if err != nil {
 		t.Fatal(err)
@@ -249,7 +249,7 @@ func TestCollect_DBCPUUsesCadvisorWhenNonZero(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil)
 	dm, err := c.Collect(context.Background(), "ns1", "")
 	if err != nil {
 		t.Fatal(err)
@@ -275,7 +275,7 @@ func TestCollect_DBCPUFallbackToKubeWhenCadvisorEmpty(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil)
 	dm, err := c.Collect(context.Background(), "ns1", "")
 	if err != nil {
 		t.Fatal(err)
@@ -297,7 +297,7 @@ func TestCollect_SetsLBConnectionLimit(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil)
 	dm, err := c.Collect(context.Background(), "ns-cap", "")
 	if err != nil {
 		t.Fatal(err)
@@ -322,7 +322,7 @@ func TestQueryCPUPair_PromQLFilters(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil)
 	_, _ = c.queryCPUPair(context.Background(), "my-ns", "app-server.*", "app-server")
 	mu.Lock()
 	defer mu.Unlock()

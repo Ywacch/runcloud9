@@ -165,6 +165,9 @@ func main() {
 		if err := deploymentStore.UpdateStatus(ctx, namespace, "terminated"); err != nil {
 			log.Printf("auto-teardown status update failed for %s: %v", namespace, err)
 		}
+		if metricsCollector != nil {
+			metricsCollector.Cleanup(namespace)
+		}
 		log.Printf("auto-teardown complete: %s", namespace)
 	}
 
@@ -177,9 +180,10 @@ func main() {
 	if prometheusURL == "" && os.Getenv("DEPLOYER") == "k8s" {
 		prometheusURL = "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
 	}
-	metricsCollector = metrics.NewMetricsCollector(prometheusURL, lg, clientset)
+	eventBus := metrics.NewEventBus()
+	metricsCollector = metrics.NewMetricsCollector(prometheusURL, lg, clientset, eventBus)
 
-	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed, metricsCollector, clientset, lg)
+	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed, metricsCollector, clientset, lg, eventBus)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 

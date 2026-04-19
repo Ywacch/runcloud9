@@ -14,7 +14,7 @@ import (
 
 func TestHandleGetTemplates(t *testing.T) {
 	t.Parallel()
-	h := NewHandler(nil, nil, nil, nil, nil, nil, nil)
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
@@ -55,7 +55,7 @@ func TestHandleGetTemplates(t *testing.T) {
 
 func TestHandleCreateDeployment_UnknownTemplate(t *testing.T) {
 	t.Parallel()
-	h := NewHandler(nil, nil, nil, nil, nil, nil, nil)
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
@@ -91,7 +91,7 @@ func TestHandleCreateDeployment_UnknownTemplate(t *testing.T) {
 
 func TestHandleCreateDeployment_SimulationRecommended_PartialTopology(t *testing.T) {
 	t.Parallel()
-	h := NewHandler(nil, nil, nil, nil, nil, nil, nil)
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
@@ -147,7 +147,7 @@ func TestHandleCreateDeployment_SimulationRecommended_PartialTopology(t *testing
 
 func TestHandleCreateDeployment_UnavailableRegistryTemplate(t *testing.T) {
 	t.Parallel()
-	h := NewHandler(nil, nil, nil, nil, nil, nil, nil)
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
@@ -192,7 +192,7 @@ func TestHandleCreateDeployment_UnavailableRegistryTemplate(t *testing.T) {
 func TestHandleStartLoadGen_RequiresTemplate(t *testing.T) {
 	t.Parallel()
 	lg := loadgen.NewLoadGenerator()
-	h := NewHandler(nil, nil, nil, nil, nil, nil, lg)
+	h := NewHandler(nil, nil, nil, nil, nil, nil, lg, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
@@ -217,7 +217,7 @@ func TestHandleStartLoadGen_RequiresTemplate(t *testing.T) {
 func TestHandleStartLoadGen_UnsupportedTemplate(t *testing.T) {
 	t.Parallel()
 	lg := loadgen.NewLoadGenerator()
-	h := NewHandler(nil, nil, nil, nil, nil, nil, lg)
+	h := NewHandler(nil, nil, nil, nil, nil, nil, lg, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
@@ -243,7 +243,7 @@ func TestHandleStartLoadGen_UnsupportedTemplate(t *testing.T) {
 func TestHandleStartLoadGen_URLShortenerOK(t *testing.T) {
 	t.Parallel()
 	lg := loadgen.NewLoadGenerator()
-	h := NewHandler(nil, nil, nil, nil, nil, nil, lg)
+	h := NewHandler(nil, nil, nil, nil, nil, nil, lg, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
