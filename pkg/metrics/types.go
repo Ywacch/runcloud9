@@ -69,6 +69,13 @@ type ComponentMetrics struct {
 	LBBackends  []string `json:"lbBackends,omitempty"`
 	// PerBackendRPS is set only for the lb component: RPS per app-server pod (from Prometheus pod label).
 	PerBackendRPS map[string]float64 `json:"perBackendRps,omitempty"`
+	// Capacity / utilization (component-specific; omit when unknown or N/A).
+	LBConnectionLimit float64 `json:"lbConnectionLimit,omitempty"` // nginx worker_connections (see deployer k8s LB template)
+	RedisMaxClients   float64 `json:"redisMaxClients,omitempty"`     // from redis_exporter, if scraped
+	MQMemoryUsed      float64 `json:"mqMemoryUsed,omitempty"`      // RabbitMQ management /api/nodes
+	MQMemoryLimit     float64 `json:"mqMemoryLimit,omitempty"`
+	MQSaturationRatio float64 `json:"mqSaturationRatio,omitempty"` // produce/consume; >1 means consumer falling behind
+	WorkerSaturation  float64 `json:"workerSaturation,omitempty"`  // queueDepth/100 capped at 1.0
 }
 
 func emptyPeakSummary() map[string]any {
