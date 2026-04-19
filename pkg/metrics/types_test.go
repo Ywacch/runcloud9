@@ -54,6 +54,39 @@ func TestPeakSummary(t *testing.T) {
 	}
 }
 
+func TestPeakSummaryFromHistory(t *testing.T) {
+	t.Parallel()
+	var rb RingBuffer
+	rb.Add(DeploymentMetrics{
+		Components: map[string]ComponentMetrics{
+			"app-server": {RequestRate: 10, P99Latency: 0.01, ErrorRate: 0.1, TotalRequests: 100},
+			"cache":      {CacheHitsLast9m: 90, CacheMissesLast9m: 10},
+			"db":         {DbQueryRate: 5, DbTotalQueries: 50},
+		},
+	})
+	rb.Add(DeploymentMetrics{
+		Components: map[string]ComponentMetrics{
+			"app-server": {RequestRate: 50, P99Latency: 0.05, ErrorRate: 2, TotalRequests: 500},
+			"cache":      {CacheHitsLast9m: 50, CacheMissesLast9m: 50},
+			"db":         {DbQueryRate: 20, DbTotalQueries: 200},
+		},
+	})
+	s := PeakSummaryFromHistory(&rb)
+	if s["peak_rps"] != 50.0 {
+		t.Fatalf("peak_rps: want 50, got %v", s["peak_rps"])
+	}
+	if s["peak_p99_ms"] != 50.0 {
+		t.Fatalf("peak_p99_ms: want 50, got %v", s["peak_p99_ms"])
+	}
+	if s["error_rate"] != 2.0 {
+		t.Fatalf("error_rate: want 2, got %v", s["error_rate"])
+	}
+	// Worst hit rate: second snap 50%, first 90% → min 50
+	if s["cache_hit_rate"] != 50.0 {
+		t.Fatalf("cache_hit_rate: want 50 (min), got %v", s["cache_hit_rate"])
+	}
+}
+
 func TestPeakSummary_MissingAppServer(t *testing.T) {
 	t.Parallel()
 	dm := &DeploymentMetrics{

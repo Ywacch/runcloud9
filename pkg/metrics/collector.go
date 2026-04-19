@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/loadgen"
@@ -44,6 +45,8 @@ type MetricsCollector struct {
 	eventBus      *EventBus
 	thresholds    *ThresholdDetector
 	cascade       *CascadeDetector
+	historyMu     sync.RWMutex
+	history       map[string]*RingBuffer // namespace → last 300 snapshots
 }
 
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
@@ -74,6 +77,52 @@ func (c *MetricsCollector) Cleanup(namespace string) {
 	if c.cascade != nil {
 		c.cascade.Cleanup(namespace)
 	}
+	c.historyMu.Lock()
+	if c.history != nil {
+		delete(c.history, namespace)
+	}
+	c.historyMu.Unlock()
+}
+
+// RingBufferFor returns the snapshot ring for a namespace, or nil if none yet.
+func (c *MetricsCollector) RingBufferFor(namespace string) *RingBuffer {
+	if c == nil || namespace == "" {
+		return nil
+	}
+	c.historyMu.RLock()
+	defer c.historyMu.RUnlock()
+	return c.history[namespace]
+}
+
+// SessionHistory returns oldest→newest snapshots for replay APIs (full buffer, not downsampled).
+func (c *MetricsCollector) SessionHistory(namespace string) []DeploymentMetrics {
+	rb := c.RingBufferFor(namespace)
+	if rb == nil {
+		return nil
+	}
+	return rb.All()
+}
+
+// PeakSummaryForNamespace prefers aggregates from session history when any snapshots exist;
+// otherwise falls back to a single last Collect snapshot (e.g. first teardown tick).
+func (c *MetricsCollector) PeakSummaryForNamespace(namespace string, last *DeploymentMetrics) map[string]any {
+	if c == nil {
+		return PeakSummary(last)
+	}
+	rb := c.RingBufferFor(namespace)
+	if rb != nil && rb.Len() > 0 {
+		return PeakSummaryFromHistory(rb)
+	}
+	return PeakSummary(last)
+}
+
+// DownsampledSessionHistory returns a compact series for JSON persistence at teardown.
+func (c *MetricsCollector) DownsampledSessionHistory(namespace string) []DeploymentMetrics {
+	rb := c.RingBufferFor(namespace)
+	if rb == nil || rb.Len() == 0 {
+		return nil
+	}
+	return rb.DownsampledHistory()
 }
 
 // prometheusResponse is the minimal shape of a Prometheus instant query response.
@@ -570,6 +619,18 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		ev = append(ev, c.cascade.Eval(namespace, dm)...)
 	}
 	dm.Events = ev
+
+	c.historyMu.Lock()
+	if c.history == nil {
+		c.history = make(map[string]*RingBuffer)
+	}
+	rb := c.history[namespace]
+	if rb == nil {
+		rb = &RingBuffer{}
+		c.history[namespace] = rb
+	}
+	rb.Add(*dm)
+	c.historyMu.Unlock()
 
 	return dm, nil
 }

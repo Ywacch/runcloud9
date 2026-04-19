@@ -112,6 +112,71 @@ func lifetimeHitRate(c ComponentMetrics) float64 {
 	return c.CacheHitsLast9m / total * 100
 }
 
+// PeakSummaryFromHistory aggregates peaks across all snapshots in the ring buffer.
+// Uses maxima for rates and latencies; uses minimum cache_hit_rate (worst) across the window.
+func PeakSummaryFromHistory(rb *RingBuffer) map[string]any {
+	if rb == nil || rb.Len() == 0 {
+		return emptyPeakSummary()
+	}
+	all := rb.All()
+	var peakRPS, peakP99ms, peakErr, maxTotalReq, maxHits, maxMisses, minHitRate float64 = 0, 0, 0, 0, 0, 0, -1
+	var maxDbRate, maxDbTotal float64
+	haveHitRate := false
+	for i := range all {
+		dm := &all[i]
+		app, ok := dm.Components["app-server"]
+		if !ok {
+			continue
+		}
+		cache := dm.Components["cache"]
+		db := dm.Components["db"]
+		p99ms := app.P99Latency * 1000
+		if app.RequestRate > peakRPS {
+			peakRPS = app.RequestRate
+		}
+		if p99ms > peakP99ms {
+			peakP99ms = p99ms
+		}
+		if app.ErrorRate > peakErr {
+			peakErr = app.ErrorRate
+		}
+		if app.TotalRequests > maxTotalReq {
+			maxTotalReq = app.TotalRequests
+		}
+		if cache.CacheHitsLast9m > maxHits {
+			maxHits = cache.CacheHitsLast9m
+		}
+		if cache.CacheMissesLast9m > maxMisses {
+			maxMisses = cache.CacheMissesLast9m
+		}
+		hr := lifetimeHitRate(cache)
+		if !haveHitRate || hr < minHitRate {
+			minHitRate = hr
+			haveHitRate = true
+		}
+		if db.DbQueryRate > maxDbRate {
+			maxDbRate = db.DbQueryRate
+		}
+		if db.DbTotalQueries > maxDbTotal {
+			maxDbTotal = db.DbTotalQueries
+		}
+	}
+	if !haveHitRate {
+		minHitRate = 0
+	}
+	return map[string]any{
+		"peak_rps":           peakRPS,
+		"peak_p99_ms":        peakP99ms,
+		"error_rate":         peakErr,
+		"total_requests":     maxTotalReq,
+		"total_cache_hits":   maxHits,
+		"total_cache_misses": maxMisses,
+		"cache_hit_rate":     minHitRate,
+		"db_query_rate":      maxDbRate,
+		"db_total_queries":   maxDbTotal,
+	}
+}
+
 // PeakSummary computes summary metrics from a single snapshot taken at teardown time.
 // UNDERSTAND: this is "latest-at-teardown", not a true session-long peak across the whole run.
 func PeakSummary(dm *DeploymentMetrics) map[string]any {
