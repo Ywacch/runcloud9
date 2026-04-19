@@ -146,8 +146,11 @@ func main() {
 						summary[k] = v
 					}
 				}
-				for k, v := range metrics.PeakSummary(dm) {
+				for k, v := range metricsCollector.PeakSummaryForNamespace(namespace, dm) {
 					summary[k] = v
+				}
+				if hist := metricsCollector.DownsampledSessionHistory(namespace); len(hist) > 0 {
+					summary["session_history"] = hist
 				}
 				summary["terminated_at"] = time.Now().Format(time.RFC3339)
 				if rowErr == nil {
