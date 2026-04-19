@@ -9,10 +9,18 @@ import (
 // DeploymentMetrics is the payload sent to the frontend every 2s.
 // One struct covers all components in the deployment.
 type DeploymentMetrics struct {
-	Timestamp  time.Time                   `json:"timestamp"`
-	Namespace  string                      `json:"namespace"`
-	Components map[string]ComponentMetrics `json:"components"`
-	LoadGen    *loadgen.LoadStats          `json:"loadgen,omitempty"`
+	Timestamp       time.Time                   `json:"timestamp"`
+	Namespace       string                      `json:"namespace"`
+	Components      map[string]ComponentMetrics `json:"components"`
+	TemplateMetrics map[string]float64          `json:"templateMetrics,omitempty"`
+	LoadGen         *loadgen.LoadStats          `json:"loadgen,omitempty"`
+}
+
+// ComparisonMetrics is reserved for side-by-side deployment streams (future).
+type ComparisonMetrics struct {
+	DeploymentA *DeploymentMetrics `json:"deploymentA"`
+	DeploymentB *DeploymentMetrics `json:"deploymentB"`
+	AlignedAt   time.Time          `json:"alignedAt"`
 }
 
 // ComponentMetrics holds per-pod metrics for one component (db, cache, app-server).
@@ -59,6 +67,8 @@ type ComponentMetrics struct {
 	// LB config from deploy-time ConfigMap annotations (not Prometheus).
 	LBAlgorithm string   `json:"lbAlgorithm,omitempty"`
 	LBBackends  []string `json:"lbBackends,omitempty"`
+	// PerBackendRPS is set only for the lb component: RPS per app-server pod (from Prometheus pod label).
+	PerBackendRPS map[string]float64 `json:"perBackendRps,omitempty"`
 }
 
 func emptyPeakSummary() map[string]any {

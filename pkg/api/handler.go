@@ -104,7 +104,13 @@ func (h *Handler) handleMetricsStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	metrics.StreamMetrics(ctx, conn, h.metricsCollector, namespace)
+	template := ""
+	if h.store != nil {
+		if row, err := h.store.GetDeployment(ctx, namespace); err == nil {
+			template = row.Template
+		}
+	}
+	metrics.StreamMetrics(ctx, conn, h.metricsCollector, namespace, template)
 }
 
 func (h *Handler) handleGetDeployment(w http.ResponseWriter, r *http.Request) {
@@ -602,9 +608,13 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 	}
 	// Persist final metrics summary before teardown (read-modify-write preserves 'seeded' and other fields).
 	if h.metricsCollector != nil && h.store != nil {
-		dm, err := h.metricsCollector.Collect(r.Context(), namespace)
+		tpl := ""
+		row, rowErr := h.store.GetDeployment(r.Context(), namespace)
+		if rowErr == nil {
+			tpl = row.Template
+		}
+		dm, err := h.metricsCollector.Collect(r.Context(), namespace, tpl)
 		if err == nil && dm != nil {
-			row, rowErr := h.store.GetDeployment(r.Context(), namespace)
 			summary := make(map[string]any)
 			if rowErr == nil && row.MetricsSummary != nil {
 				for k, v := range row.MetricsSummary {

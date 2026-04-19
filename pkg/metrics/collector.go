@@ -15,6 +15,22 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+/*
+GKE Autopilot cAdvisor limitations
+
+On GKE Autopilot, self-managed Prometheus (kube-prometheus-stack) often cannot scrape
+cAdvisor series (container_cpu_usage_seconds_total, container_memory_working_set_bytes)
+because Autopilot does not expose the kubelet metrics endpoint to non-system workloads.
+
+Fallback chain per component:
+  - App-server: process_cpu_seconds_total / process_resident_memory_bytes from app /metrics.
+  - DB/Cache/MQ/Worker: kube_pod_container_resource_requests (static requests, not live usage).
+    ComponentMetrics sets CPUIsEstimated / MemIsEstimated when that path is used.
+
+For real-time DB/Cache CPU on Autopilot, postgres_exporter/redis_exporter process_cpu
+could be scraped in future; not wired here yet.
+*/
+
 // MetricsCollector queries the Prometheus HTTP API for a specific deployment namespace.
 // We query Prometheus via its HTTP API, not a Go client library.
 // The API is simple: GET /api/v1/query?query=<promql>&time=<unix>
@@ -90,6 +106,51 @@ func (c *MetricsCollector) query(ctx context.Context, promql string) (float64, e
 		return 0, nil
 	}
 	return val, nil
+}
+
+// queryMultiResult runs a PromQL instant query and returns one float per series, keyed by labelKey (e.g. "pod").
+func (c *MetricsCollector) queryMultiResult(ctx context.Context, promql, labelKey string) map[string]float64 {
+	out := make(map[string]float64)
+	if c.prometheusURL == "" || labelKey == "" {
+		return out
+	}
+	endpoint := fmt.Sprintf("%s/api/v1/query", c.prometheusURL)
+	params := url.Values{"query": {promql}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?"+params.Encode(), nil)
+	if err != nil {
+		return out
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return out
+	}
+	defer resp.Body.Close()
+
+	var pr prometheusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+		return out
+	}
+	if pr.Status != "success" {
+		return out
+	}
+	for i := range pr.Data.Result {
+		r := &pr.Data.Result[i]
+		key := r.Metric[labelKey]
+		if key == "" {
+			continue
+		}
+		valStr, ok := r.Value[1].(string)
+		if !ok {
+			continue
+		}
+		var val float64
+		_, _ = fmt.Sscanf(valStr, "%f", &val)
+		if math.IsNaN(val) || math.IsInf(val, 0) {
+			continue
+		}
+		out[key] = val
+	}
+	return out
 }
 
 // queryWithFallback tries the primary PromQL first. If it errors, uses fallback.
@@ -219,7 +280,8 @@ func (c *MetricsCollector) lbMetadataFromCluster(ctx context.Context, namespace 
 }
 
 // Collect queries all metrics for a deployment namespace and returns a snapshot.
-func (c *MetricsCollector) Collect(ctx context.Context, namespace string) (*DeploymentMetrics, error) {
+// template is the deployment template id (e.g. social-feed); empty skips template-specific PromQL.
+func (c *MetricsCollector) Collect(ctx context.Context, namespace, template string) (*DeploymentMetrics, error) {
 	dm := &DeploymentMetrics{
 		Timestamp:  time.Now(),
 		Namespace:  namespace,
@@ -429,7 +491,15 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace string) (*Depl
 	algo, backends := c.lbMetadataFromCluster(ctx, ns)
 	cmLB.LBAlgorithm = algo
 	cmLB.LBBackends = backends
+	if c.prometheusURL != "" {
+		cmLB.PerBackendRPS = c.queryMultiResult(ctx,
+			fmt.Sprintf(`sum by (pod) (rate(http_requests_total{namespace=%q,pod=~"app-server.*"}[30s]))`, ns),
+			"pod",
+		)
+	}
 	dm.Components["lb"] = cmLB
+
+	dm.TemplateMetrics = c.collectTemplateMetrics(ctx, nsSel, template)
 
 	// Attach load generator stats to the metrics snapshot.
 	// UNDERSTAND: load stats are embedded in the existing metrics stream
