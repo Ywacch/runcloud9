@@ -46,6 +46,8 @@ type ComponentMetrics struct {
 	P50Latency    float64 `json:"p50Latency"` // seconds (Prometheus histogram), 0 if N/A
 	P95Latency    float64 `json:"p95Latency"` // seconds
 	P99Latency    float64 `json:"p99Latency"` // seconds, 0 if not applicable
+	// AvgLatency is used for components that don't expose histogram buckets (e.g. Redis commands).
+	AvgLatency float64 `json:"avgLatency,omitempty"` // seconds
 	CacheHits     float64 `json:"cacheHits"`   // hits/sec, 0 if not applicable
 	CacheMisses   float64 `json:"cacheMisses"` // misses/sec, 0 if not applicable
 	// CacheHitsLast9m / CacheMissesLast9m are Prometheus increase(...[9m]) sums (estimated counts in window).
