@@ -58,6 +58,7 @@ func buildConnectionRules() map[[2]string]ConnectionRule {
 	mqToDB := "Message queues don't write directly to databases; use a worker"
 	mqToLB := "Message queues don't route through load balancers"
 	mqToCache := "Message queues don't write to caches directly"
+	mqToWorker := "Workers depend on message queues; use worker -> mq (not mq -> worker)"
 	mqToMQ := "Queue chaining is not supported"
 	workerToApp := "Workers don't call back to app-servers"
 	workerToLB := "Workers process jobs from queues, they don't route through load balancers"
@@ -102,7 +103,7 @@ func buildConnectionRules() map[[2]string]ConnectionRule {
 	pair("cache", "worker", invalid(cacheToWorker))
 
 	// mq -> *
-	pair("mq", "worker", vs)
+	pair("mq", "worker", invalid(mqToWorker))
 	pair("mq", "lb", invalid(mqToLB))
 	pair("mq", "app-server", invalid(mqToApp))
 	pair("mq", "db", invalid(mqToDB))
@@ -112,7 +113,7 @@ func buildConnectionRules() map[[2]string]ConnectionRule {
 	// worker -> *
 	pair("worker", "db", vs)
 	pair("worker", "cache", vs)
-	pair("worker", "mq", unsup("Republishing from workers to the queue is not wired yet"))
+	pair("worker", "mq", vs)
 	pair("worker", "lb", invalid(workerToLB))
 	pair("worker", "app-server", invalid(workerToApp))
 	pair("worker", "worker", invalid(workerToWorker))

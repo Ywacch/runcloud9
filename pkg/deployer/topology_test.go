@@ -318,8 +318,8 @@ func TestDeriveEnvVars_AppServerConnectedToDBAndCache(t *testing.T) {
 	}
 }
 
-// Ecommerce-style: mq -> worker -> db; MQ env must come from the inbound mq edge.
-func TestDeriveEnvVars_WorkerGetsMQFromInboundEdge(t *testing.T) {
+// Worker dependencies are outbound: worker -> mq and worker -> db.
+func TestDeriveEnvVars_WorkerGetsMQFromOutboundEdge(t *testing.T) {
 	design := DeploymentDesign{
 		Nodes: []DeploymentNode{
 			{ID: "mq1", Type: "mq", Name: "mq"},
@@ -327,7 +327,7 @@ func TestDeriveEnvVars_WorkerGetsMQFromInboundEdge(t *testing.T) {
 			{ID: "d1", Type: "db", Name: "db"},
 		},
 		Connections: []DeploymentConn{
-			{SourceID: "mq1", TargetID: "w1"},
+			{SourceID: "w1", TargetID: "mq1"},
 			{SourceID: "w1", TargetID: "d1"},
 		},
 	}
@@ -421,6 +421,88 @@ func TestValidateTopology_AppServerDbWithProxyCacheForbidden(t *testing.T) {
 	}
 	if want := "must not connect directly to a db node"; !strings.Contains(err.Error(), want) {
 		t.Fatalf("expected error to contain %q, got %q", want, err.Error())
+	}
+}
+
+func TestValidateTopology_WorkerWithoutDB(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "w1", Type: "worker", Name: "Worker"},
+			{ID: "mq1", Type: "mq", Name: "MQ"},
+			{ID: "d1", Type: "db", Name: "DB"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "w1", TargetID: "mq1"},
+		},
+	}
+
+	err := ValidateTopology(design)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	if want := "worker -> db"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("expected error to contain %q, got %q", want, err.Error())
+	}
+}
+
+func TestValidateTopology_WorkerWithoutMQ(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "w1", Type: "worker", Name: "Worker"},
+			{ID: "mq1", Type: "mq", Name: "MQ"},
+			{ID: "d1", Type: "db", Name: "DB"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "w1", TargetID: "d1"},
+		},
+	}
+
+	err := ValidateTopology(design)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	if want := "worker -> mq"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("expected error to contain %q, got %q", want, err.Error())
+	}
+}
+
+func TestValidateTopology_WorkerInboundMQRejected(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "w1", Type: "worker", Name: "Worker"},
+			{ID: "mq1", Type: "mq", Name: "MQ"},
+			{ID: "d1", Type: "db", Name: "DB"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "mq1", TargetID: "w1"},
+			{SourceID: "w1", TargetID: "d1"},
+		},
+	}
+
+	err := ValidateTopology(design)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	if want := "use worker -> mq"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("expected error to contain %q, got %q", want, err.Error())
+	}
+}
+
+func TestValidateTopology_WorkerWithAllDeps(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "w1", Type: "worker", Name: "Worker"},
+			{ID: "mq1", Type: "mq", Name: "MQ"},
+			{ID: "d1", Type: "db", Name: "DB"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "w1", TargetID: "mq1"},
+			{SourceID: "w1", TargetID: "d1"},
+		},
+	}
+
+	if err := ValidateTopology(design); err != nil {
+		t.Fatalf("expected valid topology, got %v", err)
 	}
 }
 

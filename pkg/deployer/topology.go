@@ -131,6 +131,44 @@ func ValidateTopology(design DeploymentDesign) error {
 		}
 	}
 
+	for _, workerNode := range design.Nodes {
+		if workerNode.Type != "worker" {
+			continue
+		}
+		hasDBDep := false
+		hasMQDep := false
+		hasInboundMQ := false
+		for _, conn := range design.Connections {
+			if conn.SourceID == workerNode.ID {
+				target, ok := nodeMap[conn.TargetID]
+				if !ok {
+					continue
+				}
+				if target.Type == "db" {
+					hasDBDep = true
+				}
+				if target.Type == "mq" {
+					hasMQDep = true
+				}
+			}
+			if conn.TargetID == workerNode.ID {
+				src, ok := nodeMap[conn.SourceID]
+				if ok && src.Type == "mq" {
+					hasInboundMQ = true
+				}
+			}
+		}
+		if !hasDBDep {
+			return fmt.Errorf(`worker %q must connect to a db node (add worker -> db edge)`, workerNode.Name)
+		}
+		if !hasMQDep {
+			if hasInboundMQ {
+				return fmt.Errorf(`invalid worker/mq edge direction for worker %q: found mq -> worker; use worker -> mq`, workerNode.Name)
+			}
+			return fmt.Errorf(`worker %q must connect to an mq node (add worker -> mq edge)`, workerNode.Name)
+		}
+	}
+
 	// UNDERSTAND: DeploymentConn uses source -> target where the source DEPENDS ON the target.
 	// Kahn's algorithm yields dependency-graph sources first, so we reverse the result to ensure
 	// infrastructure (targets) deploys before application (sources). DeploymentOrder also performs
@@ -386,22 +424,6 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 		case "mq":
 			env["MQ_HOST"] = "mq"
 			env["MQ_PORT"] = "5672"
-		}
-	}
-
-	// Workers consume from the queue via inbound edges (mq -> worker), not outbound to mq.
-	if node.Type == "worker" {
-		for _, conn := range design.Connections {
-			if conn.TargetID != node.ID {
-				continue
-			}
-			src, ok := nodeMap[conn.SourceID]
-			if !ok || src.Type != "mq" {
-				continue
-			}
-			env["MQ_HOST"] = "mq"
-			env["MQ_PORT"] = "5672"
-			break
 		}
 	}
 
