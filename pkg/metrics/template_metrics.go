@@ -27,7 +27,8 @@ func (c *MetricsCollector) collectTemplateMetrics(ctx context.Context, nsSel, te
 		put("feed.push_p95", fmt.Sprintf(`histogram_quantile(0.95, sum(rate(social_feed_latency_seconds_bucket{%s,mode="push"}[30s])) by (le))`, nsSel))
 		put("worker.processed", fmt.Sprintf(`sum(social_worker_processed_total{%s})`, nsSel))
 		put("worker.errors", fmt.Sprintf(`sum(social_worker_errors_total{%s})`, nsSel))
-		put("worker.fanout_p99", fmt.Sprintf(`histogram_quantile(0.99, sum(rate(social_worker_fanout_size_bucket{%s}[30s])) by (le))`, nsSel))
+		put("worker.fanout_size_p99", fmt.Sprintf(`histogram_quantile(0.99, sum(rate(social_worker_fanout_size_bucket{%s}[30s])) by (le))`, nsSel))
+		put("worker.latency_p99", fmt.Sprintf(`histogram_quantile(0.99, sum(rate(social_worker_processing_duration_seconds_bucket{%s}[30s])) by (le))`, nsSel))
 		put("mq.publish_total", fmt.Sprintf(`sum(social_mq_publish_total{%s})`, nsSel))
 		put("mq.publish_errors", fmt.Sprintf(`sum(social_mq_publish_errors_total{%s})`, nsSel))
 

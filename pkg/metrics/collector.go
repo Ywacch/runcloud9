@@ -323,29 +323,29 @@ func (c *MetricsCollector) kubeLimitMem(ctx context.Context, ns, podRe, containe
 	return int64(v)
 }
 
-// queryCPUForAppServer uses process_cpu_seconds_total from the app's /metrics (works on GKE Autopilot
+// queryProcessCPU uses process_cpu_seconds_total from the app's /metrics (works on GKE Autopilot
 // where cAdvisor series are often unavailable to self-managed Prometheus).
-func (c *MetricsCollector) queryCPUForAppServer(ctx context.Context, ns, podRe string) (float64, bool) {
+func (c *MetricsCollector) queryProcessCPU(ctx context.Context, ns, podRe, fallbackContainer string) (float64, bool) {
 	primary := fmt.Sprintf(
 		`sum(rate(process_cpu_seconds_total{namespace=%q,pod=~%q}[30s]))`,
 		ns, podRe,
 	)
 	fallback := fmt.Sprintf(
-		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~%q,container="app-server",resource="cpu"})`,
-		ns, podRe,
+		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~%q,container="%s",resource="cpu"})`,
+		ns, podRe, fallbackContainer,
 	)
 	return c.queryWithFallbackEstimated(ctx, primary, fallback)
 }
 
-// queryMemoryForAppServer uses process_resident_memory_bytes from the app's /metrics.
-func (c *MetricsCollector) queryMemoryForAppServer(ctx context.Context, ns, podRe string) (float64, bool) {
+// queryProcessMemory uses process_resident_memory_bytes from the app's /metrics.
+func (c *MetricsCollector) queryProcessMemory(ctx context.Context, ns, podRe, fallbackContainer string) (float64, bool) {
 	primary := fmt.Sprintf(
 		`sum(process_resident_memory_bytes{namespace=%q,pod=~%q})`,
 		ns, podRe,
 	)
 	fallback := fmt.Sprintf(
-		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~%q,container="app-server",resource="memory"})`,
-		ns, podRe,
+		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~%q,container="%s",resource="memory"})`,
+		ns, podRe, fallbackContainer,
 	)
 	return c.queryWithFallbackEstimated(ctx, primary, fallback)
 }
@@ -495,8 +495,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 
 	// App-server: HTTP + cache counters from url-shortener /metrics
 	cmApp := ComponentMetrics{Component: "app-server"}
-	appCPU, appCPUEst := c.queryCPUForAppServer(ctx, ns, "app-server.*")
-	appMem, appMemEst := c.queryMemoryForAppServer(ctx, ns, "app-server.*")
+	appCPU, appCPUEst := c.queryProcessCPU(ctx, ns, "app-server.*", "app-server")
+	appMem, appMemEst := c.queryProcessMemory(ctx, ns, "app-server.*", "app-server")
 	cmApp.CPUUsage = appCPU
 	cmApp.CPUIsEstimated = appCPUEst
 	cmApp.MemoryBytes = int64(appMem)
@@ -645,23 +645,35 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	mqMemUsed, mqMemLim := c.scrapeRabbitMQNodes(ctx, ns)
 	cmMQ.MQMemoryUsed = mqMemUsed
 	cmMQ.MQMemoryLimit = mqMemLim
-	if cmMQ.ConsumeRate > 0 {
-		cmMQ.MQSaturationRatio = cmMQ.ProduceRate / cmMQ.ConsumeRate
-	} else if cmMQ.ProduceRate > 0 {
-		cmMQ.MQSaturationRatio = 10
+	mqPubRate, _ := c.query(ctx, fmt.Sprintf(`sum(rate({__name__=~".*_mq_publish_total",namespace=%q}[30s]))`, ns))
+	if mqPubRate > 0 {
+		cmMQ.ProduceRate = mqPubRate
 	}
-	dm.Components["mq"] = cmMQ
 
 	cmWorker := ComponentMetrics{Component: "worker"}
-	wCPU, wCPUEst := c.queryCPUPair(ctx, ns, "worker.*", "worker")
-	wMem, wMemEst := c.queryMemPair(ctx, ns, "worker.*", "worker")
+	wCPU, wCPUEst := c.queryProcessCPU(ctx, ns, "worker.*", "worker")
+	wMem, wMemEst := c.queryProcessMemory(ctx, ns, "worker.*", "worker")
 	cmWorker.CPUUsage = wCPU
 	cmWorker.CPUIsEstimated = wCPUEst
 	cmWorker.MemoryBytes = int64(wMem)
 	cmWorker.MemIsEstimated = wMemEst
 	cmWorker.CPULimit = c.kubeLimitCPU(ctx, ns, "worker.*", "worker")
 	cmWorker.MemoryLimit = c.kubeLimitMem(ctx, ns, "worker.*", "worker")
-	cmWorker.RequestRate = cmMQ.ConsumeRate
+	workerRPS, _ := c.query(ctx, fmt.Sprintf(`sum(rate({__name__=~".*_worker_processed_total",namespace=%q}[30s]))`, ns))
+	if workerRPS > 0 {
+		cmWorker.RequestRate = workerRPS
+	} else {
+		cmWorker.RequestRate = cmMQ.ConsumeRate
+	}
+	workerP99, _ := c.query(ctx, fmt.Sprintf(
+		`histogram_quantile(0.99, sum(rate({__name__=~".*_worker_processing_duration_seconds_bucket",namespace=%q}[30s])) by (le))`,
+		ns,
+	))
+	if workerP99 > 0 && !math.IsNaN(workerP99) && !math.IsInf(workerP99, 0) {
+		cmWorker.P99Latency = workerP99
+	}
+	workerErrors, _ := c.query(ctx, fmt.Sprintf(`sum(rate({__name__=~".*_worker_errors_total",namespace=%q}[30s]))`, ns))
+	cmWorker.ErrorRate = workerErrors
 	if cmMQ.QueueDepth > 0 {
 		sat := cmMQ.QueueDepth / 100.0
 		if sat > 1.0 {
@@ -670,6 +682,15 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		cmWorker.WorkerSaturation = sat
 	}
 	dm.Components["worker"] = cmWorker
+	if workerRPS > 0 {
+		cmMQ.ConsumeRate = workerRPS
+	}
+	if cmMQ.ConsumeRate > 0 {
+		cmMQ.MQSaturationRatio = cmMQ.ProduceRate / cmMQ.ConsumeRate
+	} else if cmMQ.ProduceRate > 0 {
+		cmMQ.MQSaturationRatio = 10
+	}
+	dm.Components["mq"] = cmMQ
 
 	cmLB := ComponentMetrics{Component: "lb"}
 	lbCPU, lbCPUEst := c.queryCPUPair(ctx, ns, "lb.*", "nginx")

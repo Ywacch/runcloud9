@@ -428,18 +428,33 @@ func (k *K8sDeployer) deployAppServer(ctx context.Context, cfg DeployConfig, res
 func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, resources corev1.ResourceRequirements, replicas int32) error {
 	envVars := DeriveEnvVars(cfg.Node, cfg.Design)
 	labels := map[string]string{"app": "worker", "deployment": cfg.Namespace}
+	workerAnnotations := map[string]string{
+		"prometheus.io/scrape": "true",
+		"prometheus.io/port":   "8080",
+		"prometheus.io/path":   "/metrics",
+	}
 	img := workerImage(cfg.Design.Template)
 
 	ctr := corev1.Container{
 		Name:      "worker",
 		Image:     img,
+		Ports:     []corev1.ContainerPort{{ContainerPort: 8080}},
 		Resources: resources,
 		Env:       envMapToK8s(envVars),
+		ReadinessProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{Path: "/health", Port: intstr.FromInt32(8080)},
+			},
+			InitialDelaySeconds: 5,
+			PeriodSeconds:       3,
+			FailureThreshold:    10,
+		},
 	}
 	// busybox exits immediately without a long-running command — keep pod Ready for QA placeholders.
 	if img == imageBusybox || strings.HasSuffix(img, "/"+imageBusybox) {
-		ctr.Command = []string{"sleep"}
-		ctr.Args = []string{"infinity"}
+		ctr.Command = []string{"sleep", "infinity"}
+		ctr.Ports = nil
+		ctr.ReadinessProbe = nil
 	}
 
 	dep := &appsv1.Deployment{
@@ -448,7 +463,7 @@ func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, resour
 			Replicas: ptr(replicas),
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: workerAnnotations},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{ctr},
 				},
