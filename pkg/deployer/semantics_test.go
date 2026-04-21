@@ -56,7 +56,7 @@ func TestAssessTopology_SocialFeedPreset(t *testing.T) {
 		Connections: []DeploymentConn{
 			{SourceID: "lb", TargetID: "app"},
 			{SourceID: "app", TargetID: "mq"},
-			{SourceID: "mq", TargetID: "worker"},
+			{SourceID: "worker", TargetID: "mq"},
 			{SourceID: "worker", TargetID: "db"},
 			{SourceID: "app", TargetID: "cache"},
 			{SourceID: "app", TargetID: "db"},
