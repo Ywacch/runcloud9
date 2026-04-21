@@ -151,24 +151,72 @@ func startMetricsHTTP(pool *pgxpool.Pool, conn *amqp.Connection) *http.Server {
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("worker panic", "recover", r)
+			os.Exit(1)
+		}
+	}()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
+	slog.Info("ecommerce-worker startup begin")
 	mqHost := requiredEnv("MQ_HOST", "MQ_HOST required for worker")
 	mqPort := envOrDefault("MQ_PORT", "5672")
+	slog.Info("startup config resolved", "mqHost", mqHost, "mqPort", mqPort)
 
-	pool, err := openDB(ctx)
-	if err != nil {
-		slog.Error("db connect failed", "error", err)
-		os.Exit(1)
+	// DB connection with retry so worker doesn't crash-loop while dependencies boot.
+	var pool *pgxpool.Pool
+	for attempt := 1; ; attempt++ {
+		var err error
+		slog.Info("attempting db connect", "attempt", attempt)
+		pool, err = openDB(ctx)
+		if err == nil {
+			slog.Info("db connect established", "attempt", attempt)
+			break
+		}
+		if attempt >= 30 {
+			slog.Error("db connect failed after retries", "error", err, "attempts", attempt)
+			os.Exit(1)
+		}
+		delay := time.Duration(attempt) * time.Second
+		if delay > 10*time.Second {
+			delay = 10 * time.Second
+		}
+		slog.Warn("db connect failed, retrying", "error", err, "attempt", attempt, "retryIn", delay)
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			os.Exit(0)
+		}
 	}
 	defer pool.Close()
 
-	conn, err := amqp.Dial(fmt.Sprintf("amqp://cloud9:cloud9@%s:%s/", mqHost, mqPort))
-	if err != nil {
-		slog.Error("mq dial failed", "error", err)
-		os.Exit(1)
+	// AMQP connection with retry for RabbitMQ startup lag.
+	var conn *amqp.Connection
+	for attempt := 1; ; attempt++ {
+		var err error
+		slog.Info("attempting mq dial", "attempt", attempt, "mqHost", mqHost, "mqPort", mqPort)
+		conn, err = amqp.Dial(fmt.Sprintf("amqp://cloud9:cloud9@%s:%s/", mqHost, mqPort))
+		if err == nil {
+			slog.Info("mq dial established", "attempt", attempt)
+			break
+		}
+		if attempt >= 30 {
+			slog.Error("mq dial failed after retries", "error", err, "attempts", attempt)
+			os.Exit(1)
+		}
+		delay := time.Duration(attempt) * time.Second
+		if delay > 10*time.Second {
+			delay = 10 * time.Second
+		}
+		slog.Warn("mq dial failed, retrying", "error", err, "attempt", attempt, "retryIn", delay)
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			os.Exit(0)
+		}
 	}
 	defer conn.Close()
 
@@ -177,12 +225,15 @@ func main() {
 		slog.Error("mq channel failed", "error", err)
 		os.Exit(1)
 	}
+	slog.Info("mq channel opened")
 	defer ch.Close()
 
+	slog.Info("declaring queue", "queue", "orders")
 	if _, err := ch.QueueDeclare("orders", true, false, false, false, nil); err != nil {
-		slog.Error("queue declare failed", "error", err)
+		slog.Error("queue declare failed", "queue", "orders", "error", err)
 		os.Exit(1)
 	}
+	slog.Info("queue declared", "queue", "orders")
 
 	srv := startMetricsHTTP(pool, conn)
 	defer func() {
@@ -196,6 +247,7 @@ func main() {
 		slog.Error("mq consume failed", "error", err)
 		os.Exit(1)
 	}
+	slog.Info("mq consumer registered", "queue", "orders")
 
 	slog.Info("ecommerce-worker started", "queue", "orders")
 
