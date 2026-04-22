@@ -29,3 +29,72 @@ topology:
     position: [4, 0]
   - type: database
     position: [6, 0]
+preset:
+  nodes:
+    - id: lb-1
+      type: load_balancer
+      position: [-4, 0.3, 0]
+      label: Load Balancer
+      config:
+        algorithm: round-robin
+    - id: app-1
+      type: compute
+      position: [-1, 0.3, 0]
+      label: App Server
+      config:
+        replicas: 1
+        instanceSize: small
+    - id: mq-1
+      type: message_queue
+      position: [2, 0.3, -1.4]
+      label: Message Queue
+      config:
+        engine: rabbitmq
+        durable: true
+    - id: worker-1
+      type: worker
+      position: [5, 0.3, -1.4]
+      label: Worker
+      config:
+        replicas: 1
+        instanceSize: small
+    - id: cache-1
+      type: cache
+      position: [2, 0.3, 1.4]
+      label: Redis
+      config:
+        strategy: cache-aside
+        evictionPolicy: allkeys-lru
+    - id: db-1
+      type: database
+      position: [5, 0.3, 1.4]
+      label: PostgreSQL
+      config:
+        engine: postgresql
+        storageGB: 10
+        maxConnections: 100
+  edges:
+    - id: e-lb-app
+      sourceId: lb-1
+      targetId: app-1
+      protocol: http
+    - id: e-app-mq
+      sourceId: app-1
+      targetId: mq-1
+      protocol: http
+    - id: e-worker-mq
+      sourceId: worker-1
+      targetId: mq-1
+      protocol: tcp
+    - id: e-worker-db
+      sourceId: worker-1
+      targetId: db-1
+      protocol: tcp
+    - id: e-app-cache
+      sourceId: app-1
+      targetId: cache-1
+      protocol: tcp
+    - id: e-app-db
+      sourceId: app-1
+      targetId: db-1
+      protocol: tcp

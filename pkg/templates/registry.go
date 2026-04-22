@@ -35,11 +35,35 @@ type TemplateSpec struct {
 	Premium        bool           `json:"premium"`
 	Tags           []string       `json:"tags"`
 	Topology       []TopologyHint `json:"topology"`
+	Preset         *TemplatePreset `json:"preset,omitempty"`
 	AppServerImage string         `json:"-"`
 	WorkerImage    string         `json:"-"`
 	Simulatable    bool           `json:"simulatable"`
 	Deployable     bool           `json:"deployable"`
 	SeedConfig     *SeedConfig    `json:"-"`
+}
+
+// PresetNode is a fully-configured node for canvas population.
+type PresetNode struct {
+	ID       string         `json:"id"`
+	Type     string         `json:"type"`
+	Position [3]float64     `json:"position"` // x, y, z
+	Label    string         `json:"label"`
+	Config   map[string]any `json:"config"`
+}
+
+// PresetEdge is a directed connection for canvas population.
+type PresetEdge struct {
+	ID       string `json:"id"`
+	SourceID string `json:"sourceId"`
+	TargetID string `json:"targetId"`
+	Protocol string `json:"protocol"`
+}
+
+// TemplatePreset is the full canvas snapshot shipped with the template.
+type TemplatePreset struct {
+	Nodes []PresetNode `json:"nodes"`
+	Edges []PresetEdge `json:"edges"`
 }
 
 // TopologyHint is a simplified node for the frontend's mini preview.
@@ -66,6 +90,21 @@ type templateDef struct {
 		Type     string     `yaml:"type"`
 		Position [2]float64 `yaml:"position"`
 	} `yaml:"topology"`
+	Preset *struct {
+		Nodes []struct {
+			ID       string         `yaml:"id"`
+			Type     string         `yaml:"type"`
+			Position [3]float64     `yaml:"position"`
+			Label    string         `yaml:"label"`
+			Config   map[string]any `yaml:"config"`
+		} `yaml:"nodes"`
+		Edges []struct {
+			ID       string `yaml:"id"`
+			SourceID string `yaml:"sourceId"`
+			TargetID string `yaml:"targetId"`
+			Protocol string `yaml:"protocol"`
+		} `yaml:"edges"`
+	} `yaml:"preset"`
 	Seed *struct {
 		DBType    string `yaml:"dbType"`
 		DumpPath  string `yaml:"dumpPath"`
@@ -182,6 +221,30 @@ func defToSpec(def *templateDef) TemplateSpec {
 			Container: def.Seed.Container,
 			PodLabel:  def.Seed.PodLabel,
 		}
+	}
+	if def.Preset != nil {
+		preset := &TemplatePreset{
+			Nodes: make([]PresetNode, 0, len(def.Preset.Nodes)),
+			Edges: make([]PresetEdge, 0, len(def.Preset.Edges)),
+		}
+		for _, n := range def.Preset.Nodes {
+			preset.Nodes = append(preset.Nodes, PresetNode{
+				ID:       n.ID,
+				Type:     n.Type,
+				Position: n.Position,
+				Label:    n.Label,
+				Config:   n.Config,
+			})
+		}
+		for _, e := range def.Preset.Edges {
+			preset.Edges = append(preset.Edges, PresetEdge{
+				ID:       e.ID,
+				SourceID: e.SourceID,
+				TargetID: e.TargetID,
+				Protocol: e.Protocol,
+			})
+		}
+		spec.Preset = preset
 	}
 	return spec
 }
