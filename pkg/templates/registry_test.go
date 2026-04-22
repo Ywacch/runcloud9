@@ -15,6 +15,9 @@ func TestGetTemplate(t *testing.T) {
 	if u == nil || !u.Available || u.Name != "URL Shortener" {
 		t.Fatalf("url-shortener: %+v", u)
 	}
+	if u.Preset == nil || len(u.Preset.Nodes) == 0 || len(u.Preset.Edges) == 0 {
+		t.Fatalf("url-shortener preset missing/empty: %+v", u.Preset)
+	}
 	if u.SeedConfig == nil || u.SeedConfig.DumpPath != "url-shortener/urls.dump" {
 		t.Fatalf("url-shortener seed config: %+v", u.SeedConfig)
 	}
@@ -27,6 +30,9 @@ func TestGetTemplate(t *testing.T) {
 	}
 	if !e.Simulatable || !e.Deployable {
 		t.Fatalf("ecommerce should be simulatable and deployable: %+v", e)
+	}
+	if e.Preset == nil {
+		t.Fatal("ecommerce preset should be present")
 	}
 	// Returned pointer must not alias the next call.
 	u2 := GetTemplate("url-shortener")
@@ -99,5 +105,32 @@ func TestRegistryJSON_IncludesSimulatableDeployable(t *testing.T) {
 	}
 	if strings.Contains(s, `"appServerImage"`) {
 		t.Fatal("appServerImage should be json:\"-\" omitted from API")
+	}
+	if !strings.Contains(s, `"preset"`) {
+		t.Fatal("preset should be included in API JSON")
+	}
+}
+
+func TestSocialFeedPreset_UsesCanonicalWorkerToMQEdge(t *testing.T) {
+	t.Parallel()
+	sf := GetTemplate("social-feed")
+	if sf == nil || sf.Preset == nil {
+		t.Fatalf("social-feed preset missing: %+v", sf)
+	}
+	hasWorkerToMQ := false
+	hasMQToWorker := false
+	for _, e := range sf.Preset.Edges {
+		if e.SourceID == "worker-1" && e.TargetID == "mq-1" {
+			hasWorkerToMQ = true
+		}
+		if e.SourceID == "mq-1" && e.TargetID == "worker-1" {
+			hasMQToWorker = true
+		}
+	}
+	if !hasWorkerToMQ {
+		t.Fatal("social-feed preset missing canonical worker->mq edge")
+	}
+	if hasMQToWorker {
+		t.Fatal("social-feed preset must not include legacy mq->worker edge")
 	}
 }
