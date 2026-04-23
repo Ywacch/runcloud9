@@ -38,6 +38,7 @@ type CreateDeploymentParams struct {
 // DeploymentRow represents a row from cloud_deployments (subset of columns).
 type DeploymentRow struct {
 	ID             string         `json:"id"`
+	UserID         string         `json:"user_id"`
 	Namespace      string         `json:"namespace"`
 	Template       string         `json:"template"`
 	Archetype      string         `json:"archetype"`
@@ -164,7 +165,7 @@ func (s *DeploymentStore) GetStaleDeployments(ctx context.Context) ([]Deployment
 // GetDeployment returns the single row matching the namespace.
 func (s *DeploymentStore) GetDeployment(ctx context.Context, namespace string) (DeploymentRow, error) {
 	data, _, err := s.client.From("cloud_deployments").
-		Select("id,namespace,template,archetype,status,design,metrics_summary,expires_at,created_at", "exact", false).
+		Select("id,user_id,namespace,template,archetype,status,design,metrics_summary,expires_at,created_at", "exact", false).
 		Eq("namespace", namespace).
 		Limit(1, "").
 		Execute()

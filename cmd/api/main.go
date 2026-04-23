@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/api"
@@ -22,8 +23,23 @@ import (
 )
 
 func withCORS(next http.Handler) http.Handler {
+	raw := os.Getenv("ALLOWED_ORIGINS")
+	if raw == "" {
+		raw = "http://localhost:3000"
+	}
+	allowedSet := make(map[string]bool)
+	for _, origin := range strings.Split(raw, ",") {
+		o := strings.TrimSpace(origin)
+		if o != "" {
+			allowedSet[o] = true
+		}
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
+		origin := r.Header.Get("Origin")
+		if allowedSet[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
@@ -102,6 +118,9 @@ func main() {
 	supabaseKey := os.Getenv("SUPABASE_SERVICE_KEY")
 	if supabaseURL == "" || supabaseKey == "" {
 		log.Fatal("SUPABASE_URL and SUPABASE_SERVICE_KEY are required")
+	}
+	if os.Getenv("ENV") == "production" && os.Getenv("SUPABASE_JWT_SECRET") == "" {
+		log.Fatal("SUPABASE_JWT_SECRET must be set in production")
 	}
 
 	deployers, clientset := buildDeployers()
