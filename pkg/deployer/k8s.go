@@ -385,10 +385,11 @@ func (k *K8sDeployer) deployAppServer(ctx context.Context, cfg DeployConfig, res
 				ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: appAnnotations},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{{
-						Name:      "app-server",
-						Image:     appServerImage(cfg.Design.Template),
-						Ports:     []corev1.ContainerPort{{ContainerPort: 8080}},
-						Resources: resources,
+						Name:            "app-server",
+						Image:           appServerImage(cfg.Design.Template),
+						ImagePullPolicy: corev1.PullAlways,
+						Ports:           []corev1.ContainerPort{{ContainerPort: 8080}},
+						Resources:       resources,
 						// UNDERSTAND: we use HTTP readiness to make PodReady reflect /health.
 						ReadinessProbe: &corev1.Probe{
 							ProbeHandler: corev1.ProbeHandler{
@@ -436,10 +437,11 @@ func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, resour
 	img := workerImage(cfg.Design.Template)
 
 	ctr := corev1.Container{
-		Name:      "worker",
-		Image:     img,
-		Ports:     []corev1.ContainerPort{{ContainerPort: 8080}},
-		Resources: resources,
+		Name:            "worker",
+		Image:           img,
+		ImagePullPolicy: corev1.PullAlways,
+		Ports:           []corev1.ContainerPort{{ContainerPort: 8080}},
+		Resources:       resources,
 		Env:       envMapToK8s(envVars),
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
@@ -793,7 +795,7 @@ func workerImage(template string) string {
 func cacheImage(strategy string) string {
 	registry := os.Getenv("TEMPLATE_IMAGE_REGISTRY")
 	if registry == "" {
-		registry = "europe-west1-docker.pkg.dev/ganymede-cloud/cloud9-images"
+		registry = "us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images"
 	}
 	// UNDERSTAND: cache-aside uses plain Redis; proxy strategies use a custom Go service.
 	switch strategy {

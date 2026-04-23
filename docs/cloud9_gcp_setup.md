@@ -103,9 +103,9 @@ terraform apply
 
 Expected outputs after apply:
 ```
-cluster_location    = "europe-west1"
+cluster_location    = "us-central1"
 cluster_name        = "cloud9"
-kubeconfig_command  = "gcloud container clusters get-credentials cloud9 --region europe-west1 --project ganymede-cloud"
+kubeconfig_command  = "gcloud container clusters get-credentials cloud9 --region us-central1 --project ganymede-cloud"
 seed_bucket_name    = "cloud9-seed-data"
 ```
 
@@ -115,11 +115,11 @@ seed_bucket_name    = "cloud9-seed-data"
 
 ```bash
 # Configure kubectl to use GKE cluster
-gcloud container clusters get-credentials cloud9 --region europe-west1 --project ganymede-cloud
+gcloud container clusters get-credentials cloud9 --region us-central1 --project ganymede-cloud
 
 # Verify context
 kubectl config current-context
-# Expected: gke_ganymede-cloud_europe-west1_cloud9
+# Expected: gke_ganymede-cloud_us-central1_cloud9
 
 # Verify cluster (Autopilot shows no nodes until pods are scheduled — that's normal)
 kubectl get nodes
@@ -135,7 +135,7 @@ kubectl get ns
 kubectl config get-contexts
 
 # Switch to GKE
-kubectl config use-context gke_ganymede-cloud_europe-west1_cloud9
+kubectl config use-context gke_ganymede-cloud_us-central1_cloud9
 
 # Switch back to minikube (local dev)
 kubectl config use-context minikube
@@ -179,8 +179,8 @@ If you need to recreate everything (e.g. after `terraform destroy`):
 
 ```bash
 cd infra && terraform apply          # reprovision cluster + bucket
-gcloud container clusters get-credentials cloud9 --region europe-west1 --project ganymede-cloud
-kubectl config use-context gke_ganymede-cloud_europe-west1_cloud9
+gcloud container clusters get-credentials cloud9 --region us-central1 --project ganymede-cloud
+kubectl config use-context gke_ganymede-cloud_us-central1_cloud9
 ```
 
 That's it. Infrastructure is fully reproducible.
