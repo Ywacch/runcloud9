@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -237,6 +239,8 @@ func (h *Handler) handleGetTemplates(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request) {
+	userID := userIDFromContext(r.Context())
+
 	var design deployer.DeploymentDesign
 	if err := json.NewDecoder(r.Body).Decode(&design); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
@@ -262,7 +266,6 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if tmpl.Premium {
-		userID := userIDFromContext(r.Context())
 		if userID == "" {
 			writeError(w, http.StatusUnauthorized, "premium templates require authentication")
 			return
@@ -295,7 +298,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	namespace := fmt.Sprintf("cloud9-%s-%d", design.Template, time.Now().Unix())
+	namespace := generateNamespace(design.Template, userID)
 	expiresAt := time.Now().Add(9 * time.Minute)
 
 	if h.store != nil {
@@ -313,7 +316,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 			Archetype: design.Archetype,
 			Design:    designMap,
 			ExpiresAt: expiresAt,
-			UserID:    userIDFromContext(r.Context()),
+			UserID:    userID,
 		})
 		if err != nil {
 			log.Printf("create deployment record: %v", err)
@@ -675,4 +678,49 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// generateNamespace returns a DNS-safe namespace that avoids same-second collisions.
+// Format: cloud9-{template}-{userPrefix}-{random6}
+func generateNamespace(template, userID string) string {
+	tpl := sanitizeNamespacePart(template, "template", 20)
+	uid := sanitizeNamespacePart(userID, "dev-user", 8)
+
+	b := make([]byte, 3) // 6 hex chars
+	if _, err := rand.Read(b); err != nil {
+		// Very unlikely; fallback keeps rollout unblocked while still being mostly unique.
+		now := time.Now().UnixNano()
+		return fmt.Sprintf("cloud9-%s-%s-%06x", tpl, uid, now&0xFFFFFF)
+	}
+	return fmt.Sprintf("cloud9-%s-%s-%x", tpl, uid, b)
+}
+
+func sanitizeNamespacePart(in, fallback string, maxLen int) string {
+	s := strings.ToLower(strings.TrimSpace(in))
+	var b strings.Builder
+	b.Grow(len(s))
+	prevDash := false
+	for _, r := range s {
+		allowed := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if allowed {
+			b.WriteRune(r)
+			prevDash = false
+			continue
+		}
+		if !prevDash {
+			b.WriteByte('-')
+			prevDash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		out = fallback
+	}
+	if len(out) > maxLen {
+		out = strings.Trim(out[:maxLen], "-")
+		if out == "" {
+			out = fallback
+		}
+	}
+	return out
 }

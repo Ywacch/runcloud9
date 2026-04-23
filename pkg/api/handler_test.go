@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -267,4 +268,34 @@ func TestHandleStartLoadGen_URLShortenerOK(t *testing.T) {
 		t.Fatalf("response: %+v", out)
 	}
 	lg.Stop("ns-ok")
+}
+
+func TestGenerateNamespace_FormatAndUniqueness(t *testing.T) {
+	t.Parallel()
+	re := regexp.MustCompile(`^cloud9-[a-z0-9-]+-[a-z0-9-]+-[a-f0-9]{6}$`)
+	seen := map[string]bool{}
+	for i := 0; i < 200; i++ {
+		ns := generateNamespace("url-shortener", "dev-user")
+		if !re.MatchString(ns) {
+			t.Fatalf("namespace has unexpected format: %q", ns)
+		}
+		if len(ns) > 63 {
+			t.Fatalf("namespace too long (%d): %q", len(ns), ns)
+		}
+		if seen[ns] {
+			t.Fatalf("duplicate namespace generated: %q", ns)
+		}
+		seen[ns] = true
+	}
+}
+
+func TestGenerateNamespace_SanitizesInputs(t *testing.T) {
+	t.Parallel()
+	ns := generateNamespace("Social Feed!!!", "USER_ABCDEF-1234")
+	if !strings.Contains(ns, "social-feed") {
+		t.Fatalf("template part not sanitized as expected: %q", ns)
+	}
+	if !strings.Contains(ns, "-user-abc-") {
+		t.Fatalf("user part not sanitized/truncated as expected: %q", ns)
+	}
 }
