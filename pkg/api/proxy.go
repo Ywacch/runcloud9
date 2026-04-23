@@ -112,18 +112,8 @@ func (h *Handler) handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.store == nil {
-		writeError(w, http.StatusServiceUnavailable, "deployment store unavailable")
-		return
-	}
-
-	row, err := h.store.GetDeployment(r.Context(), namespace)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			writeError(w, http.StatusNotFound, "deployment not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "failed to resolve deployment")
+	row := h.requireOwnership(w, r, namespace)
+	if row == nil {
 		return
 	}
 	if row.Status == "failed" || row.Status == "terminated" {

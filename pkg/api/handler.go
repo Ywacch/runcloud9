@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -73,20 +71,21 @@ func NewHandler(
 
 // RegisterRoutes attaches handlers to the mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /deployments", h.handleCreateDeployment)
-	mux.HandleFunc("GET /deployments", h.handleListDeployments)
-	mux.HandleFunc("GET /deployments/{id}", h.handleGetDeployment)
-	mux.HandleFunc("DELETE /deployments/{id}", h.handleDeleteDeployment)
-	mux.HandleFunc("GET /deployments/{id}/metrics", h.handleMetricsStream)
-	mux.HandleFunc("GET /deployments/{id}/logs", h.handleLogsStream)
-	mux.HandleFunc("GET /deployments/{id}/proxy/{component}", h.handleProxy)
-	mux.HandleFunc("GET /deployments/{id}/proxy/{component}/{path...}", h.handleProxy)
-	mux.HandleFunc("POST /deployments/{id}/proxy/{component}", h.handleProxy)
-	mux.HandleFunc("POST /deployments/{id}/proxy/{component}/{path...}", h.handleProxy)
-	mux.HandleFunc("OPTIONS /deployments/{id}/proxy/{component}", h.handleProxy)
-	mux.HandleFunc("OPTIONS /deployments/{id}/proxy/{component}/{path...}", h.handleProxy)
-	mux.HandleFunc("POST /deployments/{id}/loadgen", h.handleStartLoadGen)
-	mux.HandleFunc("DELETE /deployments/{id}/loadgen", h.handleStopLoadGen)
+	auth := requireAuth
+	mux.Handle("POST /deployments", auth(http.HandlerFunc(h.handleCreateDeployment)))
+	mux.Handle("GET /deployments", auth(http.HandlerFunc(h.handleListDeployments)))
+	mux.Handle("GET /deployments/{id}", auth(http.HandlerFunc(h.handleGetDeployment)))
+	mux.Handle("DELETE /deployments/{id}", auth(http.HandlerFunc(h.handleDeleteDeployment)))
+	mux.Handle("GET /deployments/{id}/metrics", auth(http.HandlerFunc(h.handleMetricsStream)))
+	mux.Handle("GET /deployments/{id}/logs", auth(http.HandlerFunc(h.handleLogsStream)))
+	mux.Handle("GET /deployments/{id}/proxy/{component}", auth(http.HandlerFunc(h.handleProxy)))
+	mux.Handle("GET /deployments/{id}/proxy/{component}/{path...}", auth(http.HandlerFunc(h.handleProxy)))
+	mux.Handle("POST /deployments/{id}/proxy/{component}", auth(http.HandlerFunc(h.handleProxy)))
+	mux.Handle("POST /deployments/{id}/proxy/{component}/{path...}", auth(http.HandlerFunc(h.handleProxy)))
+	mux.Handle("OPTIONS /deployments/{id}/proxy/{component}", auth(http.HandlerFunc(h.handleProxy)))
+	mux.Handle("OPTIONS /deployments/{id}/proxy/{component}/{path...}", auth(http.HandlerFunc(h.handleProxy)))
+	mux.Handle("POST /deployments/{id}/loadgen", auth(http.HandlerFunc(h.handleStartLoadGen)))
+	mux.Handle("DELETE /deployments/{id}/loadgen", auth(http.HandlerFunc(h.handleStopLoadGen)))
 	mux.HandleFunc("GET /health", h.handleHealth)
 	mux.HandleFunc("GET /templates", h.handleGetTemplates)
 }
@@ -99,6 +98,10 @@ func (h *Handler) handleMetricsStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing deployment id")
 		return
 	}
+	row := h.requireOwnership(w, r, namespace)
+	if row == nil {
+		return
+	}
 
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -107,13 +110,7 @@ func (h *Handler) handleMetricsStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	template := ""
-	if h.store != nil {
-		if row, err := h.store.GetDeployment(ctx, namespace); err == nil {
-			template = row.Template
-		}
-	}
-	metrics.StreamMetrics(ctx, conn, h.metricsCollector, namespace, template)
+	metrics.StreamMetrics(ctx, conn, h.metricsCollector, namespace, row.Template)
 }
 
 func (h *Handler) handleGetDeployment(w http.ResponseWriter, r *http.Request) {
@@ -122,13 +119,8 @@ func (h *Handler) handleGetDeployment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing deployment id")
 		return
 	}
-	if h.store == nil {
-		writeError(w, http.StatusServiceUnavailable, "deployment store unavailable")
-		return
-	}
-	row, err := h.store.GetDeployment(r.Context(), namespace)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "deployment not found")
+	row := h.requireOwnership(w, r, namespace)
+	if row == nil {
 		return
 	}
 
@@ -180,9 +172,7 @@ func (h *Handler) handleListDeployments(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// If auth is present, return only the caller's deployments; otherwise return all active deployments.
-	// Todo: signed out users shouldnt be able to access or run deployments
-	userID := getUserID(r)
+	userID := userIDFromContext(r.Context())
 
 	rows, err := h.store.ListActiveDeployments(r.Context(), userID)
 	if err != nil {
@@ -213,6 +203,9 @@ func (h *Handler) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 	namespace := r.PathValue("id")
 	if namespace == "" {
 		writeError(w, http.StatusBadRequest, "missing deployment id")
+		return
+	}
+	if h.requireOwnership(w, r, namespace) == nil {
 		return
 	}
 
@@ -269,7 +262,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if tmpl.Premium {
-		userID := getUserID(r)
+		userID := userIDFromContext(r.Context())
 		if userID == "" {
 			writeError(w, http.StatusUnauthorized, "premium templates require authentication")
 			return
@@ -320,7 +313,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 			Archetype: design.Archetype,
 			Design:    designMap,
 			ExpiresAt: expiresAt,
-			UserID:    getUserID(r),
+			UserID:    userIDFromContext(r.Context()),
 		})
 		if err != nil {
 			log.Printf("create deployment record: %v", err)
@@ -518,6 +511,13 @@ func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing deployment id")
 		return
 	}
+	var row *store.DeploymentRow
+	if h.store != nil {
+		row = h.requireOwnership(w, r, namespace)
+		if row == nil {
+			return
+		}
+	}
 
 	if h.loadgen == nil {
 		writeError(w, http.StatusServiceUnavailable, "load generator unavailable")
@@ -535,15 +535,7 @@ func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var row store.DeploymentRow
-	var haveRow bool
-	if h.store != nil {
-		if rrow, gerr := h.store.GetDeployment(r.Context(), namespace); gerr == nil {
-			row = rrow
-			haveRow = true
-		}
-	}
-	if profile.Template == "" && haveRow {
+	if profile.Template == "" && row != nil {
 		profile.Template = row.Template
 	}
 	if profile.Template == "" {
@@ -558,7 +550,7 @@ func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 
 	profile = loadgen.NormalizeProfile(profile)
 
-	if profile.BaseURL == "" && haveRow && designHasLoadBalancer(row.Design) {
+	if profile.BaseURL == "" && row != nil && designHasLoadBalancer(row.Design) {
 		profile.BaseURL = fmt.Sprintf("http://lb.%s.svc.cluster.local:80", namespace)
 	}
 
@@ -595,6 +587,9 @@ func (h *Handler) handleStopLoadGen(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing deployment id")
 		return
 	}
+	if h.store != nil && h.requireOwnership(w, r, namespace) == nil {
+		return
+	}
 
 	if h.loadgen == nil {
 		writeError(w, http.StatusServiceUnavailable, "load generator unavailable")
@@ -619,6 +614,9 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 	namespace := r.PathValue("id")
 	if namespace == "" {
 		writeError(w, http.StatusBadRequest, "missing deployment id")
+		return
+	}
+	if h.requireOwnership(w, r, namespace) == nil {
 		return
 	}
 	// Stop load generator if running (prevents requests to a dying namespace)
@@ -671,34 +669,6 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 		_ = h.store.UpdateStatus(context.Background(), namespace, "terminated")
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// getUserID extracts the sub claim from the Bearer JWT in Authorization header.
-// Returns empty string on any failure — unauthenticated requests are allowed.
-func getUserID(r *http.Request) string {
-	auth := r.Header.Get("Authorization")
-	if !strings.HasPrefix(auth, "Bearer ") {
-		return ""
-	}
-	token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
-	if token == "" {
-		return ""
-	}
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return ""
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return ""
-	}
-	var claims struct {
-		Sub string `json:"sub"`
-	}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return ""
-	}
-	return claims.Sub
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
