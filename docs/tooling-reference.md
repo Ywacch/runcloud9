@@ -881,6 +881,23 @@ gcloud iam workload-identity-pools providers list \
 gcloud iam service-accounts list --project ganymede-cloud
 ```
 
+### First deploy failure: Artifact Registry upload denied
+If GitHub Actions `Deploy API` fails during `docker push` with:
+
+`denied: Permission 'artifactregistry.repositories.uploadArtifacts' denied`
+
+grant Artifact Registry writer to the deploy service account:
+
+```bash
+gcloud artifacts repositories add-iam-policy-binding cloud9-images \
+  --location=us-central1 \
+  --project=ganymede-cloud \
+  --member="serviceAccount:cloud9-github-deployer@ganymede-cloud.iam.gserviceaccount.com" \
+  --role="roles/artifactregistry.writer"
+```
+
+Then rerun the failed workflow (or push a tiny commit to trigger `Deploy API` again).
+
 ### Notes
 - `ganymede-cloud.svc.id.goog` is the GKE internal pool. Keep it; it is not the GitHub Actions provider.
 - Runtime backend env vars (`SUPABASE_SERVICE_KEY`, `SUPABASE_JWT_SECRET`, etc.) belong in Kubernetes secret `cloud9-api-secrets`, not in GitHub Actions secrets.
