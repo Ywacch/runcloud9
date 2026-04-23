@@ -16,6 +16,7 @@
 8. [Go Toolchain](#8-go-toolchain)
 9. [wscat (WebSocket testing)](#9-wscat-websocket-testing)
 10. [Local Development Checklist](#10-local-development-checklist)
+11. [GitHub Actions WIF Deploy Setup](#11-github-actions-wif-deploy-setup)
 
 ---
 
@@ -747,7 +748,7 @@ kubectl config current-context
 # Should be: gke_ganymede-cloud_us-central1_cloud9 for GKE
 # Or: minikube for local dev
 
-# 2. Check monitoring stack is running
+# 2. Check that monitoring stack is running
 kubectl get pods -n monitoring
 # Expected: grafana, kube-state-metrics, operator, prometheus all Running
 
@@ -795,3 +796,91 @@ kubectl delete namespace cloud9-url-shortener-<id>
 - Each 9-minute deployment costs ~$0.05-0.08
 - `terraform destroy` stops all charges but takes 5 minutes to reprovision
 - $300 free credits cover the entire project at this usage level
+
+---
+
+## 11. GitHub Actions WIF Deploy Setup
+
+### Purpose
+Configure keyless GitHub Actions authentication to GCP via Workload Identity Federation (WIF), then deploy `cloud9-api` to GKE from CI.
+
+### Why this setup
+- Avoids storing long-lived GCP JSON keys in GitHub
+- Restricts trust to one repo (`Ywacch/runcloud9`)
+- Powers `deploy.yaml` secrets:
+  - `GCP_WORKLOAD_IDENTITY_PROVIDER`
+  - `GCP_SERVICE_ACCOUNT`
+
+### One-time setup commands
+```bash
+# Ensure project context
+gcloud config set project ganymede-cloud
+
+# 1) Create deploy service account
+gcloud iam service-accounts create cloud9-github-deployer \
+  --display-name="Cloud9 GitHub Deployer"
+
+# 2) Create GitHub WIF pool (separate from GKE internal pool)
+gcloud iam workload-identity-pools create github-pool \
+  --project ganymede-cloud \
+  --location global \
+  --display-name "GitHub Actions Pool"
+
+# 3) Create GitHub OIDC provider scoped to this repo
+gcloud iam workload-identity-pools providers create-oidc github \
+  --project ganymede-cloud \
+  --location global \
+  --workload-identity-pool github-pool \
+  --display-name "GitHub OIDC Provider" \
+  --issuer-uri "https://token.actions.githubusercontent.com" \
+  --attribute-mapping "google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref,attribute.actor=assertion.actor" \
+  --attribute-condition "assertion.repository=='Ywacch/runcloud9'"
+```
+
+### Allow repo to impersonate deploy SA
+```bash
+gcloud iam service-accounts add-iam-policy-binding \
+  cloud9-github-deployer@ganymede-cloud.iam.gserviceaccount.com \
+  --project ganymede-cloud \
+  --role roles/iam.workloadIdentityUser \
+  --member "principalSet://iam.googleapis.com/projects/605217578213/locations/global/workloadIdentityPools/github-pool/attribute.repository/Ywacch/runcloud9"
+```
+
+### GitHub Actions secret values
+```bash
+# Value for GCP_WORKLOAD_IDENTITY_PROVIDER
+gcloud iam workload-identity-pools providers describe github \
+  --project ganymede-cloud \
+  --location global \
+  --workload-identity-pool github-pool \
+  --format="value(name)"
+```
+
+- `GCP_WORKLOAD_IDENTITY_PROVIDER`: output of command above
+- `GCP_SERVICE_ACCOUNT`: `cloud9-github-deployer@ganymede-cloud.iam.gserviceaccount.com`
+
+### Where to store in GitHub
+Repository -> **Settings** -> **Secrets and variables** -> **Actions** -> **Repository secrets**
+
+Create:
+- `GCP_WORKLOAD_IDENTITY_PROVIDER`
+- `GCP_SERVICE_ACCOUNT`
+
+### Quick diagnostics
+```bash
+# List pools (you will also see the GKE internal pool)
+gcloud iam workload-identity-pools list --project ganymede-cloud --location global
+
+# List providers in github-pool
+gcloud iam workload-identity-pools providers list \
+  --project ganymede-cloud \
+  --location global \
+  --workload-identity-pool github-pool
+
+# List service accounts
+gcloud iam service-accounts list --project ganymede-cloud
+```
+
+### Notes
+- `ganymede-cloud.svc.id.goog` is the GKE internal pool. Keep it; it is not the GitHub Actions provider.
+- Runtime backend env vars (`SUPABASE_SERVICE_KEY`, `SUPABASE_JWT_SECRET`, etc.) belong in Kubernetes secret `cloud9-api-secrets`, not in GitHub Actions secrets.

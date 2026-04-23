@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Restore Go modules cache
+        id: cache-go-mod-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-${{ runner.os }}-go1.25-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-mod-${{ runner.os }}-go1.25-
+            go-mod-${{ runner.os }}-
+
+      - name: Restore Go build cache
+        id: cache-go-build-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-${{ runner.os }}-go1.25-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-build-${{ runner.os }}-go1.25-
+            go-build-${{ runner.os }}-
+
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Save Go modules cache (main only)
+        if: github.ref == 'refs/heads/main' && steps.cache-go-mod-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-${{ runner.os }}-go1.25-${{ hashFiles('**/go.sum') }}
+
+      - name: Save Go build cache (main only)
+        if: github.ref == 'refs/heads/main' && steps.cache-go-build-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-${{ runner.os }}-go1.25-${{ hashFiles('**/go.sum') }}
