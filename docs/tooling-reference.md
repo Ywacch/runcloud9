@@ -918,14 +918,52 @@ If `kubectl` fails in CI with:
 
 `Unable to connect to the server: getting credentials: exec: executable gke-gcloud-auth-plugin not found`
 
-the runner is missing the GKE auth plugin. Add this step in `deploy.yaml` before `kubectl` commands:
+install the plugin through `setup-gcloud` in `deploy.yaml`:
 
 ```yaml
-- name: Install GKE auth plugin
-  run: gcloud components install gke-gcloud-auth-plugin --quiet
+- name: Setup gcloud
+  uses: google-github-actions/setup-gcloud@v2
+  with:
+    install_components: gke-gcloud-auth-plugin
 ```
 
-Keep this after `google-github-actions/setup-gcloud@v2` and before `gcloud container clusters get-credentials`.
+This is preferred over a separate `gcloud components install ...` step.
+
+### Deploy failure: namespace/deployment not found
+If deploy fails with:
+
+`Error from server (NotFound): namespaces "cloud9-system" not found`
+
+bootstrap the API resources once from your workstation:
+
+```bash
+kubectl apply -f k8s/base/cloud9-api.yaml
+kubectl create secret generic cloud9-api-secrets -n cloud9-system \
+  --from-literal=supabase-url="..." \
+  --from-literal=supabase-service-key="..." \
+  --from-literal=supabase-jwt-secret="..." \
+  --from-literal=allowed-origins="https://<frontend-domain>" \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+Then rerun `Deploy API`.
+
+### Runtime crash fix: `/root/.kube/config` missing in pod
+If `cloud9-api` pods crash with:
+
+`build kubeconfig: stat /root/.kube/config: no such file or directory`
+
+ensure backend uses in-cluster config in Kubernetes:
+- Prefer `KUBECONFIG` when set
+- Else use `rest.InClusterConfig()` when `KUBERNETES_SERVICE_HOST` is present
+- Fallback to `~/.kube/config` only for local dev
+
+After deploying this fix, verify:
+
+```bash
+kubectl rollout status deployment/cloud9-api -n cloud9-system --timeout=180s
+kubectl get pods -n cloud9-system
+```
 
 ### Notes
 - `ganymede-cloud.svc.id.goog` is the GKE internal pool. Keep it; it is not the GitHub Actions provider.
