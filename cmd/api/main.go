@@ -18,6 +18,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/teardown"
 	"github.com/ywacch/cloud9/pkg/templates"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
 )
@@ -70,12 +71,28 @@ func buildDeployers() (map[string]deployer.ComponentDeployer, kubernetes.Interfa
 	// Useful when running multiple clusters (minikube + GKE) simultaneously.
 	// Falls back to ~/.kube/config if not set, same as kubectl default behaviour.
 	kubeconfigPath := os.Getenv("KUBECONFIG")
-	if kubeconfigPath == "" {
+	// In-cluster (GKE pod): use service account auth via KUBERNETES_SERVICE_HOST.
+	// Local/dev: keep kubeconfig behavior for minikube/GKE contexts.
+	var (
+		config *rest.Config
+		err    error
+	)
+	if kubeconfigPath != "" {
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+		if err != nil {
+			log.Fatalf("build kubeconfig from KUBECONFIG: %v", err)
+		}
+	} else if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+		config, err = rest.InClusterConfig()
+		if err != nil {
+			log.Fatalf("build in-cluster config: %v", err)
+		}
+	} else {
 		kubeconfigPath = filepath.Join(homedir.HomeDir(), ".kube", "config")
-	}
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
-	if err != nil {
-		log.Fatalf("build kubeconfig: %v", err)
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+		if err != nil {
+			log.Fatalf("build kubeconfig: %v", err)
+		}
 	}
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
