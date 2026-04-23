@@ -26,21 +26,21 @@ type SeedConfig struct {
 
 // TemplateSpec is the single source of truth for a template's metadata.
 type TemplateSpec struct {
-	ID             string         `json:"id"`
-	Name           string         `json:"name"`
-	Description    string         `json:"description"`
-	Components     int            `json:"components"`
-	Bottleneck     string         `json:"bottleneck"`
-	Available      bool           `json:"available"`
-	Premium        bool           `json:"premium"`
-	Tags           []string       `json:"tags"`
-	Topology       []TopologyHint `json:"topology"`
+	ID             string          `json:"id"`
+	Name           string          `json:"name"`
+	Description    string          `json:"description"`
+	Components     int             `json:"components"`
+	Bottleneck     string          `json:"bottleneck"`
+	Available      bool            `json:"available"`
+	Premium        bool            `json:"premium"`
+	Tags           []string        `json:"tags"`
+	Topology       []TopologyHint  `json:"topology"`
 	Preset         *TemplatePreset `json:"preset,omitempty"`
-	AppServerImage string         `json:"-"`
-	WorkerImage    string         `json:"-"`
-	Simulatable    bool           `json:"simulatable"`
-	Deployable     bool           `json:"deployable"`
-	SeedConfig     *SeedConfig    `json:"-"`
+	AppServerImage string          `json:"-"`
+	WorkerImage    string          `json:"-"`
+	Simulatable    bool            `json:"simulatable"`
+	Deployable     bool            `json:"deployable"`
+	SeedConfig     *SeedConfig     `json:"-"`
 }
 
 // PresetNode is a fully-configured node for canvas population.
@@ -168,9 +168,9 @@ func loadEmbeddedTemplates() []TemplateSpec {
 	}
 	// Stable public order (matches historical hardcoded slice; tests rely on it).
 	order := map[string]int{
-		"url-shortener": 0,
-		"ecommerce":     1,
-		"social-feed":   2,
+		"url-shortener":    0,
+		"ecommerce":        1,
+		"social-feed":      2,
 		"social-feed-pull": 3,
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -252,14 +252,14 @@ func defToSpec(def *templateDef) TemplateSpec {
 func imageFor(name string) string {
 	registry := os.Getenv("TEMPLATE_IMAGE_REGISTRY")
 	if registry == "" {
-		registry = "europe-west1-docker.pkg.dev/ganymede-cloud/cloud9-images"
+		registry = "us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images"
 	}
 	tag := ":v1"
 	switch name {
 	case "url-shortener":
-		tag = ":v5"
+		tag = ":v1"
 	case "ecommerce":
-		tag = ":v2"
+		tag = ":v1"
 	case "ecommerce-worker":
 		tag = ":v1"
 	case "social-feed":

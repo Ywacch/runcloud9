@@ -98,15 +98,15 @@ gcloud iam service-accounts keys create terraform-key.json \
 # Create Docker repository (run once)
 gcloud artifacts repositories create cloud9-images \
   --repository-format=docker \
-  --location=europe-west1 \
+  --location=us-central1 \
   --description="Cloud9 template images"
 
 # Configure Docker auth (run once per machine)
-gcloud auth configure-docker europe-west1-docker.pkg.dev
+gcloud auth configure-docker us-central1-docker.pkg.dev
 
 # List images in registry
 gcloud artifacts docker images list \
-  europe-west1-docker.pkg.dev/ganymede-cloud/cloud9-images
+  us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images
 
 # Grant GKE node SA pull access
 gcloud projects add-iam-policy-binding ganymede-cloud \
@@ -126,7 +126,7 @@ gcloud storage ls gs://cloud9-seed-data/url-shortener/
 #### Quota management
 ```bash
 # Check region quota
-gcloud compute regions describe europe-west1 \
+gcloud compute regions describe us-central1 \
   --format="table(quotas.metric,quotas.limit,quotas.usage)"
 
 # Quota increases: GCP Console → IAM & Admin → Quotas
@@ -199,8 +199,8 @@ terraform state list
 ```bash
 cd infra && terraform apply
 gcloud container clusters get-credentials cloud9 \
-  --region europe-west1 --project ganymede-cloud
-kubectl config use-context gke_ganymede-cloud_europe-west1_cloud9
+  --region us-central1 --project ganymede-cloud
+kubectl config use-context gke_ganymede-cloud_us-central1_cloud9
 ```
 
 ### Troubleshooting
@@ -238,7 +238,7 @@ kubectl version --client  # verify
 
 # Connect to GKE cluster
 gcloud container clusters get-credentials cloud9 \
-  --region europe-west1 --project ganymede-cloud
+  --region us-central1 --project ganymede-cloud
 ```
 
 ### Contexts (switching between clusters)
@@ -247,7 +247,7 @@ gcloud container clusters get-credentials cloud9 \
 kubectl config get-contexts
 
 # Switch to GKE (production)
-kubectl config use-context gke_ganymede-cloud_europe-west1_cloud9
+kubectl config use-context gke_ganymede-cloud_us-central1_cloud9
 
 # Switch to minikube (local dev)
 kubectl config use-context minikube
@@ -572,17 +572,17 @@ Docker builds and pushes the template images (url-shortener, caching-proxy) to G
 
 ### Prerequisites
 - Docker Desktop installed and running
-- `gcloud auth configure-docker europe-west1-docker.pkg.dev` run once
+- `gcloud auth configure-docker us-central1-docker.pkg.dev` run once
 
 ### Building and pushing images
 ```bash
 # URL shortener (from images/url-shortener/)
-docker build -t europe-west1-docker.pkg.dev/ganymede-cloud/cloud9-images/url-shortener:v3 .
-docker push europe-west1-docker.pkg.dev/ganymede-cloud/cloud9-images/url-shortener:v3
+docker build -t us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/url-shortener:v1 .
+docker push us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/url-shortener:v1
 
 # Caching proxy (from images/caching-proxy/)
-docker build -t europe-west1-docker.pkg.dev/ganymede-cloud/cloud9-images/caching-proxy:v1 .
-docker push europe-west1-docker.pkg.dev/ganymede-cloud/cloud9-images/caching-proxy:v1
+docker build -t us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/caching-proxy:v1 .
+docker push us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/caching-proxy:v1
 ```
 
 ### Local Postgres container (seed data generation)
@@ -616,7 +616,7 @@ The seed script (`scripts/seed/generate_urls.py`) handles this automatically by 
 |-------|-------|-----|
 | `Cannot connect to the Docker daemon` | Docker Desktop not running | Start Docker Desktop |
 | `go.mod requires go >= 1.24.0` during build | Dockerfile uses old Go base image | Change `FROM golang:1.22-alpine` to `FROM golang:1.24-alpine` |
-| `unauthorized` when pushing | Docker auth not configured | Run `gcloud auth configure-docker europe-west1-docker.pkg.dev` |
+| `unauthorized` when pushing | Docker auth not configured | Run `gcloud auth configure-docker us-central1-docker.pkg.dev` |
 | `ImagePullBackOff` on GKE | GKE node SA missing pull permissions | Grant `roles/artifactregistry.reader` to compute SA |
 
 ---
@@ -668,7 +668,7 @@ $env:DEPLOYER="k8s"                          # use K8sDeployer (targets GKE)
 $env:SUPABASE_URL="https://<ref>.supabase.co"
 $env:SUPABASE_SERVICE_KEY="<service-role-key>"
 $env:GOOGLE_APPLICATION_CREDENTIALS="terraform-key.json"
-$env:TEMPLATE_IMAGE_REGISTRY="europe-west1-docker.pkg.dev/ganymede-cloud/cloud9-images"
+$env:TEMPLATE_IMAGE_REGISTRY="us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images"
 $env:SEED_BUCKET_NAME="cloud9-seed-data"
 $env:PROMETHEUS_URL="http://localhost:9090"   # requires Prometheus port-forward
 ```
@@ -744,7 +744,7 @@ Run through this before starting a development session.
 ```powershell
 # 1. Verify kubectl context is correct
 kubectl config current-context
-# Should be: gke_ganymede-cloud_europe-west1_cloud9 for GKE
+# Should be: gke_ganymede-cloud_us-central1_cloud9 for GKE
 # Or: minikube for local dev
 
 # 2. Check monitoring stack is running

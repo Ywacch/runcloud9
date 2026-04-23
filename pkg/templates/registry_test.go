@@ -61,7 +61,7 @@ func TestRegistryLen(t *testing.T) {
 func TestGetAppServerImage(t *testing.T) {
 	t.Parallel()
 	img := GetAppServerImage("url-shortener")
-	if img == "" || !strings.HasSuffix(img, "/url-shortener:v5") {
+	if img == "" || !strings.HasSuffix(img, "/url-shortener:v1") {
 		t.Fatalf("GetAppServerImage(url-shortener) = %q", img)
 	}
 	if GetAppServerImage("unknown") != "" {
@@ -87,7 +87,7 @@ func TestImageFor_RegistryEnv(t *testing.T) {
 	// Not parallel: mutates process env; parallel tests would race on TEMPLATE_IMAGE_REGISTRY.
 	t.Setenv("TEMPLATE_IMAGE_REGISTRY", "reg.example/test")
 	got := imageFor("ecommerce")
-	wantPrefix := "reg.example/test/ecommerce:v2"
+	wantPrefix := "reg.example/test/ecommerce:v1"
 	if got != wantPrefix {
 		t.Fatalf("imageFor with env: got %q want %q", got, wantPrefix)
 	}
