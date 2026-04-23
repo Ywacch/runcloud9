@@ -898,6 +898,35 @@ gcloud artifacts repositories add-iam-policy-binding cloud9-images \
 
 Then rerun the failed workflow (or push a tiny commit to trigger `Deploy API` again).
 
+### Deploy failure: `container.clusters.get` denied
+If `gcloud container clusters get-credentials` fails with:
+
+`Permission 'container.clusters.get' denied`
+
+grant the deploy service account a GKE role that includes cluster read access:
+
+```bash
+gcloud projects add-iam-policy-binding ganymede-cloud \
+  --member="serviceAccount:cloud9-github-deployer@ganymede-cloud.iam.gserviceaccount.com" \
+  --role="roles/container.developer"
+```
+
+Then rerun the workflow.
+
+### Deploy failure: `gke-gcloud-auth-plugin not found` in GitHub Actions
+If `kubectl` fails in CI with:
+
+`Unable to connect to the server: getting credentials: exec: executable gke-gcloud-auth-plugin not found`
+
+the runner is missing the GKE auth plugin. Add this step in `deploy.yaml` before `kubectl` commands:
+
+```yaml
+- name: Install GKE auth plugin
+  run: gcloud components install gke-gcloud-auth-plugin --quiet
+```
+
+Keep this after `google-github-actions/setup-gcloud@v2` and before `gcloud container clusters get-credentials`.
+
 ### Notes
 - `ganymede-cloud.svc.id.goog` is the GKE internal pool. Keep it; it is not the GitHub Actions provider.
 - Runtime backend env vars (`SUPABASE_SERVICE_KEY`, `SUPABASE_JWT_SECRET`, etc.) belong in Kubernetes secret `cloud9-api-secrets`, not in GitHub Actions secrets.
