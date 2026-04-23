@@ -748,7 +748,7 @@ kubectl config current-context
 # Should be: gke_ganymede-cloud_us-central1_cloud9 for GKE
 # Or: minikube for local dev
 
-# 2. Check monitoring stack is running
+# 2. Check that monitoring stack is running
 kubectl get pods -n monitoring
 # Expected: grafana, kube-state-metrics, operator, prometheus all Running
 
