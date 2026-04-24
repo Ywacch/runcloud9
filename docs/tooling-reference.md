@@ -1001,3 +1001,34 @@ kubectl get pods -n cloud9-system
 ### Notes
 - `ganymede-cloud.svc.id.goog` is the GKE internal pool. Keep it; it is not the GitHub Actions provider.
 - Runtime backend env vars (`SUPABASE_SERVICE_KEY`, `SUPABASE_JWT_SECRET`, etc.) belong in Kubernetes secret `cloud9-api-secrets`, not in GitHub Actions secrets.
+
+### Manual Ops Log (2026-04-24)
+Production run log for alpha hardening and HTTPS bring-up.
+
+- Branch and deploy status:
+  - Sentry + ingress changes merged to `main`
+  - GitHub deploy workflow succeeded
+- Sentry (backend) enablement:
+  - Patched `cloud9-api-secrets` key `sentry-dsn`
+  - Restarted API deployment:
+    - `kubectl rollout restart deployment/cloud9-api -n cloud9-system`
+    - `kubectl rollout status deployment/cloud9-api -n cloud9-system --timeout=180s`
+  - Note: `printenv` checks fail in distroless image (expected, no shell utilities)
+- HTTPS ingress bring-up:
+  - Reserved global static IP:
+    - `gcloud compute addresses describe cloud9-api-ingress-ip --global --project ganymede-cloud --format="value(address)"`
+    - IP: `34.144.196.199`
+  - DNS A record configured:
+    - `api.runcloud9.io -> 34.144.196.199`
+  - Applied ingress resources:
+    - `kubectl apply -f k8s/base/cloud9-api-ingress.yaml`
+  - Verified ingress and certificate:
+    - Ingress address assigned: `34.144.196.199`
+    - `ManagedCertificate cloud9-api-cert` status: `Active`
+- CORS fix after HTTPS cutover:
+  - Patched `allowed-origins` in `cloud9-api-secrets` to include:
+    - `https://runcloud9.io`
+    - `https://www.runcloud9.io`
+  - Restarted API deployment and verified rollout success
+
+Use this as the baseline reference for future environment rebuilds and incident retros.
