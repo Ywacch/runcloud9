@@ -948,6 +948,39 @@ kubectl create secret generic cloud9-api-secrets -n cloud9-system \
 
 Then rerun `Deploy API`.
 
+### Frontend cannot call API over HTTPS (mixed content)
+If the frontend is hosted on HTTPS (for example Vercel) and API calls only work over `http://<loadbalancer-ip>`, browsers will block requests as mixed content.
+
+Configure HTTPS for the API with GKE Ingress + Google-managed certificate:
+
+```bash
+gcloud compute addresses create cloud9-api-ingress-ip --global --project ganymede-cloud
+gcloud compute addresses describe cloud9-api-ingress-ip --global --project ganymede-cloud --format="value(address)"
+```
+
+Create DNS `A` record:
+- host: `api.runcloud9.io`
+- value: `<address from command above>`
+
+Apply ingress resources:
+
+```bash
+kubectl apply -f k8s/base/cloud9-api-ingress.yaml
+kubectl get ingress cloud9-api-ingress -n cloud9-system
+kubectl describe managedcertificate cloud9-api-cert -n cloud9-system
+```
+
+When cert status is `Active`, set frontend API env to:
+
+`VITE_DEPLOYMENTS_API_PREFIX=https://api.runcloud9.io/deployments`
+
+And ensure backend CORS includes your frontend origin(s) in `allowed-origins` in `cloud9-api-secrets`, then restart:
+
+```bash
+kubectl rollout restart deployment/cloud9-api -n cloud9-system
+kubectl rollout status deployment/cloud9-api -n cloud9-system --timeout=180s
+```
+
 ### Runtime crash fix: `/root/.kube/config` missing in pod
 If `cloud9-api` pods crash with:
 
