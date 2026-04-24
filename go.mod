@@ -4,6 +4,8 @@ go 1.25.0
 
 require (
 	cloud.google.com/go/storage v1.61.3
+	github.com/getsentry/sentry-go v0.46.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/supabase-community/supabase-go v0.0.4
 	github.com/tsenart/vegeta/v12 v12.13.0
@@ -38,7 +40,6 @@ require (
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
 	github.com/go-openapi/jsonreference v0.20.2 // indirect
 	github.com/go-openapi/swag v0.23.0 // indirect
-	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect

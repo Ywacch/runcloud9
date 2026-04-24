@@ -68,6 +68,12 @@ spec:
               value: "cloud9-seed-data"
             - name: PROMETHEUS_URL
               value: "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: cloud9-api-secrets
+                  key: sentry-dsn
+                  optional: true
 ---
 apiVersion: v1
 kind: Service

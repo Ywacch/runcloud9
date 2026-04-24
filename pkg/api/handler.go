@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/getsentry/sentry-go"
 	"github.com/gorilla/websocket"
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/loadgen"
@@ -338,7 +339,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 	})
 
 	// Continue orchestration in the background after returning the response.
-	go func(design deployer.DeploymentDesign, namespace string) {
+	go func(design deployer.DeploymentDesign, namespace, userID string) {
 		timeout := 2 * time.Minute
 		if os.Getenv("DEPLOYER") == "k8s" {
 			timeout = 5 * time.Minute
@@ -349,6 +350,14 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		result, err := h.orchestrate(ctx, design, namespace)
 		if err != nil {
 			log.Printf("orchestration failed for namespace=%s: %v", namespace, err)
+			sentry.WithScope(func(scope *sentry.Scope) {
+				scope.SetTag("template", design.Template)
+				scope.SetTag("namespace", namespace)
+				if userID != "" {
+					scope.SetUser(sentry.User{ID: userID})
+				}
+				sentry.CaptureException(err)
+			})
 			if h.store != nil {
 				_ = h.store.UpdateStatus(context.Background(), namespace, "failed")
 			}
@@ -381,7 +390,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		if h.scheduler != nil {
 			h.scheduler.Schedule(namespace, runExpiresAt)
 		}
-	}(design, namespace)
+	}(design, namespace, userID)
 }
 
 // orchestrate deploys nodes in dependency layers; nodes within a layer run in parallel.

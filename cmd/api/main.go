@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/getsentry/sentry-go"
+	sentryhttp "github.com/getsentry/sentry-go/http"
 	"github.com/ywacch/cloud9/pkg/api"
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/loadgen"
@@ -22,6 +24,9 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
 )
+
+// version is set at link time (Dockerfile / CI) for Sentry release tagging.
+var version = "dev"
 
 func withCORS(next http.Handler) http.Handler {
 	raw := os.Getenv("ALLOWED_ORIGINS")
@@ -140,6 +145,23 @@ func main() {
 		log.Fatal("SUPABASE_JWT_SECRET must be set in production")
 	}
 
+	sentryHTTP := false
+	if dsn := os.Getenv("SENTRY_DSN"); dsn != "" {
+		if err := sentry.Init(sentry.ClientOptions{
+			Dsn:                dsn,
+			Environment:        os.Getenv("ENV"),
+			Release:            "cloud9-api@" + version,
+			SampleRate:         1.0,
+			TracesSampleRate:   1.0,
+			EnableLogs:         true,
+		}); err != nil {
+			log.Printf("sentry.Init: %v", err)
+		} else {
+			defer sentry.Flush(2 * time.Second)
+			sentryHTTP = true
+		}
+	}
+
 	deployers, clientset := buildDeployers()
 
 	seedBucketName := os.Getenv("SEED_BUCKET_NAME")
@@ -235,7 +257,11 @@ func main() {
 		port = os.Args[1]
 	}
 	log.Printf("Cloud9 API starting on :%s", port)
-	if err := http.ListenAndServe(":"+port, withCORS(mux)); err != nil {
+	root := http.Handler(mux)
+	if sentryHTTP {
+		root = sentryhttp.New(sentryhttp.Options{}).Handle(root)
+	}
+	if err := http.ListenAndServe(":"+port, withCORS(root)); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }
