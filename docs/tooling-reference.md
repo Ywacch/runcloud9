@@ -948,6 +948,44 @@ kubectl create secret generic cloud9-api-secrets -n cloud9-system \
 
 Then rerun `Deploy API`.
 
+### Deploy failure: service account forbidden to create namespaces
+If API logs show errors like:
+
+`create namespace: namespaces is forbidden: User "system:serviceaccount:cloud9-system:cloud9-api" cannot create resource "namespaces" ...`
+
+or teardown errors like:
+
+`cannot delete resource "namespaces" ...`
+
+the `cloud9-api` Kubernetes service account is missing RBAC.
+
+Fix:
+
+```bash
+kubectl apply -f k8s/base/cloud9-api.yaml
+```
+
+The base manifest now includes:
+- `ClusterRole cloud9-api-deployer`
+- `ClusterRoleBinding cloud9-api-deployer`
+
+Verify RBAC:
+
+```bash
+kubectl auth can-i create namespaces --as=system:serviceaccount:cloud9-system:cloud9-api
+kubectl auth can-i delete namespaces --as=system:serviceaccount:cloud9-system:cloud9-api
+```
+
+Both commands should return `yes`.
+
+If the API pod was already running, restart it once and verify:
+
+```bash
+kubectl rollout restart deployment/cloud9-api -n cloud9-system
+kubectl rollout status deployment/cloud9-api -n cloud9-system --timeout=180s
+kubectl logs -n cloud9-system deploy/cloud9-api --tail=200
+```
+
 ### Frontend cannot call API over HTTPS (mixed content)
 If the frontend is hosted on HTTPS (for example Vercel) and API calls only work over `http://<loadbalancer-ip>`, browsers will block requests as mixed content.
 
