@@ -986,6 +986,16 @@ kubectl rollout status deployment/cloud9-api -n cloud9-system --timeout=180s
 kubectl logs -n cloud9-system deploy/cloud9-api --tail=200
 ```
 
+If seeding fails with:
+
+`cannot create resource "pods/exec" in API group "" ...`
+
+the service account needs pod exec/log subresource RBAC. Ensure `ClusterRole cloud9-api-deployer` includes:
+- `resources: ["pods/exec", "pods/log"]`
+- `verbs: ["get", "create"]`
+
+Then re-apply `k8s/base/cloud9-api.yaml` and retry deployment.
+
 ### Frontend cannot call API over HTTPS (mixed content)
 If the frontend is hosted on HTTPS (for example Vercel) and API calls only work over `http://<loadbalancer-ip>`, browsers will block requests as mixed content.
 
