@@ -33,13 +33,23 @@ import (
 // touching global state.
 type Handler struct {
 	deployers        map[string]deployer.ComponentDeployer
-	store            *store.DeploymentStore
+	store            deploymentStore
 	scheduler        *teardown.Scheduler
 	seeder           *seeder.Seeder
 	metricsCollector *metrics.MetricsCollector
 	clientset        kubernetes.Interface
 	loadgen          *loadgen.LoadGenerator
 	eventBus         *metrics.EventBus
+}
+
+type deploymentStore interface {
+	ListActiveDeployments(ctx context.Context, userID string) ([]store.ActiveDeploymentRow, error)
+	CreateDeployment(ctx context.Context, params store.CreateDeploymentParams) (string, error)
+	UpdateStatus(ctx context.Context, namespace, status string) error
+	UpdateExpiresAt(ctx context.Context, namespace string, expiresAt time.Time) error
+	UpdateMetricsSummary(ctx context.Context, namespace string, patch map[string]any) error
+	GetDeployment(ctx context.Context, namespace string) (store.DeploymentRow, error)
+	SetMetricsSummary(ctx context.Context, namespace string, summary map[string]any) error
 }
 
 var wsUpgrader = websocket.Upgrader{
@@ -52,7 +62,7 @@ var wsUpgrader = websocket.Upgrader{
 
 func NewHandler(
 	deployers map[string]deployer.ComponentDeployer,
-	store *store.DeploymentStore,
+	store deploymentStore,
 	scheduler *teardown.Scheduler,
 	seed *seeder.Seeder,
 	metricsCollector *metrics.MetricsCollector,
@@ -303,6 +313,16 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 	expiresAt := time.Now().Add(9 * time.Minute)
 
 	if h.store != nil {
+		active, err := h.store.ListActiveDeployments(r.Context(), userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to check active deployments")
+			return
+		}
+		if len(active) >= 1 {
+			writeError(w, http.StatusTooManyRequests, "you already have an active deployment — end it before creating another")
+			return
+		}
+
 		var designMap map[string]any
 		if b, err := json.Marshal(design); err != nil {
 			writeError(w, http.StatusInternalServerError, "invalid design")
@@ -311,7 +331,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusInternalServerError, "invalid design")
 			return
 		}
-		_, err := h.store.CreateDeployment(r.Context(), store.CreateDeploymentParams{
+		_, err = h.store.CreateDeployment(r.Context(), store.CreateDeploymentParams{
 			Namespace: namespace,
 			Template:  design.Template,
 			Archetype: design.Archetype,

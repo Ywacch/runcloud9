@@ -2,15 +2,20 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/loadgen"
+	"github.com/ywacch/cloud9/pkg/store"
 )
 
 func TestHandleGetTemplates(t *testing.T) {
@@ -190,6 +195,53 @@ func TestHandleCreateDeployment_UnavailableRegistryTemplate(t *testing.T) {
 	}
 }
 
+func TestHandleCreateDeployment_ConcurrentLimit_RejectsSecondActive(t *testing.T) {
+	t.Setenv("ENV", "development")
+	t.Setenv("SUPABASE_JWT_SECRET", "")
+	t.Setenv("SUPABASE_URL", "")
+
+	s := newFakeDeploymentStore()
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "standard",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app", Type: "app-server", Name: "app", Config: map[string]interface{}{}},
+			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app", TargetID: "db"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+
+	req1 := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req1.Header.Set("Content-Type", "application/json")
+	rec1 := httptest.NewRecorder()
+	mux.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusCreated {
+		t.Fatalf("first create: want 201, got %d body=%s", rec1.Code, rec1.Body.String())
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req2.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+	mux.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("second create: want 429, got %d body=%s", rec2.Code, rec2.Body.String())
+	}
+	var er struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(rec2.Body.Bytes(), &er)
+	if !strings.Contains(er.Error, "active deployment") {
+		t.Fatalf("error message: %q", er.Error)
+	}
+}
+
 func TestHandleStartLoadGen_RequiresTemplate(t *testing.T) {
 	t.Parallel()
 	lg := loadgen.NewLoadGenerator()
@@ -298,4 +350,121 @@ func TestGenerateNamespace_SanitizesInputs(t *testing.T) {
 	if !strings.Contains(ns, "-user-abc-") {
 		t.Fatalf("user part not sanitized/truncated as expected: %q", ns)
 	}
+}
+
+type fakeDeploymentStore struct {
+	mu      sync.Mutex
+	byNS    map[string]store.DeploymentRow
+	active  []store.ActiveDeploymentRow
+	nextSeq int
+}
+
+func newFakeDeploymentStore() *fakeDeploymentStore {
+	return &fakeDeploymentStore{
+		byNS:   make(map[string]store.DeploymentRow),
+		active: make([]store.ActiveDeploymentRow, 0),
+	}
+}
+
+func (f *fakeDeploymentStore) ListActiveDeployments(_ context.Context, userID string) ([]store.ActiveDeploymentRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]store.ActiveDeploymentRow, 0, len(f.active))
+	for _, r := range f.active {
+		if userID == "" {
+			out = append(out, r)
+			continue
+		}
+		row, ok := f.byNS[r.Namespace]
+		if ok && row.UserID == userID {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeDeploymentStore) CreateDeployment(_ context.Context, params store.CreateDeploymentParams) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextSeq++
+	id := fmt.Sprintf("dep-%d", f.nextSeq)
+	row := store.DeploymentRow{
+		ID:        id,
+		UserID:    params.UserID,
+		Namespace: params.Namespace,
+		Template:  params.Template,
+		Archetype: params.Archetype,
+		Status:    "provisioning",
+		Design:    params.Design,
+		ExpiresAt: params.ExpiresAt,
+		CreatedAt: time.Now(),
+	}
+	f.byNS[params.Namespace] = row
+	f.active = append(f.active, store.ActiveDeploymentRow{
+		ID:        id,
+		Namespace: params.Namespace,
+		Template:  params.Template,
+		Status:    "provisioning",
+		ExpiresAt: params.ExpiresAt,
+		CreatedAt: row.CreatedAt,
+	})
+	return id, nil
+}
+
+func (f *fakeDeploymentStore) UpdateStatus(_ context.Context, namespace, status string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	row, ok := f.byNS[namespace]
+	if !ok {
+		return nil
+	}
+	row.Status = status
+	f.byNS[namespace] = row
+	active := make([]store.ActiveDeploymentRow, 0, len(f.active))
+	for _, r := range f.active {
+		if r.Namespace == namespace {
+			if status == "running" || status == "provisioning" {
+				r.Status = status
+				active = append(active, r)
+			}
+			continue
+		}
+		active = append(active, r)
+	}
+	f.active = active
+	return nil
+}
+
+func (f *fakeDeploymentStore) UpdateExpiresAt(_ context.Context, namespace string, expiresAt time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	row, ok := f.byNS[namespace]
+	if ok {
+		row.ExpiresAt = expiresAt
+		f.byNS[namespace] = row
+	}
+	for i := range f.active {
+		if f.active[i].Namespace == namespace {
+			f.active[i].ExpiresAt = expiresAt
+		}
+	}
+	return nil
+}
+
+func (f *fakeDeploymentStore) UpdateMetricsSummary(_ context.Context, _ string, _ map[string]any) error {
+	return nil
+}
+
+func (f *fakeDeploymentStore) GetDeployment(_ context.Context, namespace string) (store.DeploymentRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	row, ok := f.byNS[namespace]
+	if !ok {
+		return store.DeploymentRow{}, fmt.Errorf("not found")
+	}
+	return row, nil
+}
+
+func (f *fakeDeploymentStore) SetMetricsSummary(_ context.Context, _ string, _ map[string]any) error {
+	return nil
 }
