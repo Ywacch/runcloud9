@@ -66,6 +66,35 @@ func TestRequireAuth_ValidToken_SetsUserID(t *testing.T) {
 	}
 }
 
+func TestRequireAuth_QueryTokenFallback_SetsUserID(t *testing.T) {
+	t.Setenv("SUPABASE_JWT_SECRET", "test-secret")
+	t.Setenv("ENV", "production")
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": "user-456",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	signed, err := token.SignedString([]byte("test-secret"))
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := userIDFromContext(r.Context()); got != "user-456" {
+			t.Fatalf("user id: got %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/deployments?token="+signed, nil)
+	rec := httptest.NewRecorder()
+	requireAuth(next).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestRequireAuth_LocalDevFallback_InjectsDevUser(t *testing.T) {
 	t.Setenv("SUPABASE_JWT_SECRET", "")
 	t.Setenv("SUPABASE_URL", "")

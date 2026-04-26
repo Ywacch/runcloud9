@@ -68,6 +68,13 @@ func requireAuth(next http.Handler) http.Handler {
 		}
 
 		header := r.Header.Get("Authorization")
+		// Browser WebSocket API cannot set custom headers. For WS upgrades,
+		// accept JWT from ?token= query parameter when Authorization is absent.
+		if strings.TrimSpace(header) == "" {
+			if qToken := r.URL.Query().Get("token"); qToken != "" {
+				header = "Bearer " + qToken
+			}
+		}
 		if os.Getenv("ENV") != "production" && strings.TrimSpace(header) == "" {
 			// In non-production, missing auth headers should not block local workflows/tests.
 			r = r.WithContext(context.WithValue(r.Context(), userIDKey, "dev-user"))
