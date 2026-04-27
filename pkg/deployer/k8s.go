@@ -12,6 +12,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -24,7 +25,7 @@ import (
 // so transient blips do not abort before Kubernetes has retried, but broken apps do not burn the
 // full orchestration context (~5m on k8s). Image pull backoffs are left to the parent context.
 const (
-	waitReadyCrashLoopDebounce   = 45 * time.Second
+	waitReadyCrashLoopDebounce          = 45 * time.Second
 	waitReadyRestartFailThreshold int32 = 3
 )
 
@@ -54,7 +55,7 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 	// resource requests/limits are required on GKE Autopilot.
 	// Requests = guaranteed minimum. Limits = hard cap.
 	// We set them equal here so Autopilot doesn't reject the pod.
-	resources := ResourceProfile(configString(cfg.Node.Config, "resourceProfile", "medium"))
+	resources := ResourceProfile(configString(cfg.Node.Config, "resourceProfile", "alpha"))
 
 	// replicas can be tuned per node type.
 	replicas := int32(1)
@@ -442,7 +443,7 @@ func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, resour
 		ImagePullPolicy: corev1.PullAlways,
 		Ports:           []corev1.ContainerPort{{ContainerPort: 8080}},
 		Resources:       resources,
-		Env:       envMapToK8s(envVars),
+		Env:             envMapToK8s(envVars),
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				HTTPGet: &corev1.HTTPGetAction{Path: "/health", Port: intstr.FromInt32(8080)},
@@ -485,6 +486,19 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 	if len(backends) == 0 {
 		return fmt.Errorf("lb has no app-server backends: add edges from lb to app-server")
 	}
+	// LB (nginx:alpine) needs far less than a full component profile.
+	resources = corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:              resource.MustParse("50m"),
+			corev1.ResourceMemory:           resource.MustParse("128Mi"),
+			corev1.ResourceEphemeralStorage: resource.MustParse("50Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:              resource.MustParse("50m"),
+			corev1.ResourceMemory:           resource.MustParse("128Mi"),
+			corev1.ResourceEphemeralStorage: resource.MustParse("50Mi"),
+		},
+	}
 	nginxConf := generateNginxConfig(backends, algo)
 
 	cm := &corev1.ConfigMap{
@@ -513,9 +527,9 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{{
-						Name:  "nginx",
-						Image: imageNginx,
-						Ports: []corev1.ContainerPort{{ContainerPort: 80}},
+						Name:      "nginx",
+						Image:     imageNginx,
+						Ports:     []corev1.ContainerPort{{ContainerPort: 80}},
 						Resources: resources,
 						ReadinessProbe: &corev1.Probe{
 							ProbeHandler: corev1.ProbeHandler{
@@ -699,11 +713,11 @@ func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, 
 	}
 
 	containers := []corev1.Container{{
-		Name:            spec.AppLabel,
-		Image:           spec.Image,
-		Ports:           ports,
-		Resources:       resources,
-		Env:             envMapToK8s(allEnv),
+		Name:           spec.AppLabel,
+		Image:          spec.Image,
+		Ports:          ports,
+		Resources:      resources,
+		Env:            envMapToK8s(allEnv),
 		ReadinessProbe: probe,
 	}}
 	if spec.Exporter != nil {
