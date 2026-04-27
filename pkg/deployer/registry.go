@@ -33,12 +33,14 @@ type ComponentSpec struct {
 func DefaultResources() corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse("250m"),
-			corev1.ResourceMemory: resource.MustParse("512Mi"),
+			corev1.ResourceCPU:              resource.MustParse("250m"),
+			corev1.ResourceMemory:           resource.MustParse("512Mi"),
+			corev1.ResourceEphemeralStorage: resource.MustParse("100Mi"),
 		},
 		Limits: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse("250m"),
-			corev1.ResourceMemory: resource.MustParse("512Mi"),
+			corev1.ResourceCPU:              resource.MustParse("250m"),
+			corev1.ResourceMemory:           resource.MustParse("512Mi"),
+			corev1.ResourceEphemeralStorage: resource.MustParse("100Mi"),
 		},
 	}
 }
@@ -49,23 +51,40 @@ func ResourceProfile(profile string) corev1.ResourceRequirements {
 	case "large":
 		return corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("500m"),
-				corev1.ResourceMemory: resource.MustParse("1Gi"),
+				corev1.ResourceCPU:              resource.MustParse("500m"),
+				corev1.ResourceMemory:           resource.MustParse("1Gi"),
+				corev1.ResourceEphemeralStorage: resource.MustParse("200Mi"),
 			},
 			Limits: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("500m"),
-				corev1.ResourceMemory: resource.MustParse("1Gi"),
+				corev1.ResourceCPU:              resource.MustParse("500m"),
+				corev1.ResourceMemory:           resource.MustParse("1Gi"),
+				corev1.ResourceEphemeralStorage: resource.MustParse("200Mi"),
+			},
+		}
+	case "alpha":
+		return corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:              resource.MustParse("125m"),
+				corev1.ResourceMemory:           resource.MustParse("256Mi"),
+				corev1.ResourceEphemeralStorage: resource.MustParse("100Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:              resource.MustParse("125m"),
+				corev1.ResourceMemory:           resource.MustParse("256Mi"),
+				corev1.ResourceEphemeralStorage: resource.MustParse("100Mi"),
 			},
 		}
 	case "small":
 		return corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("125m"),
-				corev1.ResourceMemory: resource.MustParse("256Mi"),
+				corev1.ResourceCPU:              resource.MustParse("125m"),
+				corev1.ResourceMemory:           resource.MustParse("256Mi"),
+				corev1.ResourceEphemeralStorage: resource.MustParse("100Mi"),
 			},
 			Limits: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("125m"),
-				corev1.ResourceMemory: resource.MustParse("256Mi"),
+				corev1.ResourceCPU:              resource.MustParse("125m"),
+				corev1.ResourceMemory:           resource.MustParse("256Mi"),
+				corev1.ResourceEphemeralStorage: resource.MustParse("100Mi"),
 			},
 		}
 	default: // "medium"
@@ -77,12 +96,14 @@ func ResourceProfile(profile string) corev1.ResourceRequirements {
 func ExporterResources() corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse("50m"),
-			corev1.ResourceMemory: resource.MustParse("64Mi"),
+			corev1.ResourceCPU:              resource.MustParse("25m"),
+			corev1.ResourceMemory:           resource.MustParse("32Mi"),
+			corev1.ResourceEphemeralStorage: resource.MustParse("50Mi"),
 		},
 		Limits: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse("50m"),
-			corev1.ResourceMemory: resource.MustParse("64Mi"),
+			corev1.ResourceCPU:              resource.MustParse("25m"),
+			corev1.ResourceMemory:           resource.MustParse("32Mi"),
+			corev1.ResourceEphemeralStorage: resource.MustParse("50Mi"),
 		},
 	}
 }
@@ -99,9 +120,9 @@ const (
 // worker, lb) use explicit deploy functions.
 var componentRegistry = map[string]ComponentSpec{
 	"db": {
-		AppLabel: "postgres",
-		Image:    "postgres:15",
-		Ports:    []int32{5432},
+		AppLabel:    "postgres",
+		Image:       "postgres:15",
+		Ports:       []int32{5432},
 		ServiceName: "db",
 		ServicePort: 5432,
 		DefaultEnv: map[string]string{
@@ -122,9 +143,9 @@ var componentRegistry = map[string]ComponentSpec{
 		},
 	},
 	"mq": {
-		AppLabel: "rabbitmq",
-		Image:    "rabbitmq:3-management",
-		Ports:    []int32{5672, 15672},
+		AppLabel:    "rabbitmq",
+		Image:       "rabbitmq:3-management",
+		Ports:       []int32{5672, 15672},
 		ServiceName: "mq",
 		ServicePort: 5672,
 		DefaultEnv: map[string]string{
@@ -135,4 +156,3 @@ var componentRegistry = map[string]ComponentSpec{
 		Resources:    DefaultResources(),
 	},
 }
-
