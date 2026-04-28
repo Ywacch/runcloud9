@@ -2,15 +2,19 @@ package metrics
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
+	"time"
 )
 
-// RabbitMQ management credentials match pkg/deployer/registry.go (rabbitmq component).
-const rabbitMQMgmtUser = "cloud9"
-const rabbitMQMgmtPass = "cloud9"
+type rabbitCounterSnapshot struct {
+	received  float64
+	delivered float64
+	at        time.Time
+}
 
 // scrapeNginxStubActiveConnections returns active connection count from lb:80/nginx_status, or 0 on any failure.
 func (c *MetricsCollector) scrapeNginxStubActiveConnections(ctx context.Context, namespace string) float64 {
@@ -37,80 +41,99 @@ func (c *MetricsCollector) scrapeNginxStubActiveConnections(ctx context.Context,
 	return parseNginxActiveConnections(string(body))
 }
 
-type rabbitOverviewSnapshot struct {
-	QueueTotals struct {
-		Messages        int `json:"messages"`
-		MessagesReady   int `json:"messages_ready"`
-		MessagesUnacked int `json:"messages_unacknowledged"`
-	} `json:"queue_totals"`
-	MessageStats struct {
-		PublishDetails struct {
-			Rate float64 `json:"rate"`
-		} `json:"publish_details"`
-		DeliverGetDetails struct {
-			Rate float64 `json:"rate"`
-		} `json:"deliver_get_details"`
-	} `json:"message_stats"`
-}
-
-// scrapeRabbitMQOverview reads /api/overview from the mq service; returns zeros on failure.
-func (c *MetricsCollector) scrapeRabbitMQOverview(ctx context.Context, namespace string) (depth, produce, consume, ready, unacked float64) {
+// scrapeRabbitMQPrometheus reads RabbitMQ native Prometheus metrics from :15692.
+// Rates are computed as counter deltas between collection ticks.
+func (c *MetricsCollector) scrapeRabbitMQPrometheus(ctx context.Context, namespace string) (depth, produce, consume, ready, unacked, memUsed, memLimit float64) {
+	var receivedTotal, deliveredTotal float64
 	if c == nil || c.scrapeClient == nil {
-		return 0, 0, 0, 0, 0
+		return 0, 0, 0, 0, 0, 0, 0
 	}
-	u := fmt.Sprintf("http://mq.%s.svc.cluster.local:15672/api/overview", namespace)
+	u := fmt.Sprintf("http://mq.%s.svc.cluster.local:15692/metrics", namespace)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return 0, 0, 0, 0, 0
+		return 0, 0, 0, 0, 0, 0, 0
 	}
-	req.SetBasicAuth(rabbitMQMgmtUser, rabbitMQMgmtPass)
 	resp, err := c.scrapeClient.Do(req)
 	if err != nil {
-		return 0, 0, 0, 0, 0
+		return 0, 0, 0, 0, 0, 0, 0
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, 0, 0, 0, 0
+		return 0, 0, 0, 0, 0, 0, 0
 	}
-	var overview rabbitOverviewSnapshot
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&overview); err != nil {
-		return 0, 0, 0, 0, 0
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return 0, 0, 0, 0, 0, 0, 0
 	}
-	return float64(overview.QueueTotals.Messages),
-		overview.MessageStats.PublishDetails.Rate,
-		overview.MessageStats.DeliverGetDetails.Rate,
-		float64(overview.QueueTotals.MessagesReady),
-		float64(overview.QueueTotals.MessagesUnacked)
+	depth, ready, unacked, receivedTotal, deliveredTotal, memUsed, memLimit = parseRabbitMQMetricsText(string(body))
+	produce, consume = c.rabbitCounterRates(namespace, receivedTotal, deliveredTotal, time.Now())
+	return depth, produce, consume, ready, unacked, memUsed, memLimit
 }
 
-type rabbitNodeSnapshot struct {
-	MemUsed  int64 `json:"mem_used"`
-	MemLimit int64 `json:"mem_limit"`
+func parseRabbitMQMetricsText(raw string) (depth, ready, unacked, receivedTotal, deliveredTotal, memUsed, memLimit float64) {
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		name := fields[0]
+		if idx := strings.IndexByte(name, '{'); idx >= 0 {
+			name = name[:idx]
+		}
+		v, err := strconv.ParseFloat(fields[1], 64)
+		if err != nil {
+			continue
+		}
+		switch name {
+		case "rabbitmq_queue_messages":
+			depth += v
+		case "rabbitmq_queue_messages_ready":
+			ready += v
+		case "rabbitmq_queue_messages_unacked":
+			unacked += v
+		case "rabbitmq_global_messages_received_total":
+			receivedTotal += v
+		case "rabbitmq_global_messages_delivered_consume_auto_ack_total":
+			deliveredTotal += v
+		case "rabbitmq_process_resident_memory_bytes":
+			memUsed += v
+		case "rabbitmq_resident_memory_limit_bytes":
+			memLimit += v
+		}
+	}
+	return depth, ready, unacked, receivedTotal, deliveredTotal, memUsed, memLimit
 }
 
-// scrapeRabbitMQNodes reads /api/nodes from the management plugin; returns first node's mem_used/mem_limit, or 0,0 on failure.
-func (c *MetricsCollector) scrapeRabbitMQNodes(ctx context.Context, namespace string) (memUsed, memLimit float64) {
-	if c == nil || c.scrapeClient == nil {
+func (c *MetricsCollector) rabbitCounterRates(namespace string, receivedTotal, deliveredTotal float64, now time.Time) (produce, consume float64) {
+	if c == nil {
 		return 0, 0
 	}
-	u := fmt.Sprintf("http://mq.%s.svc.cluster.local:15672/api/nodes", namespace)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
+	c.mqRateMu.Lock()
+	defer c.mqRateMu.Unlock()
+	prev, ok := c.mqRates[namespace]
+	c.mqRates[namespace] = rabbitCounterSnapshot{
+		received:  receivedTotal,
+		delivered: deliveredTotal,
+		at:        now,
+	}
+	if !ok {
 		return 0, 0
 	}
-	req.SetBasicAuth(rabbitMQMgmtUser, rabbitMQMgmtPass)
-	resp, err := c.scrapeClient.Do(req)
-	if err != nil {
+	dt := now.Sub(prev.at).Seconds()
+	if dt <= 0 {
 		return 0, 0
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return 0, 0
+	produce = (receivedTotal - prev.received) / dt
+	consume = (deliveredTotal - prev.delivered) / dt
+	if produce < 0 {
+		produce = 0
 	}
-	var nodes []rabbitNodeSnapshot
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&nodes); err != nil || len(nodes) == 0 {
-		return 0, 0
+	if consume < 0 {
+		consume = 0
 	}
-	n := nodes[0]
-	return float64(n.MemUsed), float64(n.MemLimit)
+	return produce, consume
 }

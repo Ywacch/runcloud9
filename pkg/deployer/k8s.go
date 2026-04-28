@@ -647,6 +647,9 @@ func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, 
 	if len(spec.Ports) == 0 {
 		return fmt.Errorf("registry spec for %q must define at least one port", cfg.Node.Type)
 	}
+	if !spec.Resources.Requests.Cpu().IsZero() || !spec.Resources.Requests.Memory().IsZero() || !spec.Resources.Limits.Cpu().IsZero() || !spec.Resources.Limits.Memory().IsZero() {
+		resources = spec.Resources
+	}
 
 	envVars := DeriveEnvVars(cfg.Node, cfg.Design)
 
