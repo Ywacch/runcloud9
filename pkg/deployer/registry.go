@@ -144,8 +144,8 @@ var componentRegistry = map[string]ComponentSpec{
 	},
 	"mq": {
 		AppLabel:    "rabbitmq",
-		Image:       "rabbitmq:3-management",
-		Ports:       []int32{5672, 15672},
+		Image:       "rabbitmq:3",
+		Ports:       []int32{5672, 15692},
 		ServiceName: "mq",
 		ServicePort: 5672,
 		DefaultEnv: map[string]string{
@@ -153,6 +153,17 @@ var componentRegistry = map[string]ComponentSpec{
 			"RABBITMQ_DEFAULT_PASS": "cloud9",
 		},
 		NeedsService: true,
-		Resources:    DefaultResources(),
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:              resource.MustParse("200m"),
+				corev1.ResourceMemory:           resource.MustParse("256Mi"),
+				corev1.ResourceEphemeralStorage: resource.MustParse("100Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:              resource.MustParse("200m"),
+				corev1.ResourceMemory:           resource.MustParse("256Mi"),
+				corev1.ResourceEphemeralStorage: resource.MustParse("100Mi"),
+			},
+		},
 	},
 }

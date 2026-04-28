@@ -48,6 +48,8 @@ type MetricsCollector struct {
 	cascade       *CascadeDetector
 	historyMu     sync.RWMutex
 	history       map[string]*RingBuffer // namespace → last 300 snapshots
+	mqRateMu      sync.Mutex
+	mqRates       map[string]rabbitCounterSnapshot
 }
 
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
@@ -61,6 +63,7 @@ func NewMetricsCollector(prometheusURL string, lg *loadgen.LoadGenerator, client
 		eventBus:      eventBus,
 		thresholds:    NewThresholdDetector(),
 		cascade:       NewCascadeDetector(),
+		mqRates:       make(map[string]rabbitCounterSnapshot),
 	}
 }
 
@@ -104,6 +107,9 @@ func (c *MetricsCollector) Cleanup(namespace string) {
 		delete(c.history, namespace)
 	}
 	c.historyMu.Unlock()
+	c.mqRateMu.Lock()
+	delete(c.mqRates, namespace)
+	c.mqRateMu.Unlock()
 }
 
 // RingBufferFor returns the snapshot ring for a namespace, or nil if none yet.
@@ -640,11 +646,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmMQ.MemIsEstimated = mqMemEst
 	cmMQ.CPULimit = c.kubeLimitCPU(ctx, ns, "rabbitmq.*", "rabbitmq")
 	cmMQ.MemoryLimit = c.kubeLimitMem(ctx, ns, "rabbitmq.*", "rabbitmq")
-	cmMQ.QueueDepth, cmMQ.ProduceRate, cmMQ.ConsumeRate, cmMQ.MessagesReady, cmMQ.MessagesUnacked =
-		c.scrapeRabbitMQOverview(ctx, ns)
-	mqMemUsed, mqMemLim := c.scrapeRabbitMQNodes(ctx, ns)
-	cmMQ.MQMemoryUsed = mqMemUsed
-	cmMQ.MQMemoryLimit = mqMemLim
+	cmMQ.QueueDepth, cmMQ.ProduceRate, cmMQ.ConsumeRate, cmMQ.MessagesReady, cmMQ.MessagesUnacked, cmMQ.MQMemoryUsed, cmMQ.MQMemoryLimit =
+		c.scrapeRabbitMQPrometheus(ctx, ns)
 	mqPubRate, _ := c.query(ctx, fmt.Sprintf(`sum(rate({__name__=~".*_mq_publish_total",namespace=%q}[30s]))`, ns))
 	if mqPubRate > 0 {
 		cmMQ.ProduceRate = mqPubRate

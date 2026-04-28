@@ -75,7 +75,7 @@ func resolveProxyTarget(component string, design map[string]any) (host string, p
 	case "db":
 		return "db", 5432, nil
 	case "mq":
-		return "mq", 15672, nil
+		return "", 0, fmt.Errorf("mq management UI is not available (rabbitmq:3 base image)")
 	case "cache":
 		return "cache", cacheServiceHTTPPort(design), nil
 	case "worker":
