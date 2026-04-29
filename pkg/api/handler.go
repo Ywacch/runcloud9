@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +44,8 @@ type Handler struct {
 	loadgen          *loadgen.LoadGenerator
 	eventBus         *metrics.EventBus
 }
+
+const defaultMaxActiveDeploymentsPerUser = 1
 
 type deploymentStore interface {
 	ListActiveDeployments(ctx context.Context, userID string) ([]store.ActiveDeploymentRow, error)
@@ -322,7 +325,8 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusInternalServerError, "failed to check active deployments")
 			return
 		}
-		if len(active) >= 1 {
+		maxActive := maxActiveDeploymentsPerUser()
+		if len(active) >= maxActive {
 			writeError(w, http.StatusTooManyRequests, "you already have an active deployment — end it before creating another")
 			return
 		}
@@ -776,6 +780,18 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+func maxActiveDeploymentsPerUser() int {
+	raw := strings.TrimSpace(os.Getenv("MAX_ACTIVE_DEPLOYMENTS_PER_USER"))
+	if raw == "" {
+		return defaultMaxActiveDeploymentsPerUser
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed < 1 {
+		return defaultMaxActiveDeploymentsPerUser
+	}
+	return parsed
 }
 
 func (h *Handler) writeDiagnosticsSummary(namespace, url, outcome, collectionReason string, signatures []diagnostics.FailureSignature, partial bool, collectErr error) {
