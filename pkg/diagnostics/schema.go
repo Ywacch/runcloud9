@@ -14,6 +14,7 @@ type DiagnosticArtifact struct {
 	CollectedAt           string               `json:"collected_at"`
 	CollectionReason      string               `json:"collection_reason,omitempty"`
 	Lifecycle             *LifecycleInfo       `json:"lifecycle,omitempty"`
+	ClusterPressure       *ClusterPressure     `json:"cluster_pressure,omitempty"`
 	Namespace             string               `json:"namespace"`
 	Template              string               `json:"template"`
 	Outcome               string               `json:"outcome"`
@@ -42,6 +43,14 @@ type LifecycleInfo struct {
 	CollectedAt     string `json:"collected_at"`
 	Reason          string `json:"collection_reason"`
 	DurationSeconds int    `json:"duration_seconds"`
+}
+
+// ClusterPressure captures a bounded snapshot of recent cluster scheduling pressure signals.
+type ClusterPressure struct {
+	Events          []EventSnapshot `json:"events"`
+	EventsTruncated bool            `json:"events_truncated,omitempty"`
+	CollectedAt     string          `json:"collected_at"`
+	Warning         string          `json:"warning,omitempty"`
 }
 
 // PodSnapshot contains a scrubbed pod status summary (no env vars or secrets).

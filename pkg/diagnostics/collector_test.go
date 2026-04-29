@@ -3,6 +3,10 @@ package diagnostics
 import (
 	"encoding/json"
 	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestExtractSignatures_InsufficientMemory(t *testing.T) {
@@ -99,6 +103,68 @@ func TestDiagnosticArtifact_ValidJSON(t *testing.T) {
 	}
 	if decoded.Namespace != artifact.Namespace || decoded.SchemaVersion != 2 || decoded.Lifecycle == nil || decoded.Lifecycle.Reason != "teardown" {
 		t.Fatalf("unexpected decoded artifact: %+v", decoded)
+	}
+}
+
+func TestFilterClusterPressureEvents_FiltersAndCaps(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	events := make([]corev1.Event, 0, 30)
+	for i := 0; i < 25; i++ {
+		events = append(events, corev1.Event{
+			Reason:  "FailedScheduling",
+			Message: "quota exceeded while scheduling",
+			Type:    "Warning",
+			InvolvedObject: corev1.ObjectReference{
+				Kind: "Pod",
+				Name: "pod-test",
+			},
+			Count:          1,
+			LastTimestamp:  metav1.NewTime(now.Add(-1 * time.Minute)),
+			FirstTimestamp: metav1.NewTime(now.Add(-1 * time.Minute)),
+		})
+	}
+	filtered, truncated := filterClusterPressureEvents(events, now)
+	if !truncated {
+		t.Fatalf("expected truncation to be true")
+	}
+	if len(filtered) != 20 {
+		t.Fatalf("expected 20 filtered events, got %d", len(filtered))
+	}
+}
+
+func TestFilterClusterPressureEvents_RespectsWindowAndPatterns(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	events := []corev1.Event{
+		{
+			Reason:        "FailedScheduling",
+			Message:       "Insufficient memory",
+			Type:          "Warning",
+			LastTimestamp: metav1.NewTime(now.Add(-2 * time.Minute)),
+		},
+		{
+			Reason:        "Normal",
+			Message:       "Successfully assigned",
+			Type:          "Normal",
+			LastTimestamp: metav1.NewTime(now.Add(-2 * time.Minute)),
+		},
+		{
+			Reason:        "FailedScheduling",
+			Message:       "quota exceeded",
+			Type:          "Warning",
+			LastTimestamp: metav1.NewTime(now.Add(-10 * time.Minute)),
+		},
+	}
+	filtered, truncated := filterClusterPressureEvents(events, now)
+	if truncated {
+		t.Fatalf("did not expect truncation")
+	}
+	if len(filtered) != 1 {
+		t.Fatalf("expected 1 filtered event, got %d", len(filtered))
+	}
+	if filtered[0].Reason != "FailedScheduling" {
+		t.Fatalf("unexpected filtered reason: %s", filtered[0].Reason)
 	}
 }
 
