@@ -13,6 +13,7 @@ import (
 	sentryhttp "github.com/getsentry/sentry-go/http"
 	"github.com/ywacch/cloud9/pkg/api"
 	"github.com/ywacch/cloud9/pkg/deployer"
+	"github.com/ywacch/cloud9/pkg/diagnostics"
 	"github.com/ywacch/cloud9/pkg/loadgen"
 	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/seeder"
@@ -148,12 +149,12 @@ func main() {
 	sentryHTTP := false
 	if dsn := os.Getenv("SENTRY_DSN"); dsn != "" {
 		if err := sentry.Init(sentry.ClientOptions{
-			Dsn:                dsn,
-			Environment:        os.Getenv("ENV"),
-			Release:            "cloud9-api@" + version,
-			SampleRate:         1.0,
-			TracesSampleRate:   1.0,
-			EnableLogs:         true,
+			Dsn:              dsn,
+			Environment:      os.Getenv("ENV"),
+			Release:          "cloud9-api@" + version,
+			SampleRate:       1.0,
+			TracesSampleRate: 1.0,
+			EnableLogs:       true,
 		}); err != nil {
 			log.Printf("sentry.Init: %v", err)
 		} else {
@@ -183,27 +184,29 @@ func main() {
 
 	lg := loadgen.NewLoadGenerator()
 	var metricsCollector *metrics.MetricsCollector
+	var diagnosticsCollector *diagnostics.Collector
 
 	// teardownFn uses context.Background() so cleanup is never cut short by request cancel or timeout.
 	teardownFn := func(namespace string) {
 		// Stop load generator first — prevents requests to a dying namespace
 		lg.Stop(namespace)
 		ctx := context.Background()
+		tpl := ""
+		var row store.DeploymentRow
+		row, rowErr := deploymentStore.GetDeployment(ctx, namespace)
+		if rowErr == nil {
+			tpl = row.Template
+		}
+		summary := make(map[string]any)
+		if rowErr == nil && row.MetricsSummary != nil {
+			for k, v := range row.MetricsSummary {
+				summary[k] = v
+			}
+		}
 		// Collect final metrics snapshot and merge into existing summary (preserves 'seeded' and other fields).
 		if metricsCollector != nil {
-			tpl := ""
-			row, rowErr := deploymentStore.GetDeployment(ctx, namespace)
-			if rowErr == nil {
-				tpl = row.Template
-			}
 			dm, err := metricsCollector.Collect(ctx, namespace, tpl)
 			if err == nil && dm != nil {
-				summary := make(map[string]any)
-				if rowErr == nil && row.MetricsSummary != nil {
-					for k, v := range row.MetricsSummary {
-						summary[k] = v
-					}
-				}
 				for k, v := range metricsCollector.PeakSummaryForNamespace(namespace, dm) {
 					summary[k] = v
 				}
@@ -214,9 +217,37 @@ func main() {
 				if rowErr == nil {
 					summary["actual_duration_seconds"] = int(time.Since(row.CreatedAt).Seconds())
 				}
-				if err := deploymentStore.SetMetricsSummary(ctx, namespace, summary); err != nil {
-					log.Printf("auto-teardown metrics summary update failed for %s: %v", namespace, err)
-				}
+			}
+		}
+		if diagnosticsCollector != nil {
+			diagCtx, diagCancel := context.WithTimeout(ctx, 20*time.Second)
+			url, signatures, partial, diagErr := diagnosticsCollector.Collect(diagCtx, diagnostics.CollectParams{
+				Namespace: namespace,
+				Template:  tpl,
+				Outcome:   "success",
+			})
+			diagCancel()
+			signatureCodes := make([]string, 0, len(signatures))
+			for _, sig := range signatures {
+				signatureCodes = append(signatureCodes, sig.Code)
+			}
+			diagSummary := map[string]any{
+				"url":                url,
+				"collected_at":       time.Now().UTC().Format(time.RFC3339),
+				"outcome":            "success",
+				"schema_version":     1,
+				"failure_signatures": signatureCodes,
+				"partial":            partial,
+			}
+			if diagErr != nil {
+				log.Printf("DDC: teardown collection failed for %s: %v", namespace, diagErr)
+				diagSummary["error"] = diagErr.Error()
+			}
+			summary["diagnostics"] = diagSummary
+		}
+		if len(summary) > 0 {
+			if err := deploymentStore.SetMetricsSummary(ctx, namespace, summary); err != nil {
+				log.Printf("auto-teardown metrics summary update failed for %s: %v", namespace, err)
 			}
 		}
 		d := deployers["db"]
@@ -245,8 +276,19 @@ func main() {
 	eventBus := metrics.NewEventBus()
 	metricsCollector = metrics.NewMetricsCollector(prometheusURL, lg, clientset, eventBus)
 	metricsCollector.SetDebugMetrics(debugMetrics)
+	if clientset != nil {
+		ddcBucket := os.Getenv("DDC_BUCKET")
+		if ddcBucket == "" {
+			ddcBucket = "cloud9-diagnostics"
+		}
+		var err error
+		diagnosticsCollector, err = diagnostics.NewCollector(clientset, ddcBucket)
+		if err != nil {
+			log.Printf("DDC: init failed (disabled): %v", err)
+		}
+	}
 
-	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed, metricsCollector, clientset, lg, eventBus)
+	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed, metricsCollector, diagnosticsCollector, clientset, lg, eventBus)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
