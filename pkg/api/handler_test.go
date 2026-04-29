@@ -242,6 +242,72 @@ func TestHandleCreateDeployment_ConcurrentLimit_RejectsSecondActive(t *testing.T
 	}
 }
 
+func TestHandleCreateDeployment_ConcurrentLimit_RespectsEnvOverride(t *testing.T) {
+	t.Setenv("ENV", "development")
+	t.Setenv("SUPABASE_JWT_SECRET", "")
+	t.Setenv("SUPABASE_URL", "")
+	t.Setenv("MAX_ACTIVE_DEPLOYMENTS_PER_USER", "2")
+
+	s := newFakeDeploymentStore()
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "standard",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app", Type: "app-server", Name: "app", Config: map[string]interface{}{}},
+			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app", TargetID: "db"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+
+	req1 := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req1.Header.Set("Content-Type", "application/json")
+	rec1 := httptest.NewRecorder()
+	mux.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusCreated {
+		t.Fatalf("first create: want 201, got %d body=%s", rec1.Code, rec1.Body.String())
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req2.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+	mux.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusCreated {
+		t.Fatalf("second create: want 201, got %d body=%s", rec2.Code, rec2.Body.String())
+	}
+
+	req3 := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req3.Header.Set("Content-Type", "application/json")
+	rec3 := httptest.NewRecorder()
+	mux.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusTooManyRequests {
+		t.Fatalf("third create: want 429, got %d body=%s", rec3.Code, rec3.Body.String())
+	}
+}
+
+func TestMaxActiveDeploymentsPerUser_DefaultAndInvalid(t *testing.T) {
+	t.Setenv("MAX_ACTIVE_DEPLOYMENTS_PER_USER", "")
+	if got := maxActiveDeploymentsPerUser(); got != 1 {
+		t.Fatalf("default limit: got %d", got)
+	}
+
+	t.Setenv("MAX_ACTIVE_DEPLOYMENTS_PER_USER", "abc")
+	if got := maxActiveDeploymentsPerUser(); got != 1 {
+		t.Fatalf("invalid value fallback: got %d", got)
+	}
+
+	t.Setenv("MAX_ACTIVE_DEPLOYMENTS_PER_USER", "0")
+	if got := maxActiveDeploymentsPerUser(); got != 1 {
+		t.Fatalf("non-positive fallback: got %d", got)
+	}
+}
+
 func TestHandleStartLoadGen_RequiresTemplate(t *testing.T) {
 	t.Parallel()
 	lg := loadgen.NewLoadGenerator()

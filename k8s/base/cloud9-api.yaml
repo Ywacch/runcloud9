@@ -117,6 +117,8 @@ spec:
               value: "cloud9-seed-data"
             - name: DDC_BUCKET
               value: "cloud9-diagnostics"
+            - name: MAX_ACTIVE_DEPLOYMENTS_PER_USER
+              value: "1"
             - name: PROMETHEUS_URL
               value: "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
             - name: SENTRY_DSN
