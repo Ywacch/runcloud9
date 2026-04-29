@@ -12,6 +12,7 @@ type FailureSignature struct {
 type DiagnosticArtifact struct {
 	SchemaVersion         int                  `json:"schema_version"`
 	CollectedAt           string               `json:"collected_at"`
+	CollectionReason      string               `json:"collection_reason,omitempty"`
 	Namespace             string               `json:"namespace"`
 	Template              string               `json:"template"`
 	Outcome               string               `json:"outcome"`
@@ -80,8 +81,9 @@ type EventSnapshot struct {
 
 // CollectParams drives one diagnostics collection run.
 type CollectParams struct {
-	Namespace string
-	Template  string
-	Outcome   string
-	OrcError  string
+	Namespace        string
+	Template         string
+	Outcome          string
+	OrcError         string
+	CollectionReason string
 }

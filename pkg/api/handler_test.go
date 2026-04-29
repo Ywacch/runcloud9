@@ -352,6 +352,47 @@ func TestGenerateNamespace_SanitizesInputs(t *testing.T) {
 	}
 }
 
+func TestWriteDiagnosticsSummary_IncludesCollectionReason(t *testing.T) {
+	t.Parallel()
+
+	s := newFakeDeploymentStore()
+	_, _ = s.CreateDeployment(context.Background(), store.CreateDeploymentParams{
+		Namespace: "cloud9-test-ns",
+		Template:  "url-shortener",
+		Archetype: "standard",
+		UserID:    "u1",
+		Design:    map[string]any{},
+		ExpiresAt: time.Now().Add(10 * time.Minute),
+	})
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
+
+	h.writeDiagnosticsSummary(
+		"cloud9-test-ns",
+		"gs://cloud9-diagnostics/cloud9-test-ns/test.json",
+		"success",
+		"delete",
+		nil,
+		false,
+		nil,
+	)
+
+	row, err := s.GetDeployment(context.Background(), "cloud9-test-ns")
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	diagRaw, ok := row.MetricsSummary["diagnostics"]
+	if !ok {
+		t.Fatalf("diagnostics missing from metrics summary: %+v", row.MetricsSummary)
+	}
+	diag, ok := diagRaw.(map[string]any)
+	if !ok {
+		t.Fatalf("diagnostics value has unexpected type: %T", diagRaw)
+	}
+	if got, _ := diag["collection_reason"].(string); got != "delete" {
+		t.Fatalf("collection_reason: want delete, got %q", got)
+	}
+}
+
 type fakeDeploymentStore struct {
 	mu      sync.Mutex
 	byNS    map[string]store.DeploymentRow
@@ -451,7 +492,20 @@ func (f *fakeDeploymentStore) UpdateExpiresAt(_ context.Context, namespace strin
 	return nil
 }
 
-func (f *fakeDeploymentStore) UpdateMetricsSummary(_ context.Context, _ string, _ map[string]any) error {
+func (f *fakeDeploymentStore) UpdateMetricsSummary(_ context.Context, namespace string, patch map[string]any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	row, ok := f.byNS[namespace]
+	if !ok {
+		return fmt.Errorf("not found")
+	}
+	if row.MetricsSummary == nil {
+		row.MetricsSummary = make(map[string]any)
+	}
+	for k, v := range patch {
+		row.MetricsSummary[k] = v
+	}
+	f.byNS[namespace] = row
 	return nil
 }
 
@@ -465,6 +519,14 @@ func (f *fakeDeploymentStore) GetDeployment(_ context.Context, namespace string)
 	return row, nil
 }
 
-func (f *fakeDeploymentStore) SetMetricsSummary(_ context.Context, _ string, _ map[string]any) error {
+func (f *fakeDeploymentStore) SetMetricsSummary(_ context.Context, namespace string, summary map[string]any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	row, ok := f.byNS[namespace]
+	if !ok {
+		return fmt.Errorf("not found")
+	}
+	row.MetricsSummary = summary
+	f.byNS[namespace] = row
 	return nil
 }

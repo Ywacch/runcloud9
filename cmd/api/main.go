@@ -222,9 +222,10 @@ func main() {
 		if diagnosticsCollector != nil {
 			diagCtx, diagCancel := context.WithTimeout(ctx, 20*time.Second)
 			url, signatures, partial, diagErr := diagnosticsCollector.Collect(diagCtx, diagnostics.CollectParams{
-				Namespace: namespace,
-				Template:  tpl,
-				Outcome:   "success",
+				Namespace:        namespace,
+				Template:         tpl,
+				Outcome:          "success",
+				CollectionReason: "teardown",
 			})
 			diagCancel()
 			signatureCodes := make([]string, 0, len(signatures))
@@ -238,6 +239,7 @@ func main() {
 				"schema_version":     1,
 				"failure_signatures": signatureCodes,
 				"partial":            partial,
+				"collection_reason":  "teardown",
 			}
 			if diagErr != nil {
 				log.Printf("DDC: teardown collection failed for %s: %v", namespace, diagErr)

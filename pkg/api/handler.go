@@ -388,17 +388,18 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 			if h.diagnostics != nil {
 				diagCtx, diagCancel := context.WithTimeout(context.Background(), 20*time.Second)
 				url, signatures, partial, diagErr := h.diagnostics.Collect(diagCtx, diagnostics.CollectParams{
-					Namespace: namespace,
-					Template:  design.Template,
-					Outcome:   "failed",
-					OrcError:  err.Error(),
+					Namespace:        namespace,
+					Template:         design.Template,
+					Outcome:          "failed",
+					OrcError:         err.Error(),
+					CollectionReason: "failure",
 				})
 				diagCancel()
 				if diagErr != nil {
 					log.Printf("DDC: collection failed for %s: %v", namespace, diagErr)
-					h.writeDiagnosticsSummary(namespace, "", "failed", signatures, partial, diagErr)
+					h.writeDiagnosticsSummary(namespace, "", "failed", "failure", signatures, partial, diagErr)
 				} else {
-					h.writeDiagnosticsSummary(namespace, url, "failed", signatures, partial, nil)
+					h.writeDiagnosticsSummary(namespace, url, "failed", "failure", signatures, partial, nil)
 					log.Printf("DDC: collected for %s -> %s", namespace, url)
 				}
 			}
@@ -679,13 +680,17 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 	if h.scheduler != nil {
 		h.scheduler.Cancel(namespace)
 	}
-	// Persist final metrics summary before teardown (read-modify-write preserves 'seeded' and other fields).
-	if h.metricsCollector != nil && h.store != nil {
-		tpl := ""
-		row, rowErr := h.store.GetDeployment(r.Context(), namespace)
+	tpl := ""
+	var row store.DeploymentRow
+	var rowErr error
+	if h.store != nil {
+		row, rowErr = h.store.GetDeployment(r.Context(), namespace)
 		if rowErr == nil {
 			tpl = row.Template
 		}
+	}
+	// Persist final metrics summary before teardown (read-modify-write preserves 'seeded' and other fields).
+	if h.metricsCollector != nil && h.store != nil {
 		dm, err := h.metricsCollector.Collect(r.Context(), namespace, tpl)
 		if err == nil && dm != nil {
 			summary := make(map[string]any)
@@ -706,6 +711,20 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 			}
 			_ = h.store.SetMetricsSummary(r.Context(), namespace, summary)
 		}
+	}
+	if h.diagnostics != nil {
+		diagCtx, diagCancel := context.WithTimeout(context.Background(), 20*time.Second)
+		url, signatures, partial, diagErr := h.diagnostics.Collect(diagCtx, diagnostics.CollectParams{
+			Namespace:        namespace,
+			Template:         tpl,
+			Outcome:          "success",
+			CollectionReason: "delete",
+		})
+		diagCancel()
+		if diagErr != nil {
+			log.Printf("DDC: delete-path collection failed for %s: %v", namespace, diagErr)
+		}
+		h.writeDiagnosticsSummary(namespace, url, "success", "delete", signatures, partial, diagErr)
 	}
 	if h.metricsCollector != nil {
 		h.metricsCollector.Cleanup(namespace)
@@ -730,7 +749,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
-func (h *Handler) writeDiagnosticsSummary(namespace, url, outcome string, signatures []diagnostics.FailureSignature, partial bool, collectErr error) {
+func (h *Handler) writeDiagnosticsSummary(namespace, url, outcome, collectionReason string, signatures []diagnostics.FailureSignature, partial bool, collectErr error) {
 	if h.store == nil {
 		return
 	}
@@ -745,6 +764,7 @@ func (h *Handler) writeDiagnosticsSummary(namespace, url, outcome string, signat
 		"schema_version":     1,
 		"failure_signatures": signatureCodes,
 		"partial":            partial,
+		"collection_reason":  collectionReason,
 	}
 	if collectErr != nil {
 		payload["error"] = collectErr.Error()

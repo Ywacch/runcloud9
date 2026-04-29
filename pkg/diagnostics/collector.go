@@ -59,11 +59,15 @@ func (c *Collector) Collect(ctx context.Context, params CollectParams) (string, 
 	artifact := DiagnosticArtifact{
 		SchemaVersion:      schemaVersion,
 		CollectedAt:        time.Now().UTC().Format(time.RFC3339),
+		CollectionReason:   params.CollectionReason,
 		Namespace:          params.Namespace,
 		Template:           params.Template,
 		Outcome:            params.Outcome,
 		OrchestrationError: RedactString(params.OrcError),
 		Logs:               make(map[string][]string),
+	}
+	if artifact.CollectionReason == "" {
+		artifact.CollectionReason = "unknown"
 	}
 
 	pods, podWarnings, podsTruncated := c.collectPods(ctx, params.Namespace, start)
