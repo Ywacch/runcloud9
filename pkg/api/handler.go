@@ -386,19 +386,35 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 				_ = h.store.UpdateStatus(context.Background(), namespace, "failed")
 			}
 			if h.diagnostics != nil {
+				var createdAt string
+				var runningAt string
+				durationSeconds := 0
+				if h.store != nil {
+					if row, rowErr := h.store.GetDeployment(context.Background(), namespace); rowErr == nil {
+						createdAt = row.CreatedAt.UTC().Format(time.RFC3339)
+						durationSeconds = int(time.Since(row.CreatedAt).Seconds())
+						if raw, ok := row.MetricsSummary["running_at"].(string); ok {
+							runningAt = raw
+						}
+					}
+				}
 				diagCtx, diagCancel := context.WithTimeout(context.Background(), 20*time.Second)
 				url, signatures, partial, diagErr := h.diagnostics.Collect(diagCtx, diagnostics.CollectParams{
-					Namespace: namespace,
-					Template:  design.Template,
-					Outcome:   "failed",
-					OrcError:  err.Error(),
+					Namespace:        namespace,
+					Template:         design.Template,
+					Outcome:          "failed",
+					OrcError:         err.Error(),
+					CollectionReason: "failure",
+					CreatedAt:        createdAt,
+					RunningAt:        runningAt,
+					DurationSeconds:  durationSeconds,
 				})
 				diagCancel()
 				if diagErr != nil {
 					log.Printf("DDC: collection failed for %s: %v", namespace, diagErr)
-					h.writeDiagnosticsSummary(namespace, "", "failed", signatures, partial, diagErr)
+					h.writeDiagnosticsSummary(namespace, "", "failed", "failure", signatures, partial, diagErr)
 				} else {
-					h.writeDiagnosticsSummary(namespace, url, "failed", signatures, partial, nil)
+					h.writeDiagnosticsSummary(namespace, url, "failed", "failure", signatures, partial, nil)
 					log.Printf("DDC: collected for %s -> %s", namespace, url)
 				}
 			}
@@ -425,7 +441,8 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 			_ = h.store.UpdateStatus(context.Background(), namespace, "running")
 			_ = h.store.UpdateExpiresAt(context.Background(), namespace, runExpiresAt)
 			_ = h.store.UpdateMetricsSummary(context.Background(), namespace, map[string]any{
-				"seeded": result.Seeded,
+				"seeded":     result.Seeded,
+				"running_at": time.Now().UTC().Format(time.RFC3339),
 			})
 		}
 		if h.scheduler != nil {
@@ -679,13 +696,17 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 	if h.scheduler != nil {
 		h.scheduler.Cancel(namespace)
 	}
-	// Persist final metrics summary before teardown (read-modify-write preserves 'seeded' and other fields).
-	if h.metricsCollector != nil && h.store != nil {
-		tpl := ""
-		row, rowErr := h.store.GetDeployment(r.Context(), namespace)
+	tpl := ""
+	var row store.DeploymentRow
+	var rowErr error
+	if h.store != nil {
+		row, rowErr = h.store.GetDeployment(r.Context(), namespace)
 		if rowErr == nil {
 			tpl = row.Template
 		}
+	}
+	// Persist final metrics summary before teardown (read-modify-write preserves 'seeded' and other fields).
+	if h.metricsCollector != nil && h.store != nil {
 		dm, err := h.metricsCollector.Collect(r.Context(), namespace, tpl)
 		if err == nil && dm != nil {
 			summary := make(map[string]any)
@@ -706,6 +727,33 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 			}
 			_ = h.store.SetMetricsSummary(r.Context(), namespace, summary)
 		}
+	}
+	if h.diagnostics != nil {
+		createdAt := ""
+		runningAt := ""
+		durationSeconds := 0
+		if rowErr == nil {
+			createdAt = row.CreatedAt.UTC().Format(time.RFC3339)
+			durationSeconds = int(time.Since(row.CreatedAt).Seconds())
+			if raw, ok := row.MetricsSummary["running_at"].(string); ok {
+				runningAt = raw
+			}
+		}
+		diagCtx, diagCancel := context.WithTimeout(context.Background(), 20*time.Second)
+		url, signatures, partial, diagErr := h.diagnostics.Collect(diagCtx, diagnostics.CollectParams{
+			Namespace:        namespace,
+			Template:         tpl,
+			Outcome:          "success",
+			CollectionReason: "delete",
+			CreatedAt:        createdAt,
+			RunningAt:        runningAt,
+			DurationSeconds:  durationSeconds,
+		})
+		diagCancel()
+		if diagErr != nil {
+			log.Printf("DDC: delete-path collection failed for %s: %v", namespace, diagErr)
+		}
+		h.writeDiagnosticsSummary(namespace, url, "success", "delete", signatures, partial, diagErr)
 	}
 	if h.metricsCollector != nil {
 		h.metricsCollector.Cleanup(namespace)
@@ -730,7 +778,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
-func (h *Handler) writeDiagnosticsSummary(namespace, url, outcome string, signatures []diagnostics.FailureSignature, partial bool, collectErr error) {
+func (h *Handler) writeDiagnosticsSummary(namespace, url, outcome, collectionReason string, signatures []diagnostics.FailureSignature, partial bool, collectErr error) {
 	if h.store == nil {
 		return
 	}
@@ -742,9 +790,10 @@ func (h *Handler) writeDiagnosticsSummary(namespace, url, outcome string, signat
 		"url":                url,
 		"collected_at":       time.Now().UTC().Format(time.RFC3339),
 		"outcome":            outcome,
-		"schema_version":     1,
+		"schema_version":     2,
 		"failure_signatures": signatureCodes,
 		"partial":            partial,
+		"collection_reason":  collectionReason,
 	}
 	if collectErr != nil {
 		payload["error"] = collectErr.Error()
@@ -758,6 +807,14 @@ func (h *Handler) writeDiagnosticsSummary(namespace, url, outcome string, signat
 		}
 		return
 	}
+	lifecycle := map[string]any{
+		"created_at":       row.CreatedAt.UTC().Format(time.RFC3339),
+		"duration_seconds": int(time.Since(row.CreatedAt).Seconds()),
+	}
+	if raw, ok := row.MetricsSummary["running_at"].(string); ok && raw != "" {
+		lifecycle["running_at"] = raw
+	}
+	payload["lifecycle"] = lifecycle
 
 	summary := make(map[string]any, len(row.MetricsSummary)+1)
 	for k, v := range row.MetricsSummary {

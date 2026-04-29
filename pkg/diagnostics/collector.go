@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -26,8 +28,12 @@ const (
 	maxContainerLogLines = int64(50)
 	maxAPILogLines       = int64(200)
 	maxArtifactSizeBytes = 512 * 1024
-	schemaVersion        = 1
+	maxPressureScan      = int64(200)
+	maxPressureKeep      = 20
+	schemaVersion        = 2
 )
+
+var pressurePattern = regexp.MustCompile(`(?i)failedscheduling|nottriggerscaleup|triggeredscaleup|quota|nodenotready`)
 
 // Collector gathers bounded diagnostics snapshots and uploads them to GCS.
 type Collector struct {
@@ -59,11 +65,24 @@ func (c *Collector) Collect(ctx context.Context, params CollectParams) (string, 
 	artifact := DiagnosticArtifact{
 		SchemaVersion:      schemaVersion,
 		CollectedAt:        time.Now().UTC().Format(time.RFC3339),
+		CollectionReason:   params.CollectionReason,
 		Namespace:          params.Namespace,
 		Template:           params.Template,
 		Outcome:            params.Outcome,
 		OrchestrationError: RedactString(params.OrcError),
 		Logs:               make(map[string][]string),
+	}
+	if artifact.CollectionReason == "" {
+		artifact.CollectionReason = "unknown"
+	}
+	if params.CreatedAt != "" || params.RunningAt != "" || params.DurationSeconds > 0 {
+		artifact.Lifecycle = &LifecycleInfo{
+			CreatedAt:       params.CreatedAt,
+			RunningAt:       params.RunningAt,
+			CollectedAt:     artifact.CollectedAt,
+			Reason:          artifact.CollectionReason,
+			DurationSeconds: params.DurationSeconds,
+		}
 	}
 
 	pods, podWarnings, podsTruncated := c.collectPods(ctx, params.Namespace, start)
@@ -94,6 +113,9 @@ func (c *Collector) Collect(ctx context.Context, params CollectParams) (string, 
 	artifact.CollectionWarnings = append(artifact.CollectionWarnings, logWarnings...)
 
 	artifact.Signatures = ExtractSignatures(artifact.Events, artifact.OrchestrationError, artifact.Logs, artifact.Pods)
+	if shouldCollectClusterPressure() {
+		artifact.ClusterPressure = c.collectClusterPressure(ctx, time.Now().UTC())
+	}
 	partial := ctx.Err() != nil
 	if partial {
 		artifact.CollectionWarnings = append(artifact.CollectionWarnings, "collection deadline exceeded")
@@ -315,6 +337,65 @@ func (c *Collector) readPodLogs(ctx context.Context, namespace, podName, contain
 		out = append(out, RedactString(line))
 	}
 	return out, nil
+}
+
+func shouldCollectClusterPressure() bool {
+	return strings.EqualFold(os.Getenv("DDC_CLUSTER_PRESSURE"), "true")
+}
+
+func (c *Collector) collectClusterPressure(ctx context.Context, now time.Time) *ClusterPressure {
+	out := &ClusterPressure{
+		Events:      []EventSnapshot{},
+		CollectedAt: now.Format(time.RFC3339),
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < 3*time.Second {
+		out.Warning = "skipped: insufficient time remaining"
+		return out
+	}
+	list, err := c.clientset.CoreV1().Events("kube-system").List(ctx, metav1.ListOptions{Limit: maxPressureScan})
+	if err != nil {
+		out.Warning = fmt.Sprintf("cluster pressure collection failed: %v", err)
+		return out
+	}
+	filtered, truncated := filterClusterPressureEvents(list.Items, now)
+	out.Events = filtered
+	out.EventsTruncated = truncated
+	return out
+}
+
+func filterClusterPressureEvents(events []corev1.Event, now time.Time) ([]EventSnapshot, bool) {
+	keep := make([]EventSnapshot, 0, maxPressureKeep)
+	cutoff := now.Add(-5 * time.Minute)
+	truncated := false
+	for _, evt := range events {
+		ts := evt.EventTime.Time
+		if ts.IsZero() {
+			ts = evt.LastTimestamp.Time
+		}
+		if ts.IsZero() {
+			ts = evt.FirstTimestamp.Time
+		}
+		if ts.IsZero() || ts.Before(cutoff) {
+			continue
+		}
+		text := evt.Reason + " " + evt.Message
+		if !pressurePattern.MatchString(text) {
+			continue
+		}
+		if len(keep) >= maxPressureKeep {
+			truncated = true
+			break
+		}
+		keep = append(keep, EventSnapshot{
+			Reason:    evt.Reason,
+			Message:   RedactString(evt.Message),
+			Type:      evt.Type,
+			Object:    strings.ToLower(evt.InvolvedObject.Kind) + "/" + evt.InvolvedObject.Name,
+			Count:     evt.Count,
+			Timestamp: ts.UTC().Format(time.RFC3339),
+		})
+	}
+	return keep, truncated
 }
 
 func podSnapshot(pod corev1.Pod, start time.Time) PodSnapshot {

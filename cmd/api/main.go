@@ -220,11 +220,25 @@ func main() {
 			}
 		}
 		if diagnosticsCollector != nil {
+			createdAt := ""
+			runningAt := ""
+			durationSeconds := 0
+			if rowErr == nil {
+				createdAt = row.CreatedAt.UTC().Format(time.RFC3339)
+				durationSeconds = int(time.Since(row.CreatedAt).Seconds())
+				if raw, ok := row.MetricsSummary["running_at"].(string); ok {
+					runningAt = raw
+				}
+			}
 			diagCtx, diagCancel := context.WithTimeout(ctx, 20*time.Second)
 			url, signatures, partial, diagErr := diagnosticsCollector.Collect(diagCtx, diagnostics.CollectParams{
-				Namespace: namespace,
-				Template:  tpl,
-				Outcome:   "success",
+				Namespace:        namespace,
+				Template:         tpl,
+				Outcome:          "success",
+				CollectionReason: "teardown",
+				CreatedAt:        createdAt,
+				RunningAt:        runningAt,
+				DurationSeconds:  durationSeconds,
 			})
 			diagCancel()
 			signatureCodes := make([]string, 0, len(signatures))
@@ -235,9 +249,20 @@ func main() {
 				"url":                url,
 				"collected_at":       time.Now().UTC().Format(time.RFC3339),
 				"outcome":            "success",
-				"schema_version":     1,
+				"schema_version":     2,
 				"failure_signatures": signatureCodes,
 				"partial":            partial,
+				"collection_reason":  "teardown",
+			}
+			if createdAt != "" || durationSeconds > 0 {
+				lifecycle := map[string]any{
+					"created_at":       createdAt,
+					"duration_seconds": durationSeconds,
+				}
+				if runningAt != "" {
+					lifecycle["running_at"] = runningAt
+				}
+				diagSummary["lifecycle"] = lifecycle
 			}
 			if diagErr != nil {
 				log.Printf("DDC: teardown collection failed for %s: %v", namespace, diagErr)
