@@ -386,6 +386,18 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 				_ = h.store.UpdateStatus(context.Background(), namespace, "failed")
 			}
 			if h.diagnostics != nil {
+				var createdAt string
+				var runningAt string
+				durationSeconds := 0
+				if h.store != nil {
+					if row, rowErr := h.store.GetDeployment(context.Background(), namespace); rowErr == nil {
+						createdAt = row.CreatedAt.UTC().Format(time.RFC3339)
+						durationSeconds = int(time.Since(row.CreatedAt).Seconds())
+						if raw, ok := row.MetricsSummary["running_at"].(string); ok {
+							runningAt = raw
+						}
+					}
+				}
 				diagCtx, diagCancel := context.WithTimeout(context.Background(), 20*time.Second)
 				url, signatures, partial, diagErr := h.diagnostics.Collect(diagCtx, diagnostics.CollectParams{
 					Namespace:        namespace,
@@ -393,6 +405,9 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 					Outcome:          "failed",
 					OrcError:         err.Error(),
 					CollectionReason: "failure",
+					CreatedAt:        createdAt,
+					RunningAt:        runningAt,
+					DurationSeconds:  durationSeconds,
 				})
 				diagCancel()
 				if diagErr != nil {
@@ -426,7 +441,8 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 			_ = h.store.UpdateStatus(context.Background(), namespace, "running")
 			_ = h.store.UpdateExpiresAt(context.Background(), namespace, runExpiresAt)
 			_ = h.store.UpdateMetricsSummary(context.Background(), namespace, map[string]any{
-				"seeded": result.Seeded,
+				"seeded":     result.Seeded,
+				"running_at": time.Now().UTC().Format(time.RFC3339),
 			})
 		}
 		if h.scheduler != nil {
@@ -713,12 +729,25 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if h.diagnostics != nil {
+		createdAt := ""
+		runningAt := ""
+		durationSeconds := 0
+		if rowErr == nil {
+			createdAt = row.CreatedAt.UTC().Format(time.RFC3339)
+			durationSeconds = int(time.Since(row.CreatedAt).Seconds())
+			if raw, ok := row.MetricsSummary["running_at"].(string); ok {
+				runningAt = raw
+			}
+		}
 		diagCtx, diagCancel := context.WithTimeout(context.Background(), 20*time.Second)
 		url, signatures, partial, diagErr := h.diagnostics.Collect(diagCtx, diagnostics.CollectParams{
 			Namespace:        namespace,
 			Template:         tpl,
 			Outcome:          "success",
 			CollectionReason: "delete",
+			CreatedAt:        createdAt,
+			RunningAt:        runningAt,
+			DurationSeconds:  durationSeconds,
 		})
 		diagCancel()
 		if diagErr != nil {
@@ -761,7 +790,7 @@ func (h *Handler) writeDiagnosticsSummary(namespace, url, outcome, collectionRea
 		"url":                url,
 		"collected_at":       time.Now().UTC().Format(time.RFC3339),
 		"outcome":            outcome,
-		"schema_version":     1,
+		"schema_version":     2,
 		"failure_signatures": signatureCodes,
 		"partial":            partial,
 		"collection_reason":  collectionReason,
@@ -778,6 +807,14 @@ func (h *Handler) writeDiagnosticsSummary(namespace, url, outcome, collectionRea
 		}
 		return
 	}
+	lifecycle := map[string]any{
+		"created_at":       row.CreatedAt.UTC().Format(time.RFC3339),
+		"duration_seconds": int(time.Since(row.CreatedAt).Seconds()),
+	}
+	if raw, ok := row.MetricsSummary["running_at"].(string); ok && raw != "" {
+		lifecycle["running_at"] = raw
+	}
+	payload["lifecycle"] = lifecycle
 
 	summary := make(map[string]any, len(row.MetricsSummary)+1)
 	for k, v := range row.MetricsSummary {

@@ -74,12 +74,20 @@ func TestRedactString(t *testing.T) {
 func TestDiagnosticArtifact_ValidJSON(t *testing.T) {
 	t.Parallel()
 	artifact := DiagnosticArtifact{
-		SchemaVersion: 1,
-		CollectedAt:   "2026-04-29T00:00:00Z",
-		Namespace:     "cloud9-test",
-		Template:      "ecommerce",
-		Outcome:       "success",
-		Logs:          map[string][]string{"pod/container": {"ok"}},
+		SchemaVersion:    2,
+		CollectedAt:      "2026-04-29T00:00:00Z",
+		CollectionReason: "teardown",
+		Namespace:        "cloud9-test",
+		Template:         "ecommerce",
+		Outcome:          "success",
+		Lifecycle: &LifecycleInfo{
+			CreatedAt:       "2026-04-29T00:00:00Z",
+			RunningAt:       "2026-04-29T00:00:30Z",
+			CollectedAt:     "2026-04-29T00:09:00Z",
+			Reason:          "teardown",
+			DurationSeconds: 540,
+		},
+		Logs: map[string][]string{"pod/container": {"ok"}},
 	}
 	body, err := json.Marshal(artifact)
 	if err != nil {
@@ -89,7 +97,7 @@ func TestDiagnosticArtifact_ValidJSON(t *testing.T) {
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if decoded.Namespace != artifact.Namespace || decoded.SchemaVersion != 1 {
+	if decoded.Namespace != artifact.Namespace || decoded.SchemaVersion != 2 || decoded.Lifecycle == nil || decoded.Lifecycle.Reason != "teardown" {
 		t.Fatalf("unexpected decoded artifact: %+v", decoded)
 	}
 }

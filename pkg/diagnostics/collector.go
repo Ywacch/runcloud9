@@ -26,7 +26,7 @@ const (
 	maxContainerLogLines = int64(50)
 	maxAPILogLines       = int64(200)
 	maxArtifactSizeBytes = 512 * 1024
-	schemaVersion        = 1
+	schemaVersion        = 2
 )
 
 // Collector gathers bounded diagnostics snapshots and uploads them to GCS.
@@ -68,6 +68,15 @@ func (c *Collector) Collect(ctx context.Context, params CollectParams) (string, 
 	}
 	if artifact.CollectionReason == "" {
 		artifact.CollectionReason = "unknown"
+	}
+	if params.CreatedAt != "" || params.RunningAt != "" || params.DurationSeconds > 0 {
+		artifact.Lifecycle = &LifecycleInfo{
+			CreatedAt:       params.CreatedAt,
+			RunningAt:       params.RunningAt,
+			CollectedAt:     artifact.CollectedAt,
+			Reason:          artifact.CollectionReason,
+			DurationSeconds: params.DurationSeconds,
+		}
 	}
 
 	pods, podWarnings, podsTruncated := c.collectPods(ctx, params.Namespace, start)

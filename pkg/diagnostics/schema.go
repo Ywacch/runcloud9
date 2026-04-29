@@ -13,6 +13,7 @@ type DiagnosticArtifact struct {
 	SchemaVersion         int                  `json:"schema_version"`
 	CollectedAt           string               `json:"collected_at"`
 	CollectionReason      string               `json:"collection_reason,omitempty"`
+	Lifecycle             *LifecycleInfo       `json:"lifecycle,omitempty"`
 	Namespace             string               `json:"namespace"`
 	Template              string               `json:"template"`
 	Outcome               string               `json:"outcome"`
@@ -32,6 +33,15 @@ type DiagnosticArtifact struct {
 	ServicesTruncated     bool                 `json:"services_truncated,omitempty"`
 	LogsDropped           bool                 `json:"logs_dropped,omitempty"`
 	EventsCollectionError string               `json:"events_collection_error,omitempty"`
+}
+
+// LifecycleInfo captures deployment timing checkpoints used for overlap analysis.
+type LifecycleInfo struct {
+	CreatedAt       string `json:"created_at"`
+	RunningAt       string `json:"running_at,omitempty"`
+	CollectedAt     string `json:"collected_at"`
+	Reason          string `json:"collection_reason"`
+	DurationSeconds int    `json:"duration_seconds"`
 }
 
 // PodSnapshot contains a scrubbed pod status summary (no env vars or secrets).
@@ -86,4 +96,7 @@ type CollectParams struct {
 	Outcome          string
 	OrcError         string
 	CollectionReason string
+	CreatedAt        string
+	RunningAt        string
+	DurationSeconds  int
 }
