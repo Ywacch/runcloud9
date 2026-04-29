@@ -17,6 +17,7 @@ import (
 	"github.com/getsentry/sentry-go"
 	"github.com/gorilla/websocket"
 	"github.com/ywacch/cloud9/pkg/deployer"
+	"github.com/ywacch/cloud9/pkg/diagnostics"
 	"github.com/ywacch/cloud9/pkg/loadgen"
 	"github.com/ywacch/cloud9/pkg/logs"
 	"github.com/ywacch/cloud9/pkg/metrics"
@@ -37,6 +38,7 @@ type Handler struct {
 	scheduler        *teardown.Scheduler
 	seeder           *seeder.Seeder
 	metricsCollector *metrics.MetricsCollector
+	diagnostics      *diagnostics.Collector
 	clientset        kubernetes.Interface
 	loadgen          *loadgen.LoadGenerator
 	eventBus         *metrics.EventBus
@@ -66,6 +68,7 @@ func NewHandler(
 	scheduler *teardown.Scheduler,
 	seed *seeder.Seeder,
 	metricsCollector *metrics.MetricsCollector,
+	diagnosticsCollector *diagnostics.Collector,
 	clientset kubernetes.Interface,
 	lg *loadgen.LoadGenerator,
 	eventBus *metrics.EventBus,
@@ -76,6 +79,7 @@ func NewHandler(
 		scheduler:        scheduler,
 		seeder:           seed,
 		metricsCollector: metricsCollector,
+		diagnostics:      diagnosticsCollector,
 		clientset:        clientset,
 		loadgen:          lg,
 		eventBus:         eventBus,
@@ -380,6 +384,23 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 			})
 			if h.store != nil {
 				_ = h.store.UpdateStatus(context.Background(), namespace, "failed")
+			}
+			if h.diagnostics != nil {
+				diagCtx, diagCancel := context.WithTimeout(context.Background(), 20*time.Second)
+				url, signatures, partial, diagErr := h.diagnostics.Collect(diagCtx, diagnostics.CollectParams{
+					Namespace: namespace,
+					Template:  design.Template,
+					Outcome:   "failed",
+					OrcError:  err.Error(),
+				})
+				diagCancel()
+				if diagErr != nil {
+					log.Printf("DDC: collection failed for %s: %v", namespace, diagErr)
+					h.writeDiagnosticsSummary(namespace, "", "failed", signatures, partial, diagErr)
+				} else {
+					h.writeDiagnosticsSummary(namespace, url, "failed", signatures, partial, nil)
+					log.Printf("DDC: collected for %s -> %s", namespace, url)
+				}
 			}
 			failedTeardownAt := time.Now().Add(30 * time.Second)
 			if h.scheduler != nil {
@@ -707,6 +728,45 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+func (h *Handler) writeDiagnosticsSummary(namespace, url, outcome string, signatures []diagnostics.FailureSignature, partial bool, collectErr error) {
+	if h.store == nil {
+		return
+	}
+	signatureCodes := make([]string, 0, len(signatures))
+	for _, sig := range signatures {
+		signatureCodes = append(signatureCodes, sig.Code)
+	}
+	payload := map[string]any{
+		"url":                url,
+		"collected_at":       time.Now().UTC().Format(time.RFC3339),
+		"outcome":            outcome,
+		"schema_version":     1,
+		"failure_signatures": signatureCodes,
+		"partial":            partial,
+	}
+	if collectErr != nil {
+		payload["error"] = collectErr.Error()
+	}
+
+	ctx := context.Background()
+	row, err := h.store.GetDeployment(ctx, namespace)
+	if err != nil || row.MetricsSummary == nil {
+		if setErr := h.store.SetMetricsSummary(ctx, namespace, map[string]any{"diagnostics": payload}); setErr != nil {
+			log.Printf("DDC: set diagnostics summary failed for %s: %v", namespace, setErr)
+		}
+		return
+	}
+
+	summary := make(map[string]any, len(row.MetricsSummary)+1)
+	for k, v := range row.MetricsSummary {
+		summary[k] = v
+	}
+	summary["diagnostics"] = payload
+	if setErr := h.store.SetMetricsSummary(ctx, namespace, summary); setErr != nil {
+		log.Printf("DDC: update diagnostics summary failed for %s: %v", namespace, setErr)
+	}
 }
 
 // generateNamespace returns a DNS-safe namespace that avoids same-second collisions.

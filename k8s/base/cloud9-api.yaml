@@ -23,6 +23,9 @@ rules:
     resources: ["services", "configmaps", "secrets", "pods", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
     resources: ["pods/exec", "pods/log"]
     verbs: ["get", "create"]
   - apiGroups: ["apps"]
@@ -112,6 +115,8 @@ spec:
                   key: allowed-origins
             - name: SEED_BUCKET_NAME
               value: "cloud9-seed-data"
+            - name: DDC_BUCKET
+              value: "cloud9-diagnostics"
             - name: PROMETHEUS_URL
               value: "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
             - name: SENTRY_DSN
