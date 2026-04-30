@@ -2,12 +2,13 @@ package api
 
 import (
 	"context"
-	"crypto/rand"
+	crand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"strconv"
@@ -368,6 +369,11 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 
 	// Continue orchestration in the background after returning the response.
 	go func(design deployer.DeploymentDesign, namespace, userID string) {
+		// Stagger orchestration starts to avoid K8s API burst throttling.
+		// Deployment is already persisted, so user feedback is immediate.
+		stagger := time.Duration(rand.Intn(2000)) * time.Millisecond
+		time.Sleep(stagger)
+
 		timeout := 2 * time.Minute
 		if os.Getenv("DEPLOYER") == "k8s" {
 			timeout = 5 * time.Minute
@@ -849,7 +855,7 @@ func generateNamespace(template, userID string) string {
 	uid := sanitizeNamespacePart(userID, "dev-user", 8)
 
 	b := make([]byte, 3) // 6 hex chars
-	if _, err := rand.Read(b); err != nil {
+	if _, err := crand.Read(b); err != nil {
 		// Very unlikely; fallback keeps rollout unblocked while still being mostly unique.
 		now := time.Now().UnixNano()
 		return fmt.Sprintf("cloud9-%s-%s-%06x", tpl, uid, now&0xFFFFFF)

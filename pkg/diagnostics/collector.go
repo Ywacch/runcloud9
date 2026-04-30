@@ -9,10 +9,10 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"cloud.google.com/go/storage"
+	"golang.org/x/sync/semaphore"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,7 +40,7 @@ type Collector struct {
 	clientset kubernetes.Interface
 	bucket    string
 	gcsClient *storage.Client
-	mu        sync.Mutex
+	sem       *semaphore.Weighted
 }
 
 // NewCollector constructs a diagnostics collector with a shared GCS client.
@@ -53,13 +53,16 @@ func NewCollector(clientset kubernetes.Interface, bucket string) (*Collector, er
 		clientset: clientset,
 		bucket:    bucket,
 		gcsClient: client,
+		sem:       semaphore.NewWeighted(3),
 	}, nil
 }
 
 // Collect gathers evidence for a namespace and uploads one JSON artifact to GCS.
 func (c *Collector) Collect(ctx context.Context, params CollectParams) (string, []FailureSignature, bool, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	if err := c.sem.Acquire(ctx, 1); err != nil {
+		return "", nil, true, fmt.Errorf("acquire semaphore: %w", err)
+	}
+	defer c.sem.Release(1)
 
 	start := time.Now()
 	artifact := DiagnosticArtifact{
