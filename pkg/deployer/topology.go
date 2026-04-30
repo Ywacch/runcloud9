@@ -100,12 +100,36 @@ func ValidateTopology(design DeploymentDesign) error {
 		}
 	}
 
-	// Proxy topologies: app-server must not also connect directly to db (ambiguous / wrong model).
+	// Non-proxy caches (e.g. cache-aside) must not connect to db — only proxy strategies use cache -> db.
+	for _, cacheNode := range design.Nodes {
+		if cacheNode.Type != "cache" || requiresProxy(cacheNode) {
+			continue
+		}
+		for _, conn := range design.Connections {
+			if conn.SourceID != cacheNode.ID {
+				continue
+			}
+			target, ok := nodeMap[conn.TargetID]
+			if !ok {
+				continue
+			}
+			if target.Type == "db" {
+				return fmt.Errorf(
+					"cache node %q uses cache-aside strategy but is connected to db %q — "+
+						"cache-aside Redis does not talk to the database; "+
+						"remove the cache -> db edge, or change strategy to write-through/read-through",
+					cacheNode.Name, target.Name,
+				)
+			}
+		}
+	}
+
+	// If the app reaches a cache that also reaches db, the app must not also connect directly to db.
 	for _, appNode := range design.Nodes {
 		if appNode.Type != "app-server" {
 			continue
 		}
-		var hasProxyCache, hasDirectDB bool
+		var hasDirectDB bool
 		for _, conn := range design.Connections {
 			if conn.SourceID != appNode.ID {
 				continue
@@ -114,20 +138,35 @@ func ValidateTopology(design DeploymentDesign) error {
 			if !ok {
 				continue
 			}
-			switch target.Type {
-			case "db":
+			if target.Type == "db" {
 				hasDirectDB = true
-			case "cache":
-				if requiresProxy(target) {
-					hasProxyCache = true
-				}
+				break
 			}
 		}
-		if hasProxyCache && hasDirectDB {
-			return fmt.Errorf(
-				"app-server %q must not connect directly to a db node when using a proxy cache strategy; remove the app-server -> db connection",
-				appNode.Name,
-			)
+		if !hasDirectDB {
+			continue
+		}
+		for _, conn := range design.Connections {
+			if conn.SourceID != appNode.ID {
+				continue
+			}
+			cacheTarget, ok := nodeMap[conn.TargetID]
+			if !ok || cacheTarget.Type != "cache" {
+				continue
+			}
+			for _, cc := range design.Connections {
+				if cc.SourceID != cacheTarget.ID {
+					continue
+				}
+				db, ok := nodeMap[cc.TargetID]
+				if ok && db.Type == "db" {
+					return fmt.Errorf(
+						"ambiguous data path: app-server %q connects to both cache %q and db directly, "+
+							"but the cache also connects to the db — pick one path",
+						appNode.Name, cacheTarget.Name,
+					)
+				}
+			}
 		}
 	}
 

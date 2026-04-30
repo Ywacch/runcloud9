@@ -419,8 +419,89 @@ func TestValidateTopology_AppServerDbWithProxyCacheForbidden(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
-	if want := "must not connect directly to a db node"; !strings.Contains(err.Error(), want) {
+	if want := "ambiguous data path"; !strings.Contains(err.Error(), want) {
 		t.Fatalf("expected error to contain %q, got %q", want, err.Error())
+	}
+}
+
+func TestValidateTopology_CacheAsideWithCacheToDBForbidden(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "a", Type: "app-server", Name: "API Server"},
+			{ID: "d", Type: "db", Name: "PostgreSQL"},
+			{
+				ID:   "c",
+				Type: "cache",
+				Name: "Redis",
+				Config: map[string]any{
+					"strategy": "cache-aside",
+				},
+			},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "a", TargetID: "c", Protocol: "TCP"},
+			{SourceID: "a", TargetID: "d", Protocol: "TCP"},
+			{SourceID: "c", TargetID: "d", Protocol: "TCP"},
+		},
+	}
+
+	err := ValidateTopology(design)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	if want := "cache-aside Redis does not talk to the database"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("expected error to contain %q, got %q", want, err.Error())
+	}
+}
+
+func TestValidateTopology_AppCacheAsideAndDB_NoCacheToDB_Valid(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "a", Type: "app-server", Name: "API Server"},
+			{ID: "d", Type: "db", Name: "PostgreSQL"},
+			{
+				ID:   "c",
+				Type: "cache",
+				Name: "Redis",
+				Config: map[string]any{
+					"strategy": "cache-aside",
+				},
+			},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "a", TargetID: "c", Protocol: "TCP"},
+			{SourceID: "a", TargetID: "d", Protocol: "TCP"},
+		},
+	}
+
+	if err := ValidateTopology(design); err != nil {
+		t.Fatalf("expected valid topology, got %v", err)
+	}
+}
+
+func TestValidateTopology_AppProxyCacheToDB_NoDirectDB_Valid(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "a", Type: "app-server", Name: "API Server"},
+			{ID: "d", Type: "db", Name: "PostgreSQL"},
+			{
+				ID:   "c",
+				Type: "cache",
+				Name: "Redis",
+				Config: map[string]any{
+					"strategy":        "write-through",
+					"cacheTtlSeconds": float64(120),
+				},
+			},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "a", TargetID: "c", Protocol: "TCP"},
+			{SourceID: "c", TargetID: "d", Protocol: "TCP"},
+		},
+	}
+
+	if err := ValidateTopology(design); err != nil {
+		t.Fatalf("expected valid topology, got %v", err)
 	}
 }
 
