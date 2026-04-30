@@ -100,6 +100,10 @@ func buildDeployers() (map[string]deployer.ComponentDeployer, kubernetes.Interfa
 			log.Fatalf("build kubeconfig: %v", err)
 		}
 	}
+	// Raise client-go rate limits for concurrent deployment orchestration.
+	// Default (5 QPS, 10 burst) causes 10-16s delays at 20+ concurrent deploys.
+	config.QPS = 50
+	config.Burst = 100
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		log.Fatalf("build clientset: %v", err)
