@@ -746,6 +746,7 @@ func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, 
 		svcPorts := make([]corev1.ServicePort, 0, len(spec.Ports))
 		for _, p := range spec.Ports {
 			svcPorts = append(svcPorts, corev1.ServicePort{
+				Name:       fmt.Sprintf("port-%d", p),
 				Port:       p,
 				TargetPort: intstr.FromInt32(p),
 			})
