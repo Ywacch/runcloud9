@@ -254,20 +254,11 @@ func imageFor(name string) string {
 	if registry == "" {
 		registry = "us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images"
 	}
-	tag := ":v1"
-	switch name {
-	case "url-shortener":
-		tag = ":v1"
-	case "ecommerce":
-		tag = ":v1"
-	case "ecommerce-worker":
-		tag = ":v1"
-	case "social-feed":
-		tag = ":v1"
-	case "fanout-worker":
-		tag = ":v1"
+	tag := os.Getenv("TEMPLATE_IMAGE_TAG")
+	if tag == "" {
+		tag = "v1"
 	}
-	return registry + "/" + name + tag
+	return registry + "/" + name + ":" + tag
 }
 
 // Registry returns all registered templates (free + optional premium after InitRegistry).

@@ -93,6 +93,17 @@ func TestImageFor_RegistryEnv(t *testing.T) {
 	}
 }
 
+func TestImageFor_TagEnv(t *testing.T) {
+	// Not parallel: mutates process env; parallel tests would race on TEMPLATE_IMAGE_TAG.
+	t.Setenv("TEMPLATE_IMAGE_REGISTRY", "reg.example/test")
+	t.Setenv("TEMPLATE_IMAGE_TAG", "git-abc1234")
+	got := imageFor("url-shortener")
+	want := "reg.example/test/url-shortener:git-abc1234"
+	if got != want {
+		t.Fatalf("imageFor with TEMPLATE_IMAGE_TAG: got %q want %q", got, want)
+	}
+}
+
 func TestRegistryJSON_IncludesSimulatableDeployable(t *testing.T) {
 	t.Parallel()
 	b, err := json.Marshal(Registry())

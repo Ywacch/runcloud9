@@ -577,13 +577,34 @@ Docker builds and pushes the template images (url-shortener, caching-proxy) to G
 
 ### Building and pushing images
 ```bash
+# Use one immutable release tag across the full image set.
+export RELEASE_TAG=git-1a2b3c4
+
 # URL shortener (from images/url-shortener/)
-docker build -t us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/url-shortener:v1 .
-docker push us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/url-shortener:v1
+docker build -t us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/url-shortener:${RELEASE_TAG} .
+docker push us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/url-shortener:${RELEASE_TAG}
 
 # Caching proxy (from images/caching-proxy/)
-docker build -t us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/caching-proxy:v1 .
-docker push us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/caching-proxy:v1
+docker build -t us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/caching-proxy:${RELEASE_TAG} .
+docker push us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/caching-proxy:${RELEASE_TAG}
+```
+
+Set backend deploy env to the same value:
+
+```powershell
+$env:TEMPLATE_IMAGE_TAG="git-1a2b3c4"
+```
+
+After deploy, verify pod digest parity with:
+
+```bash
+./scripts/verify-rollout.sh <namespace>
+```
+
+or
+
+```powershell
+.\scripts\verify-rollout.ps1 -Namespace <namespace>
 ```
 
 ### Local Postgres container (seed data generation)
@@ -670,6 +691,7 @@ $env:SUPABASE_URL="https://<ref>.supabase.co"
 $env:SUPABASE_SERVICE_KEY="<service-role-key>"
 $env:GOOGLE_APPLICATION_CREDENTIALS="terraform-key.json"
 $env:TEMPLATE_IMAGE_REGISTRY="us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images"
+$env:TEMPLATE_IMAGE_TAG="git-1a2b3c4"               # immutable release tag (default is v1)
 $env:SEED_BUCKET_NAME="cloud9-seed-data"
 $env:PROMETHEUS_URL="http://localhost:9090"   # requires Prometheus port-forward
 ```

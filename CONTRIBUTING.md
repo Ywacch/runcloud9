@@ -257,6 +257,7 @@ See `cmd/api/main.go` for the full list. Key ones:
 | `SUPABASE_SERVICE_KEY` | Yes | Deployment store auth |
 | `PROMETHEUS_URL` | No | Metrics collection (empty = metrics disabled) |
 | `TEMPLATE_IMAGE_REGISTRY` | No | Docker image registry prefix |
+| `TEMPLATE_IMAGE_TAG` | No | Deploy-time template/proxy image tag (default: `v1`) |
 | `SEED_BUCKET_NAME` | No | GCS bucket for pre-baked seed data |
 
 ---
@@ -273,6 +274,18 @@ v1.0.0  → major (breaking changes)
 ```
 
 Pre-launch, we're at `v0.x.x`. Don't worry about breaking changes until v1.
+
+### Immutable image rollout process
+
+Use immutable release tags for all deployable images (`url-shortener`, `caching-proxy`, `social-feed`, `ecommerce`, workers). Do not rely on re-pushing mutable tags such as `:v1` for production rollouts.
+
+1. Build and push a full image set with one release tag (for example `git-1a2b3c4`).
+2. Set `TEMPLATE_IMAGE_TAG` in the backend deployment environment to that exact tag.
+3. Deploy a canary template.
+4. Run rollout verification scripts and require digest parity:
+   - `scripts/verify-rollout.sh`
+   - `scripts/verify-rollout.ps1`
+5. Proceed to full rollout only after verification passes.
 
 ---
 
