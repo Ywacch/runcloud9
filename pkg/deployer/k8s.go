@@ -808,10 +808,7 @@ func cacheImage(strategy string) string {
 	if registry == "" {
 		registry = "us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images"
 	}
-	tag := os.Getenv("TEMPLATE_IMAGE_TAG")
-	if tag == "" {
-		tag = "v1"
-	}
+	tag := templates.ImageTag("caching-proxy")
 	// UNDERSTAND: cache-aside uses plain Redis; proxy strategies use a custom Go service.
 	switch strategy {
 	case "write-through", "write-behind", "read-through":

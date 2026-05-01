@@ -2,6 +2,7 @@ package templates
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -101,6 +102,25 @@ func TestImageFor_TagEnv(t *testing.T) {
 	want := "reg.example/test/url-shortener:git-abc1234"
 	if got != want {
 		t.Fatalf("imageFor with TEMPLATE_IMAGE_TAG: got %q want %q", got, want)
+	}
+}
+
+func TestImageFor_ManifestOverridesEnvTag(t *testing.T) {
+	t.Setenv("TEMPLATE_IMAGE_REGISTRY", "reg.example/test")
+	t.Setenv("TEMPLATE_IMAGE_TAG", "git-env")
+	dir := t.TempDir()
+	manifest := dir + "/image-versions.json"
+	data := []byte(`{"url-shortener":"git-manifest"}`)
+	if err := os.WriteFile(manifest, data, 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := LoadVersionManifest(manifest); err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	got := imageFor("url-shortener")
+	want := "reg.example/test/url-shortener:git-manifest"
+	if got != want {
+		t.Fatalf("imageFor with manifest override: got %q want %q", got, want)
 	}
 }
 

@@ -1,0 +1,8 @@
+{
+  "url-shortener": "v1",
+  "ecommerce": "v1",
+  "social-feed": "v1",
+  "ecommerce-worker": "v1",
+  "fanout-worker": "v1",
+  "caching-proxy": "v1"
+}

@@ -254,10 +254,7 @@ func imageFor(name string) string {
 	if registry == "" {
 		registry = "us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images"
 	}
-	tag := os.Getenv("TEMPLATE_IMAGE_TAG")
-	if tag == "" {
-		tag = "v1"
-	}
+	tag := ImageTag(name)
 	return registry + "/" + name + ":" + tag
 }
 

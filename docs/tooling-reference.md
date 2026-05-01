@@ -589,7 +589,22 @@ docker build -t us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/caching-
 docker push us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/caching-proxy:${RELEASE_TAG}
 ```
 
-Set backend deploy env to the same value:
+Preferred production flow uses a manifest:
+
+```json
+{
+  "url-shortener": "git-1a2b3c4",
+  "caching-proxy": "git-1a2b3c4"
+}
+```
+
+Set backend deploy env to the manifest path:
+
+```powershell
+$env:IMAGE_VERSIONS_FILE="config/image-versions.json"
+```
+
+Optional fallback (dev/CI):
 
 ```powershell
 $env:TEMPLATE_IMAGE_TAG="git-1a2b3c4"
@@ -691,6 +706,7 @@ $env:SUPABASE_URL="https://<ref>.supabase.co"
 $env:SUPABASE_SERVICE_KEY="<service-role-key>"
 $env:GOOGLE_APPLICATION_CREDENTIALS="terraform-key.json"
 $env:TEMPLATE_IMAGE_REGISTRY="us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images"
+$env:IMAGE_VERSIONS_FILE="config/image-versions.json" # manifest overrides global tag when present
 $env:TEMPLATE_IMAGE_TAG="git-1a2b3c4"               # immutable release tag (default is v1)
 $env:SEED_BUCKET_NAME="cloud9-seed-data"
 $env:PROMETHEUS_URL="http://localhost:9090"   # requires Prometheus port-forward
