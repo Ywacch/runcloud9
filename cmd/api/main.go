@@ -149,6 +149,14 @@ func main() {
 	if os.Getenv("ENV") == "production" && os.Getenv("SUPABASE_JWT_SECRET") == "" {
 		log.Fatal("SUPABASE_JWT_SECRET must be set in production")
 	}
+	versionsFile := os.Getenv("IMAGE_VERSIONS_FILE")
+	if versionsFile == "" {
+		versionsFile = "config/image-versions.json"
+	}
+	if err := templates.LoadVersionManifest(versionsFile); err != nil {
+		log.Fatalf("failed to load image version manifest %q: %v", versionsFile, err)
+	}
+	log.Printf("loaded image version manifest from %s", versionsFile)
 
 	sentryHTTP := false
 	if dsn := os.Getenv("SENTRY_DSN"); dsn != "" {

@@ -258,6 +258,7 @@ See `cmd/api/main.go` for the full list. Key ones:
 | `PROMETHEUS_URL` | No | Metrics collection (empty = metrics disabled) |
 | `TEMPLATE_IMAGE_REGISTRY` | No | Docker image registry prefix |
 | `TEMPLATE_IMAGE_TAG` | No | Deploy-time template/proxy image tag (default: `v1`) |
+| `IMAGE_VERSIONS_FILE` | No | JSON manifest path for per-image immutable tags (overrides global tag) |
 | `SEED_BUCKET_NAME` | No | GCS bucket for pre-baked seed data |
 
 ---
@@ -279,13 +280,19 @@ Pre-launch, we're at `v0.x.x`. Don't worry about breaking changes until v1.
 
 Use immutable release tags for all deployable images (`url-shortener`, `caching-proxy`, `social-feed`, `ecommerce`, workers). Do not rely on re-pushing mutable tags such as `:v1` for production rollouts.
 
+Production source of truth is `config/image-versions.json` loaded via `IMAGE_VERSIONS_FILE`. Tag resolution priority is:
+1. Manifest entry for image name
+2. `TEMPLATE_IMAGE_TAG`
+3. `v1` fallback
+
 1. Build and push a full image set with one release tag (for example `git-1a2b3c4`).
-2. Set `TEMPLATE_IMAGE_TAG` in the backend deployment environment to that exact tag.
-3. Deploy a canary template.
-4. Run rollout verification scripts and require digest parity:
+2. Update `config/image-versions.json` for changed images and set `IMAGE_VERSIONS_FILE` in backend deployment.
+3. Optionally set `TEMPLATE_IMAGE_TAG` for local/dev fallback.
+4. Deploy a canary template.
+5. Run rollout verification scripts and require digest parity:
    - `scripts/verify-rollout.sh`
    - `scripts/verify-rollout.ps1`
-5. Proceed to full rollout only after verification passes.
+6. Proceed to full rollout only after verification passes.
 
 ---
 
