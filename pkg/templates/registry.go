@@ -127,7 +127,10 @@ func init() {
 // InitRegistry merges embedded free templates with premium rows from Supabase.
 // Call once at process startup after the Supabase client exists. If client is nil, only free templates load.
 func InitRegistry(client *supabase.Client) {
-	free := append([]TemplateSpec(nil), embeddedFree...)
+	// Rebuild free templates at InitRegistry time so image tags reflect the latest
+	// manifest/env resolution loaded during process startup.
+	free := loadEmbeddedTemplates()
+	embeddedFree = append([]TemplateSpec(nil), free...)
 	premium, err := FetchRemoteTemplates(client)
 	if err != nil {
 		log.Printf("templates: premium fetch returned error (using free only): %v", err)
