@@ -397,8 +397,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 
 	// DB (postgres) — CPU/memory: cAdvisor or kube requests; connections: postgres_exporter when scraped.
 	cmDB := ComponentMetrics{Component: "db"}
-	dbCPU, dbCPUEst := c.queryCPUPair(ctx, ns, "postgres.*", "postgres")
-	dbMem, dbMemEst := c.queryMemPair(ctx, ns, "postgres.*", "postgres")
+	dbCPU, dbCPUEst := c.queryProcessCPU(ctx, ns, "postgres.*", "postgres")
+	dbMem, dbMemEst := c.queryProcessMemory(ctx, ns, "postgres.*", "postgres")
 	cmDB.CPUUsage = dbCPU
 	cmDB.CPUIsEstimated = dbCPUEst
 	cmDB.MemoryBytes = int64(dbMem)

@@ -723,6 +723,9 @@ func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, 
 		Env:            envMapToK8s(allEnv),
 		ReadinessProbe: probe,
 	}}
+	if len(spec.Command) > 0 {
+		containers[0].Command = spec.Command
+	}
 	if spec.Exporter != nil {
 		exp := spec.Exporter
 		containers = append(containers, corev1.Container{
@@ -754,14 +757,20 @@ func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, 
 	}
 
 	if spec.NeedsService {
+		// Expose all declared component ports on the Service (e.g. RabbitMQ AMQP + Prometheus).
+		svcPorts := make([]corev1.ServicePort, 0, len(spec.Ports))
+		for _, p := range spec.Ports {
+			svcPorts = append(svcPorts, corev1.ServicePort{
+				Port:       p,
+				TargetPort: intstr.FromInt32(p),
+			})
+		}
 		svc := &corev1.Service{
 			ObjectMeta: metav1.ObjectMeta{Name: spec.ServiceName, Namespace: cfg.Namespace},
 			Spec: corev1.ServiceSpec{
 				Type:     corev1.ServiceTypeClusterIP,
 				Selector: labels,
-				Ports: []corev1.ServicePort{
-					{Port: spec.ServicePort, TargetPort: intstr.FromInt32(spec.Ports[0])},
-				},
+				Ports:    svcPorts,
 			},
 		}
 		_, err := k.clientset.CoreV1().Services(cfg.Namespace).Create(ctx, svc, metav1.CreateOptions{})

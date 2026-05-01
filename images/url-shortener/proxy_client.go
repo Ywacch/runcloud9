@@ -221,3 +221,28 @@ func (c *ProxyClient) Health(ctx context.Context) (status string, redis string, 
 	return out.Status, out.Redis, out.DB, nil
 }
 
+func (c *ProxyClient) Codes(ctx context.Context) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/codes", nil)
+	if err != nil {
+		return nil, err
+	}
+	setRequestIDHeader(req, ctx)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("proxy CODES failed: status=%d", resp.StatusCode)
+	}
+
+	var out struct {
+		Codes []string `json:"codes"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Codes, nil
+}
