@@ -43,6 +43,9 @@ jobs:
         run: |
           IMAGE="$GAR_HOST/$PROJECT_ID/$GAR_REPO/$IMAGE_NAME"
           docker build --build-arg "VERSION=$SHA" -t "$IMAGE:$SHA" -t "$IMAGE:latest" .
+          CID="$(docker create "$IMAGE:$SHA")"
+          docker cp "$CID:/config/image-versions.json" /tmp/image-versions.json
+          docker rm "$CID"
           docker push "$IMAGE:$SHA"
           docker push "$IMAGE:latest"
 

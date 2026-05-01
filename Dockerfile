@@ -11,4 +11,5 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.version=${VERSION}
 
 FROM gcr.io/distroless/static-debian12
 COPY --from=builder /app/cloud9-api /cloud9-api
+COPY --from=builder /app/config/image-versions.json /config/image-versions.json
 ENTRYPOINT ["/cloud9-api"]
