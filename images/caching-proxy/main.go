@@ -64,23 +64,23 @@ func loadConfig() Config {
 	wbSecs, _ := strconv.Atoi(envOrDefault("WRITE_BEHIND_INTERVAL", "30"))
 
 	return Config{
-		DBHost:               dbHost,
-		DBPort:               envOrDefault("DB_PORT", "5432"),
-		DBName:               envOrDefault("DB_NAME", "syscrack"),
-		DBUser:               envOrDefault("DB_USER", "syscrack"),
-		DBPassword:           envOrDefault("DB_PASSWORD", "syscrack"),
-		RedisHost:            redisHost,
-		RedisPort:            envOrDefault("REDIS_PORT", "6379"),
-		Strategy:             strategy,
-		CacheTTL:             time.Duration(ttlSecs) * time.Second,
+		DBHost:              dbHost,
+		DBPort:              envOrDefault("DB_PORT", "5432"),
+		DBName:              envOrDefault("DB_NAME", "syscrack"),
+		DBUser:              envOrDefault("DB_USER", "syscrack"),
+		DBPassword:          envOrDefault("DB_PASSWORD", "syscrack"),
+		RedisHost:           redisHost,
+		RedisPort:           envOrDefault("REDIS_PORT", "6379"),
+		Strategy:            strategy,
+		CacheTTL:            time.Duration(ttlSecs) * time.Second,
 		WriteBehindInterval: time.Duration(wbSecs) * time.Second,
-		Port:                 envOrDefault("PORT", "8081"),
+		Port:                envOrDefault("PORT", "8081"),
 	}
 }
 
 type Server struct {
-	cfg Config
-	db  *DB
+	cfg   Config
+	db    *DB
 	redis *redis.Client
 }
 
@@ -98,12 +98,13 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle("/get/", withRecovery(s.handleGet))          // GET /get/{code}
-	mux.Handle("/set/", withRecovery(s.handleSet))          // POST /set/{code}
-	mux.Handle("/del/", withRecovery(s.handleDel))          // DELETE /del/{code}
-	mux.Handle("/exists/", withRecovery(s.handleExists))    // GET /exists/{code}
+	mux.Handle("/get/", withRecovery(s.handleGet))             // GET /get/{code}
+	mux.Handle("/set/", withRecovery(s.handleSet))             // POST /set/{code}
+	mux.Handle("/del/", withRecovery(s.handleDel))             // DELETE /del/{code}
+	mux.Handle("/exists/", withRecovery(s.handleExists))       // GET /exists/{code}
 	mux.Handle("/increment/", withRecovery(s.handleIncrement)) // POST /increment/{code}
-	mux.Handle("/stats/", withRecovery(s.handleStats))      // GET /stats/{code}
+	mux.Handle("/stats/", withRecovery(s.handleStats))         // GET /stats/{code}
+	mux.Handle("/codes", withRecovery(s.handleCodes))
 	mux.Handle("/health", withRecovery(s.handleHealth))
 	return mux
 }
@@ -318,11 +319,36 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"code":        rec.Code,
+		"code":         rec.Code,
 		"original_url": rec.Original,
-		"hit_count":   rec.HitCount,
-		"created_at":  rec.CreatedAt,
+		"hit_count":    rec.HitCount,
+		"created_at":   rec.CreatedAt,
 	})
+}
+
+func (s *Server) handleCodes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	const limit = 200
+	rows, err := s.db.pool.Query(r.Context(),
+		`SELECT code FROM urls ORDER BY hit_count DESC LIMIT $1`, limit)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to fetch codes")
+		return
+	}
+	defer rows.Close()
+
+	var codes []string
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err != nil {
+			continue
+		}
+		codes = append(codes, code)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"codes": codes})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -472,4 +498,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-

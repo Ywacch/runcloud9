@@ -407,6 +407,16 @@ func (s *Server) handleCodePool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.db == nil || s.db.pool == nil {
+		if s.proxy != nil {
+			codes, err := s.proxy.Codes(r.Context())
+			if err != nil {
+				slog.Warn("proxy CODES failed", "error", err)
+				writeJSON(w, http.StatusOK, map[string]any{"codes": []string{}})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"codes": codes})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"codes": []string{}})
 		return
 	}

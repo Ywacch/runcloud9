@@ -27,6 +27,7 @@ type ComponentSpec struct {
 	Resources    corev1.ResourceRequirements
 	Annotations  map[string]string
 	Exporter     *ExporterSpec
+	Command      []string // optional: overrides container entrypoint+cmd
 }
 
 // DefaultResources returns the standard 250m/512Mi resource spec.
@@ -148,6 +149,10 @@ var componentRegistry = map[string]ComponentSpec{
 		Ports:       []int32{5672, 15692},
 		ServiceName: "mq",
 		ServicePort: 5672,
+		Command: []string{
+			"sh", "-c",
+			"rabbitmq-plugins enable --offline rabbitmq_prometheus && exec docker-entrypoint.sh rabbitmq-server",
+		},
 		DefaultEnv: map[string]string{
 			"RABBITMQ_DEFAULT_USER": "cloud9",
 			"RABBITMQ_DEFAULT_PASS": "cloud9",

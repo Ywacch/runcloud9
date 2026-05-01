@@ -233,13 +233,13 @@ func TestCollect_HistogramQuantilesUse30sBucketRate(t *testing.T) {
 	}
 }
 
-func TestCollect_DBCPUUsesCadvisorWhenNonZero(t *testing.T) {
+func TestCollect_DBCPUUsesProcessMetricWhenNonZero(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case strings.Contains(q, "container_cpu_usage_seconds_total") && strings.Contains(q, `container="postgres"`):
+		case strings.Contains(q, "process_cpu_seconds_total") && strings.Contains(q, `pod=~"postgres.*"`):
 			_ = json.NewEncoder(w).Encode(promVectorJSON("0.07"))
 		case strings.Contains(q, "kube_pod_container_resource_requests") && strings.Contains(q, `resource="cpu"`) && strings.Contains(q, `container="postgres"`):
 			_ = json.NewEncoder(w).Encode(promVectorJSON("0.25"))
@@ -255,17 +255,17 @@ func TestCollect_DBCPUUsesCadvisorWhenNonZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	if dm.Components["db"].CPUUsage != 0.07 {
-		t.Fatalf("db CPU: want 0.07 (cAdvisor), got %v", dm.Components["db"].CPUUsage)
+		t.Fatalf("db CPU: want 0.07 (process metric), got %v", dm.Components["db"].CPUUsage)
 	}
 }
 
-func TestCollect_DBCPUFallbackToKubeWhenCadvisorEmpty(t *testing.T) {
+func TestCollect_DBCPUFallbackToKubeWhenProcessMetricEmpty(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case strings.Contains(q, "container_cpu_usage_seconds_total") && strings.Contains(q, `container="postgres"`):
+		case strings.Contains(q, "process_cpu_seconds_total") && strings.Contains(q, `pod=~"postgres.*"`):
 			_ = json.NewEncoder(w).Encode(promEmptyJSON())
 		case strings.Contains(q, "kube_pod_container_resource_requests") && strings.Contains(q, `resource="cpu"`) && strings.Contains(q, `container="postgres"`):
 			_ = json.NewEncoder(w).Encode(promVectorJSON("0.25"))
