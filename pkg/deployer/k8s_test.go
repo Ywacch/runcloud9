@@ -12,6 +12,29 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
+func TestCacheImage_UsesTemplateImageTag(t *testing.T) {
+	t.Setenv("TEMPLATE_IMAGE_REGISTRY", "reg.example/test")
+	t.Setenv("TEMPLATE_IMAGE_TAG", "git-abc1234")
+	got := cacheImage("write-through")
+	want := "reg.example/test/caching-proxy:git-abc1234"
+	if got != want {
+		t.Fatalf("cacheImage(write-through): got %q want %q", got, want)
+	}
+}
+
+func TestNewCacheProxyContainer_SetsPullAlways(t *testing.T) {
+	c := newCacheProxyContainer("example/cache-proxy:tag", DefaultResources(), nil)
+	if got := c.ImagePullPolicy; got != corev1.PullAlways {
+		t.Fatalf("cache-proxy imagePullPolicy: got %q want %q", got, corev1.PullAlways)
+	}
+	if c.Name != "cache-proxy" {
+		t.Fatalf("container name: got %q want cache-proxy", c.Name)
+	}
+	if c.ReadinessProbe == nil || c.ReadinessProbe.HTTPGet == nil {
+		t.Fatal("expected HTTP readiness probe for cache-proxy")
+	}
+}
+
 func TestK8sDeployer_Deploy_CreatesNamespaceAndDeployment(t *testing.T) {
 	// UNDERSTAND: fake.NewSimpleClientset() is an in-memory K8s API.
 	// Create/Delete/Get calls work but no pods actually run.

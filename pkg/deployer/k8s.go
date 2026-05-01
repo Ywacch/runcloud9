@@ -242,6 +242,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 			corev1.EnvVar{Name: "REDIS_PORT", Value: "6379"},
 			corev1.EnvVar{Name: "PORT", Value: "8081"},
 		)
+		proxyContainer := newCacheProxyContainer(cacheImage(proxyStrategy), resources, proxyEnv)
 
 		proxyDep := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Name: "cache-proxy", Namespace: cfg.Namespace},
@@ -251,23 +252,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 				Template: corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{Labels: proxyLabels},
 					Spec: corev1.PodSpec{
-						Containers: []corev1.Container{
-							{
-								Name:      "cache-proxy",
-								Image:     cacheImage(proxyStrategy),
-								Ports:     []corev1.ContainerPort{{ContainerPort: 8081}},
-								Resources: resources,
-								Env:       proxyEnv,
-								ReadinessProbe: &corev1.Probe{
-									ProbeHandler: corev1.ProbeHandler{
-										HTTPGet: &corev1.HTTPGetAction{Path: "/health", Port: intstr.FromInt32(8081)},
-									},
-									InitialDelaySeconds: 3,
-									PeriodSeconds:       2,
-									FailureThreshold:    5,
-								},
-							},
-						},
+						Containers: []corev1.Container{proxyContainer},
 					},
 				},
 			},
@@ -823,12 +808,35 @@ func cacheImage(strategy string) string {
 	if registry == "" {
 		registry = "us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images"
 	}
+	tag := os.Getenv("TEMPLATE_IMAGE_TAG")
+	if tag == "" {
+		tag = "v1"
+	}
 	// UNDERSTAND: cache-aside uses plain Redis; proxy strategies use a custom Go service.
 	switch strategy {
 	case "write-through", "write-behind", "read-through":
-		return registry + "/caching-proxy:v1"
+		return registry + "/caching-proxy:" + tag
 	default:
 		return imageRedis
+	}
+}
+
+func newCacheProxyContainer(image string, resources corev1.ResourceRequirements, env []corev1.EnvVar) corev1.Container {
+	return corev1.Container{
+		Name:            "cache-proxy",
+		Image:           image,
+		ImagePullPolicy: corev1.PullAlways,
+		Ports:           []corev1.ContainerPort{{ContainerPort: 8081}},
+		Resources:       resources,
+		Env:             env,
+		ReadinessProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{Path: "/health", Port: intstr.FromInt32(8081)},
+			},
+			InitialDelaySeconds: 3,
+			PeriodSeconds:       2,
+			FailureThreshold:    5,
+		},
 	}
 }
 
