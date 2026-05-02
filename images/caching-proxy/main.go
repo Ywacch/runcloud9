@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -106,6 +107,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.Handle("/stats/", withRecovery(s.handleStats))         // GET /stats/{code}
 	mux.Handle("/codes", withRecovery(s.handleCodes))
 	mux.Handle("/health", withRecovery(s.handleHealth))
+	mux.Handle("/metrics", promhttp.Handler())
 	return mux
 }
 

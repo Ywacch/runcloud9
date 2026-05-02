@@ -460,6 +460,11 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	} else {
 		cmDB.RequestRate = dbQPS
 	}
+	// When app-server doesn't query DB directly (proxy mode), DbQueryRate stays 0.
+	// Fall back to postgres-exporter transaction rate so the inspector panel shows live data.
+	if cmDB.DbQueryRate == 0 && cmDB.RequestRate > 0 {
+		cmDB.DbQueryRate = cmDB.RequestRate
+	}
 	c.debugCompare("db", "rps", pgTxnRate+pgRollbackRate, dbQPS, "pg_stat_database_xact_commit+rollback", "app db_query_duration_count")
 	c.debugCompare("db", "cpu", 0, dbCPU, "none (no native metric)", "kube_requests/cadvisor_or_fallback")
 
@@ -488,11 +493,18 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		kubeEstCPU, _ := c.queryCPUPair(ctx, ns, "redis.*", "redis")
 		c.debugCompare("cache", "cpu", redisCPU, kubeEstCPU, "redis_cpu_user+sys", "kube_requests")
 	}
-	cacheCPU2, cacheCPU2Est := c.queryCPUPair(ctx, ns, "cache-proxy.*", "cache-proxy")
+	// Cache-proxy is a Go process; use scrape-side process_* series (works on Autopilot without cAdvisor).
+	cacheCPU2, cacheCPU2Est := c.queryProcessCPU(ctx, ns, "cache-proxy.*", "cache-proxy")
+	if cacheCPU2 == 0 {
+		cacheCPU2Est = false
+	}
 	cmCache.CPUUsage = cacheCPU1 + cacheCPU2
 	cmCache.CPUIsEstimated = cacheCPU1Est || cacheCPU2Est
 	cacheMem1, cacheMem1Est := c.queryMemPair(ctx, ns, "redis.*", "redis")
-	cacheMem2, cacheMem2Est := c.queryMemPair(ctx, ns, "cache-proxy.*", "cache-proxy")
+	cacheMem2, cacheMem2Est := c.queryProcessMemory(ctx, ns, "cache-proxy.*", "cache-proxy")
+	if cacheMem2 == 0 {
+		cacheMem2Est = false
+	}
 	cmCache.MemoryBytes = int64(cacheMem1 + cacheMem2)
 	cmCache.MemIsEstimated = cacheMem1Est || cacheMem2Est
 	cmCache.CPULimit = c.kubeLimitCPU(ctx, ns, "redis.*", "redis") + c.kubeLimitCPU(ctx, ns, "cache-proxy.*", "cache-proxy")
@@ -648,6 +660,14 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmMQ.MemoryLimit = c.kubeLimitMem(ctx, ns, "rabbitmq.*", "rabbitmq")
 	cmMQ.QueueDepth, cmMQ.ProduceRate, cmMQ.ConsumeRate, cmMQ.MessagesReady, cmMQ.MessagesUnacked, cmMQ.MQMemoryUsed, cmMQ.MQMemoryLimit =
 		c.scrapeRabbitMQPrometheus(ctx, ns)
+	// Override estimated memory with live scrape data from rabbitmq_prometheus plugin.
+	if cmMQ.MQMemoryUsed > 0 {
+		cmMQ.MemoryBytes = int64(cmMQ.MQMemoryUsed)
+		cmMQ.MemIsEstimated = false
+		if cmMQ.MQMemoryLimit > 0 {
+			cmMQ.MemoryLimit = int64(cmMQ.MQMemoryLimit)
+		}
+	}
 	mqPubRate, _ := c.query(ctx, fmt.Sprintf(`sum(rate({__name__=~".*_mq_publish_total",namespace=%q}[30s]))`, ns))
 	if mqPubRate > 0 {
 		cmMQ.ProduceRate = mqPubRate
@@ -677,6 +697,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	}
 	workerErrors, _ := c.query(ctx, fmt.Sprintf(`sum(rate({__name__=~".*_worker_errors_total",namespace=%q}[30s]))`, ns))
 	cmWorker.ErrorRate = workerErrors
+	cmWorker.QueueDepth = cmMQ.QueueDepth
 	if cmMQ.QueueDepth > 0 {
 		sat := cmMQ.QueueDepth / 100.0
 		if sat > 1.0 {
