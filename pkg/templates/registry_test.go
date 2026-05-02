@@ -140,6 +140,45 @@ func TestRegistryJSON_IncludesSimulatableDeployable(t *testing.T) {
 	if !strings.Contains(s, `"preset"`) {
 		t.Fatal("preset should be included in API JSON")
 	}
+	if strings.Contains(s, `"proxyQueries"`) || strings.Contains(s, "proxy_queries") {
+		t.Fatal("ProxyQueries must be json:\"-\" omitted from Registry JSON")
+	}
+}
+
+func TestEmbeddedProxyQueries(t *testing.T) {
+	t.Parallel()
+	us := GetTemplate("url-shortener")
+	if us == nil || len(us.ProxyQueries) != 1 {
+		t.Fatalf("url-shortener: want 1 proxyQueries, got %v", us)
+	}
+	if us.ProxyQueries[0].Pattern != "^([^:]+)$" || !strings.Contains(us.ProxyQueries[0].SQL, "original") {
+		t.Fatalf("url-shortener proxy rule unexpected: %+v", us.ProxyQueries[0])
+	}
+
+	ec := GetTemplate("ecommerce")
+	if ec == nil || len(ec.ProxyQueries) != 3 {
+		t.Fatalf("ecommerce: want 3 proxyQueries, got %d %+v", len(ec.ProxyQueries), ec)
+	}
+	found := map[string]bool{}
+	for _, r := range ec.ProxyQueries {
+		found[r.Pattern] = true
+		if r.Pattern == `^catalog$` && !strings.Contains(strings.ToLower(r.SQL), "products") {
+			t.Fatalf("catalog sql missing products: %q", r.SQL)
+		}
+	}
+	for _, p := range []string{`^catalog$`, `^product:(.+)$`, `^product-pool$`} {
+		if !found[p] {
+			t.Fatalf("ecommerce missing pattern %q in %+v", p, ec.ProxyQueries)
+		}
+	}
+
+	sf := GetTemplate("social-feed")
+	if sf == nil {
+		t.Fatal("social-feed missing")
+	}
+	if len(sf.ProxyQueries) != 0 {
+		t.Fatalf("social-feed proxyQueries deferred — want empty, got %+v", sf.ProxyQueries)
+	}
 }
 
 func TestSocialFeedPreset_UsesCanonicalWorkerToMQEdge(t *testing.T) {

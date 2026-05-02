@@ -83,6 +83,7 @@ type Server struct {
 	cfg   Config
 	db    *DB
 	redis *redis.Client
+	rules []compiledProxyRule
 }
 
 func jsonError(w http.ResponseWriter, status int, msg string) {
@@ -146,24 +147,31 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 		// treat as miss -> DB fallback depends on strategy
 	}
 
-	// Cache miss: read-through semantics for all strategies when GET miss happens.
-	rec, dbErr := s.db.GetURL(ctx, code)
+	// Cache miss: template-driven DB read-through (queries.yaml mounted at deploy time).
+	payload, dbErr := proxyReadThrough(ctx, s.db.pool, s.rules, code)
+	if errors.Is(dbErr, errNoMatchingProxyRule) {
+		jsonError(w, http.StatusNotFound, "no matching cache key rule")
+		return
+	}
+	if errors.Is(dbErr, errBadCapture) {
+		jsonError(w, http.StatusBadRequest, "invalid capture for key")
+		return
+	}
+	if errors.Is(dbErr, pgx.ErrNoRows) {
+		jsonError(w, http.StatusNotFound, "not found")
+		return
+	}
 	if dbErr != nil {
-		if errors.Is(dbErr, pgx.ErrNoRows) {
-			jsonError(w, http.StatusNotFound, "not found")
-			return
-		}
-		slog.Error("db GetURL failed", "code", code, "error", dbErr)
-		jsonError(w, http.StatusInternalServerError, "db read failed")
+		slog.Error("proxy read-through query failed", "code", code, "error", dbErr)
+		jsonError(w, http.StatusBadGateway, "db read failed")
 		return
 	}
 
-	// Populate cache with original URL (value only).
-	if err := s.redis.Set(ctx, code, rec.Original, s.cfg.CacheTTL).Err(); err != nil {
+	if err := s.redis.Set(ctx, code, payload, s.cfg.CacheTTL).Err(); err != nil {
 		slog.Warn("redis SET after miss failed", "code", code, "error", err)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"value": rec.Original, "source": "db"})
+	writeJSON(w, http.StatusOK, map[string]string{"value": payload, "source": "db"})
 }
 
 type setReq struct {
@@ -194,10 +202,6 @@ func (s *Server) handleSet(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "value is required")
 		return
 	}
-	if _, err := url.ParseRequestURI(req.Value); err != nil {
-		jsonError(w, http.StatusBadRequest, "value is not a valid url")
-		return
-	}
 
 	ttl := s.cfg.CacheTTL
 	if req.TTL > 0 {
@@ -208,6 +212,11 @@ func (s *Server) handleSet(w http.ResponseWriter, r *http.Request) {
 
 	switch s.cfg.Strategy {
 	case "write-through", "read-through":
+		// URLs table persistence only accepts valid URLs (url-shortener). Opaque bodies go to Redis-only paths.
+		if _, err := url.ParseRequestURI(req.Value); err != nil {
+			jsonError(w, http.StatusBadRequest, "value is not a valid url")
+			return
+		}
 		// Synchronously persist to DB.
 		if err := s.db.SaveURL(ctx, code, req.Value); err != nil {
 			slog.Error("db SaveURL failed (write-through)", "code", code, "error", err)
@@ -219,7 +228,7 @@ func (s *Server) handleSet(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	case "write-behind":
-		// Persist to cache now.
+		// Opaque JSON cache populate (ecommerce/feeds): no URL validation.
 		if err := s.redis.Set(ctx, code, req.Value, ttl).Err(); err != nil {
 			slog.Warn("redis SET failed", "code", code, "error", err)
 		}
@@ -471,10 +480,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	queryPath := envOrDefault("PROXY_QUERIES_FILE", "/etc/proxy/queries.yaml")
+	rules := mustLoadCompiledProxyRules(queryPath)
+
 	s := &Server{
 		cfg:   cfg,
 		db:    db,
 		redis: redisClient,
+		rules: rules,
 	}
 
 	// Write-behind background flusher.

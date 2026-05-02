@@ -184,30 +184,24 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 
 	if s.proxy != nil {
 		value, source, ok, err := s.proxy.Get(ctx, key)
-		if err == nil && ok {
-			if source == "cache" {
-				s.cacheHits.Add(1)
-				cacheHitsTotal.Inc()
-			} else {
-				s.cacheMisses.Add(1)
-				cacheMissesTotal.Inc()
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(value))
-			return
-		}
-		s.cacheMisses.Add(1)
-		cacheMissesTotal.Inc()
-		products, err := s.db.ListProducts(ctx)
 		if err != nil {
-			slog.Error("catalog fetch failed", "error", err)
-			jsonError(w, http.StatusInternalServerError, "failed to list products")
+			slog.Error("catalog proxy GET failed", "error", err)
+			jsonError(w, http.StatusBadGateway, "failed to fetch catalog")
 			return
 		}
-		body, _ := json.Marshal(map[string]any{"products": products})
-		_ = s.proxy.Set(ctx, key, string(body), s.cfg.CacheTTL)
+		if !ok {
+			jsonError(w, http.StatusNotFound, "catalog unavailable")
+			return
+		}
+		if source == "cache" {
+			s.cacheHits.Add(1)
+			cacheHitsTotal.Inc()
+		} else {
+			s.cacheMisses.Add(1)
+			cacheMissesTotal.Inc()
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(body)
+		_, _ = w.Write([]byte(value))
 		return
 	}
 
@@ -269,32 +263,24 @@ func (s *Server) handleProduct(w http.ResponseWriter, r *http.Request) {
 
 	if s.proxy != nil {
 		value, source, ok, err := s.proxy.Get(ctx, cacheKey)
-		if err == nil && ok {
-			if source == "cache" {
-				s.cacheHits.Add(1)
-				cacheHitsTotal.Inc()
-			} else {
-				s.cacheMisses.Add(1)
-				cacheMissesTotal.Inc()
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(value))
+		if err != nil {
+			slog.Error("product proxy GET failed", "error", err)
+			jsonError(w, http.StatusBadGateway, "failed to fetch product")
 			return
 		}
-		s.cacheMisses.Add(1)
-		cacheMissesTotal.Inc()
-		p, err := s.db.GetProduct(ctx, id)
-		if errors.Is(err, ErrNotFound) {
+		if !ok {
 			jsonError(w, http.StatusNotFound, "product not found")
 			return
 		}
-		if err != nil {
-			jsonError(w, http.StatusInternalServerError, "failed to fetch product")
-			return
+		if source == "cache" {
+			s.cacheHits.Add(1)
+			cacheHitsTotal.Inc()
+		} else {
+			s.cacheMisses.Add(1)
+			cacheMissesTotal.Inc()
 		}
-		b, _ := json.Marshal(p)
-		_ = s.proxy.Set(ctx, cacheKey, string(b), s.cfg.CacheTTL)
-		writeJSON(w, http.StatusOK, p)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(value))
 		return
 	}
 
@@ -476,6 +462,30 @@ func (s *Server) handleOrder(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleProductPool(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	ctx := r.Context()
+	if s.proxy != nil {
+		const poolKey = "product-pool"
+		value, source, ok, err := s.proxy.Get(ctx, poolKey)
+		if err != nil {
+			slog.Error("product-pool proxy GET failed", "error", err)
+			jsonError(w, http.StatusBadGateway, "failed to fetch product pool")
+			return
+		}
+		if !ok {
+			jsonError(w, http.StatusNotFound, "product pool unavailable")
+			return
+		}
+		if source == "cache" {
+			s.cacheHits.Add(1)
+			cacheHitsTotal.Inc()
+		} else {
+			s.cacheMisses.Add(1)
+			cacheMissesTotal.Inc()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(value))
 		return
 	}
 	rows, err := s.db.pool.Query(r.Context(), `SELECT id FROM products ORDER BY id LIMIT 50`)

@@ -249,6 +249,11 @@ func main() {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
+	if err := ch.Qos(10, 0, false); err != nil {
+		slog.Error("failed to set QoS prefetch", "error", err)
+		os.Exit(1)
+	}
+
 	msgs, err := ch.Consume("fanout", "", false, false, false, false, nil)
 	if err != nil {
 		slog.Error("mq consume failed", "error", err)

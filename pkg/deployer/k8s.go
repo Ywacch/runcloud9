@@ -2,6 +2,8 @@ package deployer
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -19,6 +21,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/ywacch/cloud9/pkg/templates"
+	"gopkg.in/yaml.v3"
 )
 
 // Provisioning waits: fail fast on clearly unrecoverable container config, debounce CrashLoopBackOff
@@ -234,6 +237,30 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 			return err
 		}
 
+		tmpl := templates.GetTemplate(cfg.Design.Template)
+		if tmpl == nil || len(tmpl.ProxyQueries) == 0 {
+			return fmt.Errorf("cache proxy mode requires embedded proxyQueries on template %q (premium-only templates without rules are unsupported)", cfg.Design.Template)
+		}
+		queriesYAML, err := yaml.Marshal(tmpl.ProxyQueries)
+		if err != nil {
+			return fmt.Errorf("marshal proxyQueries: %w", err)
+		}
+		sum := sha256.Sum256(queriesYAML)
+		checksum := hex.EncodeToString(sum[:])
+		const proxyQueriesCM = "cache-proxy-queries"
+		proxyQueriesConfigMap := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: proxyQueriesCM, Namespace: cfg.Namespace},
+			Data:       map[string]string{"queries.yaml": string(queriesYAML)},
+		}
+		if _, err := k.clientset.CoreV1().ConfigMaps(cfg.Namespace).Create(ctx, proxyQueriesConfigMap, metav1.CreateOptions{}); err != nil {
+			if !errors.IsAlreadyExists(err) {
+				return fmt.Errorf("create cache-proxy-queries configmap: %w", err)
+			}
+			if _, uerr := k.clientset.CoreV1().ConfigMaps(cfg.Namespace).Update(ctx, proxyQueriesConfigMap, metav1.UpdateOptions{}); uerr != nil {
+				return fmt.Errorf("update cache-proxy-queries configmap: %w", uerr)
+			}
+		}
+
 		proxyLabels := map[string]string{"app": "cache-proxy", "deployment": cfg.Namespace}
 		proxyStrategy := configString(cfg.Node.Config, "strategy", "write-through")
 		proxyEnv := append(
@@ -243,6 +270,12 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 			corev1.EnvVar{Name: "PORT", Value: "8081"},
 		)
 		proxyContainer := newCacheProxyContainer(cacheImage(proxyStrategy), resources, proxyEnv)
+		proxyContainer.VolumeMounts = []corev1.VolumeMount{{
+			Name:      "proxy-queries",
+			MountPath: "/etc/proxy/queries.yaml",
+			SubPath:   "queries.yaml",
+			ReadOnly:  true,
+		}}
 
 		proxyDep := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Name: "cache-proxy", Namespace: cfg.Namespace},
@@ -250,8 +283,21 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 				Replicas: ptr(replicas),
 				Selector: &metav1.LabelSelector{MatchLabels: proxyLabels},
 				Template: corev1.PodTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{Labels: proxyLabels},
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: proxyLabels,
+						Annotations: map[string]string{
+							"cloud9.io/proxy-queries-checksum": checksum,
+						},
+					},
 					Spec: corev1.PodSpec{
+						Volumes: []corev1.Volume{{
+							Name: "proxy-queries",
+							VolumeSource: corev1.VolumeSource{
+								ConfigMap: &corev1.ConfigMapVolumeSource{
+									LocalObjectReference: corev1.LocalObjectReference{Name: proxyQueriesCM},
+								},
+							},
+						}},
 						Containers: []corev1.Container{proxyContainer},
 					},
 				},
