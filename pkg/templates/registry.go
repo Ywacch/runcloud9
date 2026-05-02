@@ -26,21 +26,22 @@ type SeedConfig struct {
 
 // TemplateSpec is the single source of truth for a template's metadata.
 type TemplateSpec struct {
-	ID             string          `json:"id"`
-	Name           string          `json:"name"`
-	Description    string          `json:"description"`
-	Components     int             `json:"components"`
-	Bottleneck     string          `json:"bottleneck"`
-	Available      bool            `json:"available"`
-	Premium        bool            `json:"premium"`
-	Tags           []string        `json:"tags"`
-	Topology       []TopologyHint  `json:"topology"`
-	Preset         *TemplatePreset `json:"preset,omitempty"`
-	AppServerImage string          `json:"-"`
-	WorkerImage    string          `json:"-"`
-	Simulatable    bool            `json:"simulatable"`
-	Deployable     bool            `json:"deployable"`
-	SeedConfig     *SeedConfig     `json:"-"`
+	ID             string           `json:"id"`
+	Name           string           `json:"name"`
+	Description    string           `json:"description"`
+	Components     int              `json:"components"`
+	Bottleneck     string           `json:"bottleneck"`
+	Available      bool             `json:"available"`
+	Premium        bool             `json:"premium"`
+	Tags           []string         `json:"tags"`
+	Topology       []TopologyHint   `json:"topology"`
+	Preset         *TemplatePreset  `json:"preset,omitempty"`
+	AppServerImage string           `json:"-"`
+	WorkerImage    string           `json:"-"`
+	Simulatable    bool             `json:"simulatable"`
+	Deployable     bool             `json:"deployable"`
+	SeedConfig     *SeedConfig      `json:"-"`
+	ProxyQueries   []ProxyQueryRule `json:"-"`
 }
 
 // PresetNode is a fully-configured node for canvas population.
@@ -70,6 +71,20 @@ type TemplatePreset struct {
 type TopologyHint struct {
 	Type     string     `json:"type"`
 	Position [2]float64 `json:"position"` // x, z for 2D preview
+}
+
+// ProxyQueryRule maps cache keys (regex) to SQL for caching-proxy read-through misses.
+// Serialized to queries.yaml in cluster; duplicated struct shape in images/caching-proxy.
+type ProxyQueryRule struct {
+	Pattern string      `json:"-" yaml:"pattern"`
+	SQL     string      `json:"-" yaml:"sql"`
+	Params  []ParamSpec `json:"-" yaml:"params"`
+}
+
+// ParamSpec binds a regex capture group to a SQL placeholder ($1, $2, ...).
+type ParamSpec struct {
+	Capture int    `json:"-" yaml:"capture"` // 1-indexed capture index
+	DBType  string `json:"-" yaml:"dbType"`  // text | integer | boolean
 }
 
 // templateDef mirrors embedded YAML before conversion to TemplateSpec.
@@ -111,6 +126,7 @@ type templateDef struct {
 		Container string `yaml:"container"`
 		PodLabel  string `yaml:"podLabel"`
 	} `yaml:"seed"`
+	ProxyQueries []ProxyQueryRule `yaml:"proxyQueries"`
 }
 
 // embeddedFree is the in-repo YAML definitions (always available).
@@ -224,6 +240,9 @@ func defToSpec(def *templateDef) TemplateSpec {
 			Container: def.Seed.Container,
 			PodLabel:  def.Seed.PodLabel,
 		}
+	}
+	if len(def.ProxyQueries) > 0 {
+		spec.ProxyQueries = append([]ProxyQueryRule(nil), def.ProxyQueries...)
 	}
 	if def.Preset != nil {
 		preset := &TemplatePreset{

@@ -70,3 +70,11 @@ seed:
   dumpPath: url-shortener/urls.dump
   container: postgres
   podLabel: app=postgres
+
+# Caching-proxy read-through: value returned to app is the original URL string only.
+proxyQueries:
+  - pattern: '^([^:]+)$'
+    sql: SELECT original FROM urls WHERE code = $1
+    params:
+      - capture: 1
+        dbType: text

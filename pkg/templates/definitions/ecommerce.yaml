@@ -98,3 +98,32 @@ preset:
       sourceId: app-1
       targetId: db-1
       protocol: tcp
+
+# Products table: id, name, price, stock (see images/ecommerce/db.go).
+proxyQueries:
+  - pattern: '^catalog$'
+    sql: |-
+      SELECT json_build_object(
+        'products',
+        COALESCE(json_agg(row_to_json(t) ORDER BY t.id), '[]'::json)
+      )
+      FROM (
+        SELECT id, name, price::float8 AS price, stock FROM products ORDER BY id
+      ) AS t
+    params: []
+  - pattern: '^product:(.+)$'
+    sql: |-
+      SELECT row_to_json(s) FROM (
+        SELECT id, name, price::float8 AS price, stock FROM products WHERE id = $1::int
+      ) AS s
+    params:
+      - capture: 1
+        dbType: integer
+  - pattern: '^product-pool$'
+    sql: |-
+      SELECT json_build_object(
+        'productIds',
+        COALESCE(json_agg(x.id ORDER BY x.id), '[]'::json)
+      )
+      FROM (SELECT id FROM products ORDER BY id LIMIT 50) AS x
+    params: []
