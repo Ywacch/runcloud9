@@ -13,6 +13,7 @@ simulatable: true
 deployable: true
 imageKey: url-shortener
 workerImageKey: ""
+appDatabaseMode: non-proxy
 topology:
   - type: load_balancer
     position: [0, 0]

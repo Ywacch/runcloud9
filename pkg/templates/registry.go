@@ -26,22 +26,23 @@ type SeedConfig struct {
 
 // TemplateSpec is the single source of truth for a template's metadata.
 type TemplateSpec struct {
-	ID             string           `json:"id"`
-	Name           string           `json:"name"`
-	Description    string           `json:"description"`
-	Components     int              `json:"components"`
-	Bottleneck     string           `json:"bottleneck"`
-	Available      bool             `json:"available"`
-	Premium        bool             `json:"premium"`
-	Tags           []string         `json:"tags"`
-	Topology       []TopologyHint   `json:"topology"`
-	Preset         *TemplatePreset  `json:"preset,omitempty"`
-	AppServerImage string           `json:"-"`
-	WorkerImage    string           `json:"-"`
-	Simulatable    bool             `json:"simulatable"`
-	Deployable     bool             `json:"deployable"`
-	SeedConfig     *SeedConfig      `json:"-"`
-	ProxyQueries   []ProxyQueryRule `json:"-"`
+	ID              string           `json:"id"`
+	Name            string           `json:"name"`
+	Description     string           `json:"description"`
+	Components      int              `json:"components"`
+	Bottleneck      string           `json:"bottleneck"`
+	Available       bool             `json:"available"`
+	Premium         bool             `json:"premium"`
+	Tags            []string         `json:"tags"`
+	Topology        []TopologyHint   `json:"topology"`
+	Preset          *TemplatePreset  `json:"preset,omitempty"`
+	AppServerImage  string           `json:"-"`
+	WorkerImage     string           `json:"-"`
+	Simulatable     bool             `json:"simulatable"`
+	Deployable      bool             `json:"deployable"`
+	SeedConfig      *SeedConfig      `json:"-"`
+	ProxyQueries    []ProxyQueryRule `json:"-"`
+	AppDatabaseMode string           `json:"-"`
 }
 
 // PresetNode is a fully-configured node for canvas population.
@@ -126,7 +127,8 @@ type templateDef struct {
 		Container string `yaml:"container"`
 		PodLabel  string `yaml:"podLabel"`
 	} `yaml:"seed"`
-	ProxyQueries []ProxyQueryRule `yaml:"proxyQueries"`
+	ProxyQueries    []ProxyQueryRule `yaml:"proxyQueries"`
+	AppDatabaseMode string           `yaml:"appDatabaseMode"`
 }
 
 // embeddedFree is the in-repo YAML definitions (always available).
@@ -211,18 +213,22 @@ func loadEmbeddedTemplates() []TemplateSpec {
 
 func defToSpec(def *templateDef) TemplateSpec {
 	spec := TemplateSpec{
-		ID:             def.ID,
-		Name:           def.Name,
-		Description:    def.Description,
-		Components:     def.Components,
-		Bottleneck:     def.Bottleneck,
-		Available:      def.Available,
-		Premium:        def.Premium,
-		Tags:           def.Tags,
-		Simulatable:    def.Simulatable,
-		Deployable:     def.Deployable,
-		AppServerImage: imageFor(def.ImageKey),
-		Topology:       make([]TopologyHint, 0, len(def.Topology)),
+		ID:              def.ID,
+		Name:            def.Name,
+		Description:     def.Description,
+		Components:      def.Components,
+		Bottleneck:      def.Bottleneck,
+		Available:       def.Available,
+		Premium:         def.Premium,
+		Tags:            def.Tags,
+		Simulatable:     def.Simulatable,
+		Deployable:      def.Deployable,
+		AppServerImage:  imageFor(def.ImageKey),
+		Topology:        make([]TopologyHint, 0, len(def.Topology)),
+		AppDatabaseMode: "always",
+	}
+	if def.AppDatabaseMode != "" {
+		spec.AppDatabaseMode = def.AppDatabaseMode
 	}
 	if def.WorkerImageKey != "" {
 		spec.WorkerImage = imageFor(def.WorkerImageKey)

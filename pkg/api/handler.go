@@ -557,6 +557,12 @@ func validateDesign(d deployer.DeploymentDesign) error {
 	if assessment.Verdict == deployer.VerdictInvalid {
 		return fmt.Errorf("%s", assessment.Explanation)
 	}
+	tmpl := templates.GetTemplate(d.Template)
+	if tmpl != nil {
+		if err := deployer.ValidateRuntimeContract(d, tmpl); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

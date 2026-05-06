@@ -13,6 +13,7 @@ simulatable: true
 deployable: true
 imageKey: social-feed
 workerImageKey: fanout-worker
+appDatabaseMode: always
 seed:
   dbType: postgres
   dumpPath: social-feed/social-feed.dump

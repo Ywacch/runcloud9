@@ -12,6 +12,7 @@ tags: [read-heavy, beginner]
 simulatable: true
 deployable: true
 imageKey: social-feed
+appDatabaseMode: always
 seed:
   dbType: postgres
   dumpPath: social-feed/social-feed.dump
