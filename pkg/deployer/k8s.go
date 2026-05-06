@@ -238,8 +238,8 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 		}
 
 		tmpl := templates.GetTemplate(cfg.Design.Template)
-		if tmpl == nil || len(tmpl.ProxyQueries) == 0 {
-			return fmt.Errorf("cache proxy mode requires embedded proxyQueries on template %q (premium-only templates without rules are unsupported)", cfg.Design.Template)
+		if err := RequiresProxyQueries(cfg.Node, tmpl); err != nil {
+			return err
 		}
 		queriesYAML, err := yaml.Marshal(tmpl.ProxyQueries)
 		if err != nil {

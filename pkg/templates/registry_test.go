@@ -181,6 +181,30 @@ func TestEmbeddedProxyQueries(t *testing.T) {
 	}
 }
 
+func TestAppDatabaseModeByTemplate(t *testing.T) {
+	t.Parallel()
+
+	us := GetTemplate("url-shortener")
+	if us == nil || us.AppDatabaseMode != "non-proxy" {
+		t.Fatalf("url-shortener appDatabaseMode: got %+v", us)
+	}
+
+	ec := GetTemplate("ecommerce")
+	if ec == nil || ec.AppDatabaseMode != "always" {
+		t.Fatalf("ecommerce appDatabaseMode: got %+v", ec)
+	}
+
+	sf := GetTemplate("social-feed")
+	if sf == nil || sf.AppDatabaseMode != "always" {
+		t.Fatalf("social-feed appDatabaseMode: got %+v", sf)
+	}
+
+	sfp := GetTemplate("social-feed-pull")
+	if sfp == nil || sfp.AppDatabaseMode != "always" {
+		t.Fatalf("social-feed-pull appDatabaseMode: got %+v", sfp)
+	}
+}
+
 func TestSocialFeedPreset_UsesCanonicalWorkerToMQEdge(t *testing.T) {
 	t.Parallel()
 	sf := GetTemplate("social-feed")

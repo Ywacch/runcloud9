@@ -13,6 +13,7 @@ simulatable: true
 deployable: true
 imageKey: ecommerce
 workerImageKey: ecommerce-worker
+appDatabaseMode: always
 seed:
   dbType: postgres
   dumpPath: ecommerce/ecommerce.dump
