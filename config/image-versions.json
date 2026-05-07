@@ -1,8 +1,8 @@
 {
     "url-shortener":  "git-498a97c",
     "ecommerce":  "git-498a97c",
-    "social-feed":  "git-3b92ad4",
+    "social-feed":  "git-fe8dc4d",
     "ecommerce-worker":  "git-3b92ad4",
-    "fanout-worker":  "git-498a97c",
+    "fanout-worker":  "git-fe8dc4d",
     "caching-proxy":  "git-498a97c"
 }
