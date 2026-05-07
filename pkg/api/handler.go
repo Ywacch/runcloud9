@@ -38,7 +38,7 @@ type Handler struct {
 	deployers        map[string]deployer.ComponentDeployer
 	store            deploymentStore
 	scheduler        *teardown.Scheduler
-	seeder           *seeder.Seeder
+	seeder           seederService
 	metricsCollector *metrics.MetricsCollector
 	diagnostics      *diagnostics.Collector
 	clientset        kubernetes.Interface
@@ -56,6 +56,12 @@ type deploymentStore interface {
 	UpdateMetricsSummary(ctx context.Context, namespace string, patch map[string]any) error
 	GetDeployment(ctx context.Context, namespace string) (store.DeploymentRow, error)
 	SetMetricsSummary(ctx context.Context, namespace string, summary map[string]any) error
+}
+
+type seederService interface {
+	SeedDatabase(ctx context.Context, namespace, template string) error
+	PreDownloadDump(ctx context.Context, template string) (string, error)
+	SeedWithDump(ctx context.Context, namespace, template, dumpFile string) error
 }
 
 var wsUpgrader = websocket.Upgrader{
@@ -476,7 +482,37 @@ func (h *Handler) orchestrate(
 		return nil, fmt.Errorf("topology: %w", err)
 	}
 
+	componentStatus := make(map[string]string, len(design.Nodes))
+	for _, n := range design.Nodes {
+		componentStatus[n.ID] = "pending"
+	}
+	h.emitProvisionStatus(namespace, "deploying", componentStatus, "pending")
+
+	type dumpResult struct {
+		path string
+		err  error
+	}
+	dumpReady := make(chan dumpResult, 1)
+	if h.seeder != nil {
+		go func() {
+			path, err := h.seeder.PreDownloadDump(ctx, design.Template)
+			dumpReady <- dumpResult{path: path, err: err}
+		}()
+	}
+
+	type seedResult struct {
+		seeded bool
+		err    error
+	}
+	var seedDone <-chan seedResult
+	startedSeed := false
+
 	for _, layer := range layers {
+		for _, node := range layer {
+			componentStatus[node.ID] = "deploying"
+		}
+		h.emitProvisionStatus(namespace, "deploying", componentStatus, statusOrSkipped(h.seeder, "pending"))
+
 		errs := make([]error, len(layer))
 		var wg sync.WaitGroup
 		for i := range layer {
@@ -501,22 +537,60 @@ func (h *Handler) orchestrate(
 
 		for _, e := range errs {
 			if e != nil {
+				for i := range layer {
+					if errs[i] != nil {
+						componentStatus[layer[i].ID] = "failed"
+					}
+				}
+				h.emitProvisionStatus(namespace, "failed", componentStatus, statusOrSkipped(h.seeder, "failed"))
 				log.Printf("deploy failed, rolling back %d nodes", len(deployed))
 				h.rollback(context.Background(), deployed, namespace)
 				return nil, e
 			}
 		}
 		deployed = append(deployed, layer...)
+		for _, node := range layer {
+			componentStatus[node.ID] = "ready"
+		}
+		h.emitProvisionStatus(namespace, "deploying", componentStatus, statusOrSkipped(h.seeder, "pending"))
+
+		if !startedSeed && h.seeder != nil && layerContainsType(layer, "db") {
+			startedSeed = true
+			h.emitProvisionStatus(namespace, "deploying", componentStatus, "seeding")
+			ch := make(chan seedResult, 1)
+			seedDone = ch
+			go func() {
+				res := <-dumpReady
+				if res.err != nil {
+					ch <- seedResult{seeded: false, err: fmt.Errorf("seed pre-download failed: %w", res.err)}
+					return
+				}
+				if res.path == "" {
+					ch <- seedResult{seeded: false, err: fmt.Errorf("seed dump not available")}
+					return
+				}
+				if err := h.seeder.SeedWithDump(ctx, namespace, design.Template, res.path); err != nil {
+					ch <- seedResult{seeded: false, err: err}
+					return
+				}
+				ch <- seedResult{seeded: true, err: nil}
+			}()
+		}
 	}
 
 	seeded := false
-	if h.seeder != nil {
-		if err := h.seeder.SeedDatabase(ctx, namespace, design.Template); err != nil {
-			log.Printf("seeding failed for namespace=%s (continuing deployment): %v", namespace, err)
+	seedingStatus := statusOrSkipped(h.seeder, "skipped")
+	if seedDone != nil {
+		res := <-seedDone
+		if res.err != nil {
+			log.Printf("seeding failed for namespace=%s (continuing deployment): %v", namespace, res.err)
+			seedingStatus = "failed"
 		} else {
-			seeded = true
+			seeded = res.seeded
+			seedingStatus = "done"
 		}
 	}
+	h.emitProvisionStatus(namespace, "running", componentStatus, seedingStatus)
 
 	return &deployer.DeploymentResult{
 		DeploymentID: namespace,
@@ -538,6 +612,50 @@ func (h *Handler) rollback(ctx context.Context, nodes []deployer.DeploymentNode,
 			log.Printf("rollback teardown failed for node=%s: %v", node.Name, err)
 		}
 	}
+}
+
+func (h *Handler) emitProvisionStatus(namespace, phase string, components map[string]string, seeding string) {
+	if h.store == nil {
+		return
+	}
+	summary := map[string]any{
+		"provision_phase": phase,
+		"seeding_status":  seeding,
+	}
+	c := make(map[string]string, len(components))
+	for k, v := range components {
+		c[k] = v
+	}
+	summary["component_status"] = c
+
+	if row, err := h.store.GetDeployment(context.Background(), namespace); err == nil && row.MetricsSummary != nil {
+		merged := make(map[string]any, len(row.MetricsSummary)+len(summary))
+		for k, v := range row.MetricsSummary {
+			merged[k] = v
+		}
+		for k, v := range summary {
+			merged[k] = v
+		}
+		_ = h.store.UpdateMetricsSummary(context.Background(), namespace, merged)
+		return
+	}
+	_ = h.store.UpdateMetricsSummary(context.Background(), namespace, summary)
+}
+
+func layerContainsType(layer []deployer.DeploymentNode, nodeType string) bool {
+	for _, n := range layer {
+		if n.Type == nodeType {
+			return true
+		}
+	}
+	return false
+}
+
+func statusOrSkipped(s seederService, status string) string {
+	if s == nil {
+		return "skipped"
+	}
+	return status
 }
 
 func validateDesign(d deployer.DeploymentDesign) error {
