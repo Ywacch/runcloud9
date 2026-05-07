@@ -53,19 +53,36 @@ func defaultDBCredentials() DBCredentials {
 }
 
 func (s *Seeder) SeedDatabase(ctx context.Context, namespace, template string) error {
+	dumpFile, err := s.PreDownloadDump(ctx, template)
+	if err != nil {
+		return err
+	}
+	return s.SeedWithDump(ctx, namespace, template, dumpFile)
+}
+
+func (s *Seeder) PreDownloadDump(ctx context.Context, template string) (string, error) {
+	tmpl := templates.GetTemplate(template)
+	if tmpl == nil || tmpl.SeedConfig == nil {
+		return "", fmt.Errorf("seeder: no seed config for template %q", template)
+	}
+	cfg := tmpl.SeedConfig
+	if cfg.DBType != "" && cfg.DBType != "postgres" {
+		return "", fmt.Errorf("seeder: unsupported db type %q", cfg.DBType)
+	}
+
+	dumpFile, err := s.downloadDump(ctx, cfg.DumpPath)
+	if err != nil {
+		return "", fmt.Errorf("seeder: download dump: %w", err)
+	}
+	return dumpFile, nil
+}
+
+func (s *Seeder) SeedWithDump(ctx context.Context, namespace, template, dumpFile string) error {
 	tmpl := templates.GetTemplate(template)
 	if tmpl == nil || tmpl.SeedConfig == nil {
 		return fmt.Errorf("seeder: no seed config for template %q", template)
 	}
 	cfg := tmpl.SeedConfig
-	if cfg.DBType != "" && cfg.DBType != "postgres" {
-		return fmt.Errorf("seeder: unsupported db type %q", cfg.DBType)
-	}
-
-	dumpFile, err := s.downloadDump(ctx, cfg.DumpPath)
-	if err != nil {
-		return fmt.Errorf("seeder: download dump: %w", err)
-	}
 	defer os.Remove(dumpFile)
 
 	pods, err := s.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
