@@ -63,20 +63,10 @@ func (db *DB) InitSchema(ctx context.Context) error {
 			PRIMARY KEY (follower_id, following_id)
 		);
 
-		CREATE TABLE IF NOT EXISTS feed_items (
-			id         SERIAL PRIMARY KEY,
-			user_id    INT NOT NULL REFERENCES users(id),
-			post_id    INT NOT NULL REFERENCES posts(id),
-			author_id  INT NOT NULL REFERENCES users(id),
-			content    TEXT NOT NULL,
-			created_at TIMESTAMPTZ DEFAULT NOW()
-		);
-
 		CREATE INDEX IF NOT EXISTS idx_posts_user_id ON posts(user_id);
 		CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_follows_follower ON follows(follower_id);
 		CREATE INDEX IF NOT EXISTS idx_follows_following ON follows(following_id);
-		CREATE INDEX IF NOT EXISTS idx_feed_items_user ON feed_items(user_id, created_at DESC);
 	`)
 	return err
 }
@@ -93,7 +83,7 @@ func (db *DB) SeedIfEmpty(ctx context.Context) error {
 		return nil // seeder already populated the database
 	}
 
-	slog.Warn("seed dump not found — running fallback self-seed (feed_items will be empty until worker populates them)")
+	slog.Warn("seed dump not found — running fallback self-seed")
 
 	if _, err := db.pool.Exec(ctx, `
 		INSERT INTO users (username, bio)
@@ -254,35 +244,6 @@ func (db *DB) GetFeedPull(ctx context.Context, userID, limit int) ([]FeedItem, e
 	return out, rows.Err()
 }
 
-func (db *DB) GetFeedPush(ctx context.Context, userID, limit int) ([]FeedItem, error) {
-	start := time.Now()
-	defer func() {
-		dbQueryDuration.WithLabelValues("get_feed_push").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "get_feed_push", start)
-	}()
-	rows, err := db.pool.Query(ctx, `
-		SELECT fi.post_id, fi.author_id, u.username, fi.content, fi.created_at
-		FROM feed_items fi
-		JOIN users u ON u.id = fi.author_id
-		WHERE fi.user_id = $1
-		ORDER BY fi.created_at DESC
-		LIMIT $2
-	`, userID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]FeedItem, 0, limit)
-	for rows.Next() {
-		var item FeedItem
-		if err := rows.Scan(&item.PostID, &item.AuthorID, &item.Username, &item.Content, &item.CreatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, item)
-	}
-	return out, rows.Err()
-}
-
 func (db *DB) GetFollowers(ctx context.Context, userID int) ([]int, error) {
 	start := time.Now()
 	defer func() {
@@ -303,17 +264,4 @@ func (db *DB) GetFollowers(ctx context.Context, userID int) ([]int, error) {
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
-}
-
-func (db *DB) InsertFeedItem(ctx context.Context, userID, postID, authorID int, content string, createdAt time.Time) error {
-	start := time.Now()
-	defer func() {
-		dbQueryDuration.WithLabelValues("insert_feed_item").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "insert_feed_item", start)
-	}()
-	_, err := db.pool.Exec(ctx,
-		`INSERT INTO feed_items (user_id, post_id, author_id, content, created_at) VALUES ($1, $2, $3, $4, $5)`,
-		userID, postID, authorID, content, createdAt,
-	)
-	return err
 }

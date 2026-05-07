@@ -18,20 +18,10 @@ CREATE TABLE IF NOT EXISTS follows (
     PRIMARY KEY (follower_id, following_id)
 );
 
-CREATE TABLE IF NOT EXISTS feed_items (
-    id         SERIAL PRIMARY KEY,
-    user_id    INT NOT NULL REFERENCES users(id),
-    post_id    INT NOT NULL REFERENCES posts(id),
-    author_id  INT NOT NULL REFERENCES users(id),
-    content    TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
 CREATE INDEX IF NOT EXISTS idx_posts_user_id ON posts(user_id);
 CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_follows_follower ON follows(follower_id);
 CREATE INDEX IF NOT EXISTS idx_follows_following ON follows(following_id);
-CREATE INDEX IF NOT EXISTS idx_feed_items_user ON feed_items(user_id, created_at DESC);
 
 -- 5,000 users
 INSERT INTO users (username, bio)
@@ -110,9 +100,5 @@ SELECT
     NOW() - (random() * interval '30 days')
 FROM generate_series(1, 100000);
 
--- Pre-compute feed_items for the 500 most recent posts
-INSERT INTO feed_items (user_id, post_id, author_id, content, created_at)
-SELECT f.follower_id, p.id, p.user_id, p.content, p.created_at
-FROM posts p
-JOIN follows f ON f.following_id = p.user_id
-WHERE p.id > (SELECT MAX(id) - 500 FROM posts);
+-- Timeline materialization moved to Redis sorted sets (timeline:{user_id}).
+-- This seed script now only loads canonical entities: users, posts, follows.

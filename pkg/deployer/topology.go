@@ -447,6 +447,10 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 			// Cache-aside or proxy strategies determine whether the app-server
 			// talks directly to Redis vs via caching-proxy HTTP.
 			if !isAppServer {
+				if node.Type == "worker" {
+					env["CACHE_HOST"] = "cache"
+					env["CACHE_PORT"] = "6379"
+				}
 				continue
 			}
 

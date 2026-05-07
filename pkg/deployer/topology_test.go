@@ -344,6 +344,25 @@ func TestDeriveEnvVars_WorkerGetsMQFromOutboundEdge(t *testing.T) {
 	}
 }
 
+func TestDeriveEnvVars_WorkerGetsCacheFromOutboundEdge(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "w1", Type: "worker", Name: "worker"},
+			{ID: "c1", Type: "cache", Name: "cache"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "w1", TargetID: "c1"},
+		},
+	}
+	env := DeriveEnvVars(design.Nodes[0], design)
+	if env["CACHE_HOST"] != "cache" {
+		t.Fatalf("expected CACHE_HOST=cache from worker->cache, got %q", env["CACHE_HOST"])
+	}
+	if env["CACHE_PORT"] != "6379" {
+		t.Fatalf("expected CACHE_PORT=6379 from worker->cache, got %q", env["CACHE_PORT"])
+	}
+}
+
 func TestDeriveEnvVars_AppServerGetsMQFromOutboundEdge(t *testing.T) {
 	design := DeploymentDesign{
 		Nodes: []DeploymentNode{

@@ -95,6 +95,41 @@ func TestValidateRuntimeContract_Table(t *testing.T) {
 			},
 			wantErr: "needs a database connection",
 		},
+		{
+			name:       "social feed worker requires cache for redis timeline store",
+			templateID: "social-feed",
+			design: DeploymentDesign{
+				Template: "social-feed",
+				Nodes: []DeploymentNode{
+					{ID: "w1", Type: "worker", Name: "Worker"},
+					{ID: "db1", Type: "db", Name: "DB"},
+					{ID: "mq1", Type: "mq", Name: "MQ"},
+				},
+				Connections: []DeploymentConn{
+					{SourceID: "w1", TargetID: "db1"},
+					{SourceID: "w1", TargetID: "mq1"},
+				},
+			},
+			wantErr: "needs a cache connection",
+		},
+		{
+			name:       "social feed worker with cache passes runtime contract",
+			templateID: "social-feed",
+			design: DeploymentDesign{
+				Template: "social-feed",
+				Nodes: []DeploymentNode{
+					{ID: "w1", Type: "worker", Name: "Worker"},
+					{ID: "db1", Type: "db", Name: "DB"},
+					{ID: "mq1", Type: "mq", Name: "MQ"},
+					{ID: "c1", Type: "cache", Name: "Cache"},
+				},
+				Connections: []DeploymentConn{
+					{SourceID: "w1", TargetID: "db1"},
+					{SourceID: "w1", TargetID: "mq1"},
+					{SourceID: "w1", TargetID: "c1"},
+				},
+			},
+		},
 	}
 
 	for _, tc := range tests {

@@ -17,6 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/redis/go-redis/v9"
 )
 
 var (
@@ -38,6 +39,10 @@ var (
 		Help:    "Number of followers per fan-out (write amplification)",
 		Buckets: []float64{1, 5, 10, 20, 30, 50, 100, 250, 500, 1000, 2500, 5000},
 	})
+	workerWriteTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "social_worker_writes_total",
+		Help: "Total timeline writes by destination store",
+	}, []string{"store"})
 )
 
 type fanoutMessage struct {
@@ -79,7 +84,12 @@ func openDB(ctx context.Context) (*pgxpool.Pool, error) {
 	return pgxpool.New(ctx, connURL.String())
 }
 
-func fanoutPost(ctx context.Context, pool *pgxpool.Pool, msg fanoutMessage) error {
+func fanoutPost(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, msg fanoutMessage) error {
+	var username string
+	if err := pool.QueryRow(ctx, `SELECT username FROM users WHERE id = $1`, msg.UserID).Scan(&username); err != nil {
+		return err
+	}
+
 	rows, err := pool.Query(ctx, `SELECT follower_id FROM follows WHERE following_id = $1`, msg.UserID)
 	if err != nil {
 		return err
@@ -99,24 +109,28 @@ func fanoutPost(ctx context.Context, pool *pgxpool.Pool, msg fanoutMessage) erro
 	}
 
 	workerFanoutSize.Observe(float64(len(followers)))
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-
+	workerWriteTotal.WithLabelValues("redis").Add(float64(len(followers)))
+	payload, _ := json.Marshal(map[string]any{
+		"post_id":    msg.PostID,
+		"author_id":  msg.UserID,
+		"username":   username,
+		"content":    msg.Content,
+		"created_at": msg.CreatedAt,
+	})
+	pipe := rdb.Pipeline()
 	for _, followerID := range followers {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO feed_items (user_id, post_id, author_id, content, created_at)
-			VALUES ($1, $2, $3, $4, $5)
-		`, followerID, msg.PostID, msg.UserID, msg.Content, msg.CreatedAt); err != nil {
-			return err
-		}
+		key := fmt.Sprintf("timeline:%d", followerID)
+		pipe.ZAdd(ctx, key, redis.Z{
+			Score:  float64(msg.CreatedAt.UnixMilli()),
+			Member: string(payload),
+		})
+		pipe.ZRemRangeByRank(ctx, key, 0, -1001)
 	}
-	return tx.Commit(ctx)
+	_, err = pipe.Exec(ctx)
+	return err
 }
 
-func healthHandler(pool *pgxpool.Pool, conn *amqp.Connection) http.HandlerFunc {
+func healthHandler(pool *pgxpool.Pool, conn *amqp.Connection, rdb *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -132,20 +146,24 @@ func healthHandler(pool *pgxpool.Pool, conn *amqp.Connection) http.HandlerFunc {
 		if conn == nil || conn.IsClosed() {
 			mq = "error"
 		}
+		cache := "ok"
+		if rdb == nil || rdb.Ping(ctx).Err() != nil {
+			cache = "error"
+		}
 		status := http.StatusOK
-		if db != "ok" || mq != "ok" {
+		if db != "ok" || mq != "ok" || cache != "ok" {
 			status = http.StatusInternalServerError
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "mq": mq, "db": db})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "mq": mq, "db": db, "cache": cache})
 	}
 }
 
-func startMetricsHTTP(pool *pgxpool.Pool, conn *amqp.Connection) *http.Server {
+func startMetricsHTTP(pool *pgxpool.Pool, conn *amqp.Connection, rdb *redis.Client) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.Handle("/health", healthHandler(pool, conn))
+	mux.Handle("/health", healthHandler(pool, conn, rdb))
 	srv := &http.Server{Addr: ":8080", Handler: mux}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -171,6 +189,8 @@ func main() {
 	slog.Info("fanout-worker startup begin")
 	mqHost := requiredEnv("MQ_HOST", "MQ_HOST required for worker")
 	mqPort := envOrDefault("MQ_PORT", "5672")
+	cacheHost := requiredEnv("CACHE_HOST", "CACHE_HOST required for worker")
+	cachePort := envOrDefault("CACHE_PORT", "6379")
 	slog.Info("startup config resolved", "mqHost", mqHost, "mqPort", mqPort)
 
 	// DB connection with retry so worker doesn't crash-loop while dependencies boot.
@@ -227,6 +247,32 @@ func main() {
 	}
 	defer conn.Close()
 
+	rdb := redis.NewClient(&redis.Options{
+		Addr: fmt.Sprintf("%s:%s", cacheHost, cachePort),
+	})
+	for attempt := 1; ; attempt++ {
+		err := rdb.Ping(ctx).Err()
+		if err == nil {
+			slog.Info("redis connected", "attempt", attempt)
+			break
+		}
+		if attempt >= 30 {
+			slog.Error("redis ping failed after retries", "error", err, "attempts", attempt)
+			os.Exit(1)
+		}
+		delay := time.Duration(attempt) * time.Second
+		if delay > 10*time.Second {
+			delay = 10 * time.Second
+		}
+		slog.Warn("redis ping failed, retrying", "error", err, "attempt", attempt, "retryIn", delay)
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			os.Exit(0)
+		}
+	}
+	defer rdb.Close()
+
 	ch, err := conn.Channel()
 	if err != nil {
 		slog.Error("mq channel failed", "error", err)
@@ -242,7 +288,7 @@ func main() {
 	}
 	slog.Info("queue declared", "queue", "fanout")
 
-	srv := startMetricsHTTP(pool, conn)
+	srv := startMetricsHTTP(pool, conn, rdb)
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -282,7 +328,7 @@ func main() {
 				continue
 			}
 
-			if err := fanoutPost(ctx, pool, msg); err != nil {
+			if err := fanoutPost(ctx, pool, rdb, msg); err != nil {
 				workerErrorsTotal.Inc()
 				slog.Error("fanout failed", "post_id", msg.PostID, "author_id", msg.UserID, "error", err)
 			} else {
