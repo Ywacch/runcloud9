@@ -205,6 +205,20 @@ func TestAppDatabaseModeByTemplate(t *testing.T) {
 	}
 }
 
+func TestWorkerTimelineStoreByTemplate(t *testing.T) {
+	t.Parallel()
+
+	sf := GetTemplate("social-feed")
+	if sf == nil || sf.WorkerTimelineStore != "redis" {
+		t.Fatalf("social-feed workerTimelineStore: got %+v", sf)
+	}
+
+	us := GetTemplate("url-shortener")
+	if us == nil || us.WorkerTimelineStore != "none" {
+		t.Fatalf("url-shortener workerTimelineStore: got %+v", us)
+	}
+}
+
 func TestSocialFeedPreset_UsesCanonicalWorkerToMQEdge(t *testing.T) {
 	t.Parallel()
 	sf := GetTemplate("social-feed")

@@ -231,22 +231,30 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	followers, err := s.db.GetFollowers(ctx, post.UserID)
-	if err == nil && len(followers) > 0 {
-		if s.proxy != nil {
-			go func() {
-				bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				for _, followerID := range followers {
-					_ = s.proxy.Set(bgCtx, fmt.Sprintf("feed:%d", followerID), "", time.Millisecond)
-				}
-			}()
-		} else if s.cache != nil {
-			keys := make([]string, len(followers))
-			for i, followerID := range followers {
-				keys[i] = fmt.Sprintf("feed:%d", followerID)
-			}
-			_ = s.cache.Delete(ctx, keys...)
+	if err == nil && len(followers) > 0 && s.cache != nil {
+		var username string
+		_ = s.db.pool.QueryRow(ctx, `SELECT username FROM users WHERE id = $1`, post.UserID).Scan(&username)
+		payload, _ := json.Marshal(map[string]any{
+			"post_id":    post.ID,
+			"author_id":  post.UserID,
+			"username":   username,
+			"content":    post.Content,
+			"created_at": post.CreatedAt,
+		})
+		pipe := s.cache.client.Pipeline()
+		for _, followerID := range followers {
+			key := fmt.Sprintf("timeline:%d", followerID)
+			pipe.ZAdd(ctx, key, redis.Z{
+				Score:  float64(post.CreatedAt.UnixMilli()),
+				Member: string(payload),
+			})
+			pipe.ZRemRangeByRank(ctx, key, 0, -1001)
 		}
+		go func(p redis.Pipeliner) {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_, _ = p.Exec(bgCtx)
+		}(pipe)
 	}
 	postTotal.WithLabelValues("sync").Inc()
 	writeJSON(w, http.StatusOK, map[string]any{"post_id": post.ID, "mode": "sync"})
@@ -258,11 +266,8 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start := time.Now()
+	mode := "pull"
 	defer func() {
-		mode := "pull"
-		if s.mq != nil {
-			mode = "push"
-		}
 		feedLatency.WithLabelValues(mode).Observe(time.Since(start).Seconds())
 	}()
 
@@ -273,44 +278,20 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	cacheKey := fmt.Sprintf("feed:%d", userID)
-	if s.proxy != nil {
-		value, source, ok, err := s.proxy.Get(ctx, cacheKey)
-		if err == nil && ok {
-			if source == "cache" {
-				s.cacheHits.Add(1)
-				cacheHitsTotal.Inc()
-			} else {
-				s.cacheMisses.Add(1)
-				cacheMissesTotal.Inc()
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(value))
-			return
-		}
-		s.cacheMisses.Add(1)
-		cacheMissesTotal.Inc()
-	} else if s.cache != nil {
-		if cached, ok := s.cache.Get(ctx, cacheKey); ok {
-			s.cacheHits.Add(1)
-			cacheHitsTotal.Inc()
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(cached))
-			return
-		}
-		s.cacheMisses.Add(1)
-		cacheMissesTotal.Inc()
-	}
 
-	mode := "pull"
 	var items []FeedItem
 	if s.mq != nil {
-		mode = "push"
-		feedRequestTotal.WithLabelValues("push").Inc()
-		items, err = s.db.GetFeedPush(ctx, userID, s.cfg.FeedPageSize)
-		// Graceful fallback: if feed_items is empty (background seed still running),
-		// fall back to pull query so feeds are not empty during the seed window.
-		if err == nil && len(items) == 0 {
+		mode = "push-redis"
+		if s.cache != nil {
+			items, err = s.cache.GetTimeline(ctx, userID, s.cfg.FeedPageSize)
+			if err == nil && len(items) > 0 {
+				feedRequestTotal.WithLabelValues("push-redis").Inc()
+			} else {
+				mode = "push-fallback"
+				feedRequestTotal.WithLabelValues("push-fallback").Inc()
+				items, err = s.db.GetFeedPull(ctx, userID, s.cfg.FeedPageSize)
+			}
+		} else {
 			mode = "push-fallback"
 			feedRequestTotal.WithLabelValues("push-fallback").Inc()
 			items, err = s.db.GetFeedPull(ctx, userID, s.cfg.FeedPageSize)
@@ -324,11 +305,6 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, _ := json.Marshal(map[string]any{"feed": items, "mode": mode, "count": len(items)})
-	if s.proxy != nil {
-		_ = s.proxy.Set(ctx, cacheKey, string(body), s.cfg.CacheTTL)
-	} else if s.cache != nil {
-		_ = s.cache.Set(ctx, cacheKey, string(body), s.cfg.CacheTTL)
-	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(body)
 }
