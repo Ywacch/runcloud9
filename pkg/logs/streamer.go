@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -22,27 +23,28 @@ const (
 	logTailLines  = int64(100) // send last 100 lines on connect, then follow
 )
 
-// componentPodLabels maps component name to the pod label selector.
-// Matches the labels set by K8sDeployer in pkg/deployer/k8s.go.
-var componentPodLabels = map[string]string{
-	"db":         "app=postgres",
-	"cache":      "app=redis",
-	"app-server": "app=app-server",
-	"mq":         "app=rabbitmq",
-	"worker":     "app=worker",
-	"lb":         "app=lb",
+type componentLogTarget struct {
+	labelSelector string
+	containerName string
 }
 
-// componentContainerName maps component name to the primary container name
-// inside its pod. Required when pods have sidecar containers (e.g. exporters)
-// because K8s refuses to stream logs without an explicit container name.
-var componentContainerName = map[string]string{
-	"db":         "postgres",
-	"cache":      "redis",
-	"app-server": "app-server",
-	"mq":         "rabbitmq",
-	"worker":     "worker",
-	"lb":         "nginx",
+type podLogStream struct {
+	component     string
+	podName       string
+	containerName string
+}
+
+// componentLogTargets maps each logical component to one or more pod/container
+// targets. Cache intentionally supports multiple topologies:
+// - cache-aside: app=redis
+// - proxy modes: app=cache-proxy + app=redis-internal
+var componentLogTargets = map[string][]componentLogTarget{
+	"db":         {{labelSelector: "app=postgres", containerName: "postgres"}},
+	"cache":      {{labelSelector: "app=redis", containerName: "redis"}, {labelSelector: "app=cache-proxy", containerName: "cache-proxy"}, {labelSelector: "app=redis-internal", containerName: "redis"}},
+	"app-server": {{labelSelector: "app=app-server", containerName: "app-server"}},
+	"mq":         {{labelSelector: "app=rabbitmq", containerName: "rabbitmq"}},
+	"worker":     {{labelSelector: "app=worker", containerName: "worker"}},
+	"lb":         {{labelSelector: "app=lb", containerName: "nginx"}},
 }
 
 // StreamLogs finds all pods in the namespace, starts one goroutine per pod
@@ -97,22 +99,40 @@ func StreamLogs(ctx context.Context, conn *websocket.Conn, clientset kubernetes.
 		}
 	}()
 
-	// Start one log-streaming goroutine per component.
-	for component, labelSelector := range componentPodLabels {
-		pods, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
-			LabelSelector: labelSelector,
-		})
-		if err != nil || len(pods.Items) == 0 {
-			continue
-		}
-
-		containerName := componentContainerName[component] // primary container, not exporter sidecar
-		for _, pod := range pods.Items {
-			go streamPodLogs(ctx, clientset, namespace, pod.Name, component, containerName, writeCh)
-		}
+	// Start one log-streaming goroutine per discovered pod stream target.
+	for _, stream := range discoverPodLogStreams(ctx, clientset, namespace) {
+		go streamPodLogs(ctx, clientset, namespace, stream.podName, stream.component, stream.containerName, writeCh)
 	}
 
 	<-ctx.Done()
+}
+
+func discoverPodLogStreams(ctx context.Context, clientset kubernetes.Interface, namespace string) []podLogStream {
+	streams := make([]podLogStream, 0, len(componentLogTargets))
+	seen := make(map[string]struct{})
+	for component, targets := range componentLogTargets {
+		for _, target := range targets {
+			pods, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+				LabelSelector: target.labelSelector,
+			})
+			if err != nil || len(pods.Items) == 0 {
+				continue
+			}
+			for _, pod := range pods.Items {
+				key := fmt.Sprintf("%s|%s|%s", component, pod.Name, target.containerName)
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				streams = append(streams, podLogStream{
+					component:     component,
+					podName:       pod.Name,
+					containerName: target.containerName,
+				})
+			}
+		}
+	}
+	return streams
 }
 
 // streamPodLogs streams logs from a single pod and parses each line into a LogLine.
