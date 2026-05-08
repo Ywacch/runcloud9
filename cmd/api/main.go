@@ -146,8 +146,21 @@ func main() {
 	if supabaseURL == "" || supabaseKey == "" {
 		log.Fatal("SUPABASE_URL and SUPABASE_SERVICE_KEY are required")
 	}
-	if os.Getenv("ENV") == "production" && os.Getenv("SUPABASE_JWT_SECRET") == "" {
-		log.Fatal("SUPABASE_JWT_SECRET must be set in production")
+	jwtMode := strings.TrimSpace(strings.ToLower(os.Getenv("JWT_VERIFY_MODE")))
+	switch jwtMode {
+	case "":
+		jwtMode = "hybrid"
+	case "hybrid", "jwks_only", "hs256_only":
+	default:
+		log.Fatalf("invalid JWT_VERIFY_MODE %q (expected hybrid, jwks_only, or hs256_only)", jwtMode)
+	}
+	if os.Getenv("ENV") == "production" {
+		if supabaseURL == "" {
+			log.Fatal("SUPABASE_URL is required in production")
+		}
+		if (jwtMode == "hybrid" || jwtMode == "hs256_only") && os.Getenv("SUPABASE_JWT_SECRET") == "" {
+			log.Fatalf("SUPABASE_JWT_SECRET must be set in production when JWT_VERIFY_MODE=%s", jwtMode)
+		}
 	}
 	if versionsFile := os.Getenv("IMAGE_VERSIONS_FILE"); versionsFile != "" {
 		// Explicit override is operator-controlled; fail fast if invalid/unreadable.

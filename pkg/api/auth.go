@@ -27,6 +27,12 @@ const (
 	supabaseJWKSPath = "/auth/v1/.well-known/jwks.json"
 )
 
+const (
+	jwtVerifyModeHybrid   = "hybrid"
+	jwtVerifyModeJWKSOnly = "jwks_only"
+	jwtVerifyModeHS256    = "hs256_only"
+)
+
 type jwksResponse struct {
 	Keys []jwkEntry `json:"keys"`
 }
@@ -54,6 +60,9 @@ func requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		secret := strings.TrimSpace(os.Getenv("SUPABASE_JWT_SECRET"))
 		supabaseURL := strings.TrimSpace(os.Getenv("SUPABASE_URL"))
+		mode := jwtVerifyMode()
+		allowHS256 := mode == jwtVerifyModeHybrid || mode == jwtVerifyModeHS256
+		allowES256 := mode == jwtVerifyModeHybrid || mode == jwtVerifyModeJWKSOnly
 		if secret == "" {
 			if os.Getenv("ENV") != "production" {
 				// Local dev fallback keeps existing workflows unblocked.
@@ -61,10 +70,14 @@ func requireAuth(next http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			if supabaseURL == "" {
+			if (allowES256 && supabaseURL == "") || (allowHS256 && !allowES256) {
 				writeError(w, http.StatusInternalServerError, "server auth misconfiguration")
 				return
 			}
+		}
+		if allowES256 && supabaseURL == "" {
+			writeError(w, http.StatusInternalServerError, "server auth misconfiguration")
+			return
 		}
 
 		header := r.Header.Get("Authorization")
@@ -90,19 +103,22 @@ func requireAuth(next http.Handler) http.Handler {
 		token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (any, error) {
 			switch t.Method.Alg() {
 			case jwt.SigningMethodHS256.Alg():
+				if !allowHS256 {
+					return nil, fmt.Errorf("hs256 tokens are disabled")
+				}
 				if secret == "" {
 					return nil, fmt.Errorf("hs256 secret is not configured")
 				}
 				return []byte(secret), nil
 			case jwt.SigningMethodES256.Alg():
+				if !allowES256 {
+					return nil, fmt.Errorf("es256 tokens are disabled")
+				}
 				return getSupabaseJWK(r.Context(), supabaseURL, t.Header["kid"])
 			default:
 				return nil, fmt.Errorf("unexpected signing method")
 			}
-		}, jwt.WithValidMethods([]string{
-			jwt.SigningMethodHS256.Alg(),
-			jwt.SigningMethodES256.Alg(),
-		}))
+		}, jwt.WithValidMethods(validJWTAlgs(mode)))
 		if err != nil || !token.Valid {
 			writeError(w, http.StatusUnauthorized, "invalid token")
 			return
@@ -138,7 +154,14 @@ func getSupabaseJWK(ctx context.Context, supabaseURL string, kidVal any) (any, e
 	}
 	key, ok := keys[kid]
 	if !ok {
-		return nil, fmt.Errorf("jwk for kid %q not found", kid)
+		keys, err = supabaseJWKSCache.forceRefresh(ctx, supabaseURL)
+		if err != nil {
+			return nil, err
+		}
+		key, ok = keys[kid]
+		if !ok {
+			return nil, fmt.Errorf("jwk for kid %q not found after refresh", kid)
+		}
 	}
 	return key, nil
 }
@@ -168,6 +191,46 @@ func (c *jwksCache) getKeys(ctx context.Context, supabaseURL string) (map[string
 	c.keys = keys
 	c.fetchedAt = time.Now()
 	return c.keys, nil
+}
+
+func (c *jwksCache) forceRefresh(ctx context.Context, supabaseURL string) (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	keys, err := fetchSupabaseJWKS(ctx, supabaseURL)
+	if err != nil {
+		return nil, err
+	}
+	c.keys = keys
+	c.fetchedAt = time.Now()
+	return c.keys, nil
+}
+
+func jwtVerifyMode() string {
+	mode := strings.TrimSpace(strings.ToLower(os.Getenv("JWT_VERIFY_MODE")))
+	switch mode {
+	case "", jwtVerifyModeHybrid:
+		return jwtVerifyModeHybrid
+	case jwtVerifyModeJWKSOnly:
+		return jwtVerifyModeJWKSOnly
+	case jwtVerifyModeHS256:
+		return jwtVerifyModeHS256
+	default:
+		return jwtVerifyModeHybrid
+	}
+}
+
+func validJWTAlgs(mode string) []string {
+	switch mode {
+	case jwtVerifyModeJWKSOnly:
+		return []string{jwt.SigningMethodES256.Alg()}
+	case jwtVerifyModeHS256:
+		return []string{jwt.SigningMethodHS256.Alg()}
+	default:
+		return []string{
+			jwt.SigningMethodHS256.Alg(),
+			jwt.SigningMethodES256.Alg(),
+		}
+	}
 }
 
 func fetchSupabaseJWKS(ctx context.Context, supabaseURL string) (map[string]any, error) {
