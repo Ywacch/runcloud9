@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cloud9-api-ingress
+  namespace: cloud9-system
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    kubernetes.io/ingress.global-static-ip-name: "cloud9-api-ingress-ip"
+    networking.gke.io/managed-certificates: "cloud9-api-cert"
+spec:
+  rules:
+    - host: api.runcloud9.io
+      http:
+        paths:
+          - path: /*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: cloud9-api
+                port:
+                  number: 80

@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloud9-api
+  namespace: cloud9-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: cloud9-api
+          image: us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/cloud9-api:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SEED_BUCKET_NAME
+              value: "cloud9-seed-data"
+            - name: DDC_BUCKET
+              value: "cloud9-diagnostics"
+            - name: PROMETHEUS_URL
+              value: "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
