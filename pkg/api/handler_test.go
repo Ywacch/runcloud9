@@ -18,6 +18,25 @@ import (
 	"github.com/ywacch/cloud9/pkg/store"
 )
 
+type fakeBlockingDeployer struct {
+	deployFn   func(ctx context.Context, cfg deployer.DeployConfig) error
+	teardownFn func(ctx context.Context, namespace string) error
+}
+
+func (f *fakeBlockingDeployer) Deploy(ctx context.Context, cfg deployer.DeployConfig) error {
+	if f.deployFn != nil {
+		return f.deployFn(ctx, cfg)
+	}
+	return nil
+}
+
+func (f *fakeBlockingDeployer) Teardown(ctx context.Context, namespace string) error {
+	if f.teardownFn != nil {
+		return f.teardownFn(ctx, namespace)
+	}
+	return nil
+}
+
 func TestHandleGetTemplates(t *testing.T) {
 	t.Parallel()
 	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -457,6 +476,100 @@ func TestWriteDiagnosticsSummary_IncludesCollectionReason(t *testing.T) {
 	if got, _ := diag["collection_reason"].(string); got != "delete" {
 		t.Fatalf("collection_reason: want delete, got %q", got)
 	}
+}
+
+func TestDeleteDuringProvision_StaysTerminated(t *testing.T) {
+	t.Setenv("ENV", "development")
+	t.Setenv("SUPABASE_JWT_SECRET", "")
+	t.Setenv("SUPABASE_URL", "")
+
+	s := newFakeDeploymentStore()
+	deployers := map[string]deployer.ComponentDeployer{
+		"db": &fakeBlockingDeployer{},
+		"app-server": &fakeBlockingDeployer{
+			deployFn: func(ctx context.Context, _ deployer.DeployConfig) error {
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		},
+	}
+	h := NewHandler(deployers, s, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "standard",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app", Type: "app-server", Name: "app", Config: map[string]interface{}{}},
+			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app", TargetID: "db"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+
+	createReq := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	mux.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create status: want 201, got %d body=%s", createRec.Code, createRec.Body.String())
+	}
+	var created struct {
+		Namespace string `json:"namespace"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.Namespace == "" {
+		t.Fatal("missing namespace in create response")
+	}
+
+	deadline := time.Now().Add(4 * time.Second)
+	registered := false
+	for time.Now().Before(deadline) {
+		h.provisionMu.Lock()
+		_, ok := h.provisionCancel[created.Namespace]
+		h.provisionMu.Unlock()
+		if ok {
+			registered = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !registered {
+		t.Fatal("expected provisioning cancel func to be registered")
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/deployments/"+created.Namespace, nil)
+	deleteRec := httptest.NewRecorder()
+	mux.ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("delete status: want 204, got %d body=%s", deleteRec.Code, deleteRec.Body.String())
+	}
+
+	waitDeadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(waitDeadline) {
+		row, err := s.GetDeployment(context.Background(), created.Namespace)
+		if err != nil {
+			t.Fatalf("get deployment: %v", err)
+		}
+		if row.Status == "terminated" {
+			time.Sleep(150 * time.Millisecond)
+			row2, err := s.GetDeployment(context.Background(), created.Namespace)
+			if err != nil {
+				t.Fatalf("get deployment (stability): %v", err)
+			}
+			if row2.Status != "terminated" {
+				t.Fatalf("status changed after termination: %q", row2.Status)
+			}
+			return
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	t.Fatal("expected deployment status to become terminated")
 }
 
 type fakeDeploymentStore struct {

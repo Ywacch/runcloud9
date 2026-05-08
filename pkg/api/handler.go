@@ -44,6 +44,8 @@ type Handler struct {
 	clientset        kubernetes.Interface
 	loadgen          *loadgen.LoadGenerator
 	eventBus         *metrics.EventBus
+	provisionMu      sync.Mutex
+	provisionCancel  map[string]context.CancelFunc
 }
 
 const defaultMaxActiveDeploymentsPerUser = 1
@@ -83,16 +85,21 @@ func NewHandler(
 	lg *loadgen.LoadGenerator,
 	eventBus *metrics.EventBus,
 ) *Handler {
+	var seedSvc seederService
+	if seed != nil {
+		seedSvc = seed
+	}
 	return &Handler{
 		deployers:        deployers,
 		store:            store,
 		scheduler:        scheduler,
-		seeder:           seed,
+		seeder:           seedSvc,
 		metricsCollector: metricsCollector,
 		diagnostics:      diagnosticsCollector,
 		clientset:        clientset,
 		loadgen:          lg,
 		eventBus:         eventBus,
+		provisionCancel:  make(map[string]context.CancelFunc),
 	}
 }
 
@@ -386,9 +393,15 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
+		h.setProvisionCancel(namespace, cancel)
+		defer h.clearProvisionCancel(namespace)
 
 		result, err := h.orchestrate(ctx, design, namespace)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || h.isDeploymentStatus(namespace, "terminated") {
+				log.Printf("orchestration canceled for namespace=%s", namespace)
+				return
+			}
 			log.Printf("orchestration failed for namespace=%s: %v", namespace, err)
 			sentry.WithScope(func(scope *sentry.Scope) {
 				scope.SetTag("template", design.Template)
@@ -453,6 +466,10 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		}
 
 		runExpiresAt := time.Now().Add(9 * time.Minute)
+		if h.isDeploymentStatus(namespace, "terminated") {
+			log.Printf("skip final running status for terminated namespace=%s", namespace)
+			return
+		}
 		if h.store != nil {
 			_ = h.store.UpdateStatus(context.Background(), namespace, "running")
 			_ = h.store.UpdateExpiresAt(context.Background(), namespace, runExpiresAt)
@@ -823,6 +840,7 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 	if h.requireOwnership(w, r, namespace) == nil {
 		return
 	}
+	h.cancelProvision(namespace)
 	// Stop load generator if running (prevents requests to a dying namespace)
 	if h.loadgen != nil {
 		h.loadgen.Stop(namespace)
@@ -904,6 +922,38 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 		_ = h.store.UpdateStatus(context.Background(), namespace, "terminated")
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) setProvisionCancel(namespace string, cancel context.CancelFunc) {
+	h.provisionMu.Lock()
+	defer h.provisionMu.Unlock()
+	h.provisionCancel[namespace] = cancel
+}
+
+func (h *Handler) clearProvisionCancel(namespace string) {
+	h.provisionMu.Lock()
+	defer h.provisionMu.Unlock()
+	delete(h.provisionCancel, namespace)
+}
+
+func (h *Handler) cancelProvision(namespace string) {
+	h.provisionMu.Lock()
+	cancel := h.provisionCancel[namespace]
+	h.provisionMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (h *Handler) isDeploymentStatus(namespace, status string) bool {
+	if h.store == nil {
+		return false
+	}
+	row, err := h.store.GetDeployment(context.Background(), namespace)
+	if err != nil {
+		return false
+	}
+	return row.Status == status
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
