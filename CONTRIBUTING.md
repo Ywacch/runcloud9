@@ -249,17 +249,11 @@ cd images/ecommerce && go build -o ecommerce .
 
 ### Environment variables
 
-See `cmd/api/main.go` for the full list. Key ones:
+Canonical configuration docs:
 
-| Variable | Required | Purpose |
-|---|---|---|
-| `SUPABASE_URL` | Yes | Deployment store |
-| `SUPABASE_SERVICE_KEY` | Yes | Deployment store auth |
-| `PROMETHEUS_URL` | No | Metrics collection (empty = metrics disabled) |
-| `TEMPLATE_IMAGE_REGISTRY` | No | Docker image registry prefix |
-| `TEMPLATE_IMAGE_TAG` | No | Deploy-time template/proxy image tag (default: `v1`) |
-| `IMAGE_VERSIONS_FILE` | No | JSON manifest path for per-image immutable tags (overrides global tag) |
-| `SEED_BUCKET_NAME` | No | GCS bucket for pre-baked seed data |
+- `docs/env-and-secrets-reference.md` (required/optional env vars + secret contract)
+- `.env.example` (local template)
+- `docs/self-host-deployment.md` (Kubernetes/operator flow + RBAC requirements)
 
 ---
 

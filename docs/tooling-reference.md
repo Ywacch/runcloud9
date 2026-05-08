@@ -17,6 +17,7 @@
 9. [wscat (WebSocket testing)](#9-wscat-websocket-testing)
 10. [Local Development Checklist](#10-local-development-checklist)
 11. [GitHub Actions WIF Deploy Setup](#11-github-actions-wif-deploy-setup)
+12. [Canonical Config Docs](#12-canonical-config-docs)
 
 ---
 
@@ -700,6 +701,11 @@ Cloud9 uses multiple Go modules:
 Run `go mod tidy` in each module directory separately after adding dependencies.
 
 ### Environment variables for local development
+Canonical source for required/optional runtime configuration:
+
+- `docs/env-and-secrets-reference.md`
+- `.env.example`
+
 ```powershell
 $env:DEPLOYER="k8s"                          # use K8sDeployer (targets GKE)
 $env:SUPABASE_URL="https://<ref>.supabase.co"
@@ -975,13 +981,14 @@ If deploy fails with:
 bootstrap the API resources once from your workstation:
 
 ```bash
-kubectl apply -f k8s/base/cloud9-api.yaml
-kubectl create secret generic cloud9-api-secrets -n cloud9-system \
-  --from-literal=supabase-url="..." \
-  --from-literal=supabase-service-key="..." \
-  --from-literal=supabase-jwt-secret="..." \
-  --from-literal=allowed-origins="https://<frontend-domain>" \
-  --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -k k8s/base
+kubectl apply -f k8s/base/cloud9-api-secrets.example.yaml
+```
+
+For GKE-specific ingress/certificate/workload-identity behavior:
+
+```bash
+kubectl apply -k k8s/overlays/gke
 ```
 
 Then rerun `Deploy API`.
@@ -1000,7 +1007,7 @@ the `cloud9-api` Kubernetes service account is missing RBAC.
 Fix:
 
 ```bash
-kubectl apply -f k8s/base/cloud9-api.yaml
+kubectl apply -k k8s/base
 ```
 
 The base manifest now includes:
@@ -1032,7 +1039,11 @@ the service account needs pod exec/log subresource RBAC. Ensure `ClusterRole clo
 - `resources: ["pods/exec", "pods/log"]`
 - `verbs: ["get", "create"]`
 
-Then re-apply `k8s/base/cloud9-api.yaml` and retry deployment.
+Then re-apply base manifests and retry deployment:
+
+```bash
+kubectl apply -k k8s/base
+```
 
 ### Frontend cannot call API over HTTPS (mixed content)
 If the frontend is hosted on HTTPS (for example Vercel) and API calls only work over `http://<loadbalancer-ip>`, browsers will block requests as mixed content.
@@ -1051,7 +1062,7 @@ Create DNS `A` record:
 Apply ingress resources:
 
 ```bash
-kubectl apply -f k8s/base/cloud9-api-ingress.yaml
+kubectl apply -k k8s/overlays/gke
 kubectl get ingress cloud9-api-ingress -n cloud9-system
 kubectl describe managedcertificate cloud9-api-cert -n cloud9-system
 ```
@@ -1088,6 +1099,15 @@ kubectl get pods -n cloud9-system
 - `ganymede-cloud.svc.id.goog` is the GKE internal pool. Keep it; it is not the GitHub Actions provider.
 - Runtime backend env vars (`SUPABASE_SERVICE_KEY`, `SUPABASE_JWT_SECRET`, etc.) belong in Kubernetes secret `cloud9-api-secrets`, not in GitHub Actions secrets.
 
+## 12. Canonical Config Docs
+
+Use these as source of truth for self-host/runtime configuration:
+
+- `docs/self-host-deployment.md`
+- `docs/env-and-secrets-reference.md`
+- `.env.example`
+- `k8s/base/cloud9-api-secrets.example.yaml`
+
 ### Manual Ops Log (2026-04-24)
 Production run log for alpha hardening and HTTPS bring-up.
 
@@ -1107,7 +1127,7 @@ Production run log for alpha hardening and HTTPS bring-up.
   - DNS A record configured:
     - `api.runcloud9.io -> 34.144.196.199`
   - Applied ingress resources:
-    - `kubectl apply -f k8s/base/cloud9-api-ingress.yaml`
+    - `kubectl apply -k k8s/overlays/gke`
   - Verified ingress and certificate:
     - Ingress address assigned: `34.144.196.199`
     - `ManagedCertificate cloud9-api-cert` status: `Active`

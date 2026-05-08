@@ -2,6 +2,11 @@
 > Run these steps once to provision the GKE Autopilot cluster and GCS bucket.  
 > Keep this doc updated if infrastructure changes.
 
+This guide is GCP-specific. For provider-agnostic self-host steps and canonical runtime config, see:
+
+- `docs/self-host-deployment.md`
+- `docs/env-and-secrets-reference.md`
+
 > **Note:** The GCP project ID remains `ganymede-cloud` — this is intentional.  
 > Existing quota approvals are tied to this project ID and must not be changed.
 
@@ -156,6 +161,14 @@ go run cmd/api/main.go
 ```
 
 Ensure kubectl context is set to GKE before starting the API.
+
+When deploying API manifests to GKE, apply base plus GKE overlay:
+
+```bash
+kubectl apply -k k8s/base
+kubectl apply -k k8s/overlays/gke
+kubectl apply -f k8s/base/cloud9-api-secrets.example.yaml
+```
 
 ---
 
