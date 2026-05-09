@@ -250,11 +250,17 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 			})
 			pipe.ZRemRangeByRank(ctx, key, 0, -1001)
 		}
-		go func(p redis.Pipeliner) {
+		followerCount := len(followers)
+		go func(p redis.Pipeliner, postID int, n int) {
 			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			_, _ = p.Exec(bgCtx)
-		}(pipe)
+			slog.Info("sync fanout complete",
+				"post_id", postID,
+				"followers_updated", n,
+				"operation", "fanout_complete",
+			)
+		}(pipe, post.ID, followerCount)
 	}
 	postTotal.WithLabelValues("sync").Inc()
 	writeJSON(w, http.StatusOK, map[string]any{"post_id": post.ID, "mode": "sync"})
@@ -266,7 +272,7 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start := time.Now()
-	mode := "pull"
+	mode := "pull" // default for latency label on validation errors before fetchFeedItems runs
 	defer func() {
 		feedLatency.WithLabelValues(mode).Observe(time.Since(start).Seconds())
 	}()
@@ -280,26 +286,7 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	var items []FeedItem
-	if s.mq != nil {
-		mode = "push-redis"
-		if s.cache != nil {
-			items, err = s.cache.GetTimeline(ctx, userID, s.cfg.FeedPageSize)
-			if err == nil && len(items) > 0 {
-				feedRequestTotal.WithLabelValues("push-redis").Inc()
-			} else {
-				mode = "push-fallback"
-				feedRequestTotal.WithLabelValues("push-fallback").Inc()
-				items, err = s.db.GetFeedPull(ctx, userID, s.cfg.FeedPageSize)
-			}
-		} else {
-			mode = "push-fallback"
-			feedRequestTotal.WithLabelValues("push-fallback").Inc()
-			items, err = s.db.GetFeedPull(ctx, userID, s.cfg.FeedPageSize)
-		}
-	} else {
-		feedRequestTotal.WithLabelValues("pull").Inc()
-		items, err = s.db.GetFeedPull(ctx, userID, s.cfg.FeedPageSize)
-	}
+	items, mode, err = fetchFeedItems(ctx, s.cache, s.cfg.FeedPageSize, userID, s.db.GetFeedPull)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to fetch feed")
 		return

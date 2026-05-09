@@ -170,6 +170,23 @@ func ValidateTopology(design DeploymentDesign) error {
 		}
 	}
 
+	// If an MQ node exists, a worker must exist to consume messages.
+	for _, mqNode := range design.Nodes {
+		if mqNode.Type != "mq" {
+			continue
+		}
+		hasWorker := false
+		for _, n := range design.Nodes {
+			if n.Type == "worker" {
+				hasWorker = true
+				break
+			}
+		}
+		if !hasWorker {
+			return fmt.Errorf("mq node %q requires a worker node to consume messages", mqNode.Name)
+		}
+	}
+
 	for _, workerNode := range design.Nodes {
 		if workerNode.Type != "worker" {
 			continue
