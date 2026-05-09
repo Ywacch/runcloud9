@@ -364,6 +364,24 @@ func (c *MetricsCollector) queryProcessMemory(ctx context.Context, ns, podRe, fa
 	return c.queryWithFallbackEstimated(ctx, primary, fallback)
 }
 
+func (c *MetricsCollector) queryContainerCPUPrimaryOnly(ctx context.Context, ns, podRe, container string) (float64, bool) {
+	primary := fmt.Sprintf(
+		`sum(rate(container_cpu_usage_seconds_total{namespace=%q,pod=~%q,container="%s"}[30s]))`,
+		ns, podRe, container,
+	)
+	v, present, _ := c.queryScalar(ctx, primary)
+	return v, present
+}
+
+func (c *MetricsCollector) queryContainerMemoryPrimaryOnly(ctx context.Context, ns, podRe, container string) (float64, bool) {
+	primary := fmt.Sprintf(
+		`sum(container_memory_working_set_bytes{namespace=%q,pod=~%q,container="%s"})`,
+		ns, podRe, container,
+	)
+	v, present, _ := c.queryScalar(ctx, primary)
+	return v, present
+}
+
 // lbMetadataFromCluster reads deploy-time LB algorithm/backends from the nginx ConfigMap.
 func (c *MetricsCollector) lbMetadataFromCluster(ctx context.Context, namespace string) (algorithm string, backends []string) {
 	if c == nil || c.clientset == nil {
@@ -496,18 +514,28 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		cacheCPU1 = redisCPUFromExporter
 		cacheCPU1Est = false
 	} else {
-		cacheCPU1, cacheCPU1Est = c.queryCPUPair(ctx, ns, "redis.*", "redis")
+		cacheCPU1, cacheCPU1Est = c.queryContainerCPUPrimaryOnly(ctx, ns, "redis.*", "redis")
+		cacheCPU1Est = !cacheCPU1Est
 	}
 	if c.debugMetrics {
 		kubeEstCPU, _ := c.queryCPUPair(ctx, ns, "redis.*", "redis")
 		c.debugCompare("cache", "cpu", redisCPUFromExporter, kubeEstCPU, "redis_cpu_user+sys", "kube_requests")
 	}
 	// Cache-proxy is a Go process; use scrape-side process_* series (works on Autopilot without cAdvisor).
-	cacheCPU2, cacheCPU2Est := c.queryProcessCPU(ctx, ns, "cache-proxy.*", "cache-proxy")
+	cacheCPU2, cacheProxyPresent, _ := c.queryScalar(ctx, fmt.Sprintf(
+		`sum(rate(process_cpu_seconds_total{namespace=%q,pod=~%q}[30s]))`,
+		ns, "cache-proxy.*",
+	))
+	cacheCPU2Est := !cacheProxyPresent
 	cmCache.CPUUsage = cacheCPU1 + cacheCPU2
 	cmCache.CPUIsEstimated = cacheCPU1Est || cacheCPU2Est
-	cacheMem1, cacheMem1Est := c.queryMemPair(ctx, ns, "redis.*", "redis")
-	cacheMem2, cacheMem2Est := c.queryProcessMemory(ctx, ns, "cache-proxy.*", "cache-proxy")
+	cacheMem1, cacheRedisMemPresent := c.queryContainerMemoryPrimaryOnly(ctx, ns, "redis.*", "redis")
+	cacheMem1Est := !cacheRedisMemPresent
+	cacheMem2, cacheProxyMemPresent, _ := c.queryScalar(ctx, fmt.Sprintf(
+		`sum(process_resident_memory_bytes{namespace=%q,pod=~%q})`,
+		ns, "cache-proxy.*",
+	))
+	cacheMem2Est := !cacheProxyMemPresent
 	cmCache.MemoryBytes = int64(cacheMem1 + cacheMem2)
 	cmCache.MemIsEstimated = cacheMem1Est || cacheMem2Est
 	cmCache.CPULimit = c.kubeLimitCPU(ctx, ns, "redis.*", "redis") + c.kubeLimitCPU(ctx, ns, "cache-proxy.*", "cache-proxy")
