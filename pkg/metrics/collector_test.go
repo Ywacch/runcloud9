@@ -143,6 +143,65 @@ func TestQueryWithFallback_BothZero(t *testing.T) {
 	}
 }
 
+// Idle workloads report scalar 0 from rate(); that must not trigger kube request substitution.
+func TestQueryWithFallback_PrimaryPresentZeroSkipsFallback(t *testing.T) {
+	t.Parallel()
+	var n int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(q, "__PRIMARY__") {
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0"))
+			return
+		}
+		if strings.Contains(q, "__FALLBACK__") {
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.25"))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(promEmptyJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	got := c.queryWithFallback(context.Background(), `sum(__PRIMARY__)`, `sum(__FALLBACK__)`)
+	if got != 0 {
+		t.Fatalf("want primary 0, got %v (must not substitute kube requests)", got)
+	}
+	if n != 1 {
+		t.Fatalf("want 1 HTTP request (no fallback), got %d", n)
+	}
+}
+
+func TestQueryWithFallbackEstimated_PrimaryPresentZeroNotEstimated(t *testing.T) {
+	t.Parallel()
+	var n int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(q, "__PRIMARY__") {
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0"))
+			return
+		}
+		if strings.Contains(q, "__FALLBACK__") {
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.25"))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(promEmptyJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	got, est := c.queryWithFallbackEstimated(context.Background(), `sum(__PRIMARY__)`, `sum(__FALLBACK__)`)
+	if got != 0 || est {
+		t.Fatalf("want (0, estimated=false), got (%v, %v)", got, est)
+	}
+	if n != 1 {
+		t.Fatalf("want 1 HTTP request (no fallback), got %d", n)
+	}
+}
+
 func TestQuery_EmptyPrometheusURL(t *testing.T) {
 	t.Parallel()
 	c := NewMetricsCollector("", nil, nil, nil)

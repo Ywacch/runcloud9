@@ -165,47 +165,53 @@ type prometheusResponse struct {
 	} `json:"data"`
 }
 
-// query executes a PromQL instant query and returns the first result value.
-// Returns 0 and no error if the query returns no results (metric not yet available).
-func (c *MetricsCollector) query(ctx context.Context, promql string) (float64, error) {
+// queryScalar runs an instant PromQL query. present is false when the result vector is empty
+// (no matching series). A scalar 0 with matching series sets present=true — distinct from “no data”.
+func (c *MetricsCollector) queryScalar(ctx context.Context, promql string) (val float64, present bool, err error) {
 	if c.prometheusURL == "" {
-		return 0, nil
+		return 0, false, nil
 	}
 	endpoint := fmt.Sprintf("%s/api/v1/query", c.prometheusURL)
 	params := url.Values{"query": {promql}}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?"+params.Encode(), nil)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("prometheus query: %w", err)
+		return 0, false, fmt.Errorf("prometheus query: %w", err)
 	}
 	defer resp.Body.Close()
 
 	var pr prometheusResponse
 	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
-		return 0, fmt.Errorf("decode prometheus response: %w", err)
+		return 0, false, fmt.Errorf("decode prometheus response: %w", err)
 	}
 
 	if pr.Status != "success" || len(pr.Data.Result) == 0 {
-		return 0, nil
+		return 0, false, nil
 	}
 
 	valStr, ok := pr.Data.Result[0].Value[1].(string)
 	if !ok {
-		return 0, nil
+		return 0, true, nil
 	}
 
-	var val float64
 	_, _ = fmt.Sscanf(valStr, "%f", &val)
 	// encoding/json can't encode NaN/Inf; sanitize so the WS stream never dies.
 	if math.IsNaN(val) || math.IsInf(val, 0) {
-		return 0, nil
+		val = 0
 	}
-	return val, nil
+	return val, true, nil
+}
+
+// query executes a PromQL instant query and returns the first result value.
+// Returns 0 and no error if the query returns no results (metric not yet available).
+func (c *MetricsCollector) query(ctx context.Context, promql string) (float64, error) {
+	v, _, err := c.queryScalar(ctx, promql)
+	return v, err
 }
 
 // queryMultiResult runs a PromQL instant query and returns one float per series, keyed by labelKey (e.g. "pod").
@@ -257,34 +263,36 @@ func (c *MetricsCollector) queryMultiResult(ctx context.Context, promql, labelKe
 // If primary returns 0, tries fallback; if fallback is >0, assumes primary metrics
 // are unavailable (e.g. cAdvisor not scraped) and returns fallback.
 func (c *MetricsCollector) queryWithFallback(ctx context.Context, primary, fallback string) float64 {
-	val, err := c.query(ctx, primary)
+	val, present, err := c.queryScalar(ctx, primary)
 	if err != nil {
-		fb, _ := c.query(ctx, fallback)
+		fb, _, _ := c.queryScalar(ctx, fallback)
 		return fb
 	}
-	if val == 0 {
-		fb, _ := c.query(ctx, fallback)
-		if fb > 0 {
-			return fb
-		}
+	if present {
+		return val
 	}
-	return val
+	fb, fbPresent, _ := c.queryScalar(ctx, fallback)
+	if fbPresent && fb > 0 {
+		return fb
+	}
+	return 0
 }
 
 // queryWithFallbackEstimated is like queryWithFallback but reports when the kube-requests path was used.
 func (c *MetricsCollector) queryWithFallbackEstimated(ctx context.Context, primary, fallback string) (float64, bool) {
-	val, err := c.query(ctx, primary)
+	val, present, err := c.queryScalar(ctx, primary)
 	if err != nil {
-		fb, _ := c.query(ctx, fallback)
+		fb, _, _ := c.queryScalar(ctx, fallback)
 		return fb, true
 	}
-	if val == 0 {
-		fb, _ := c.query(ctx, fallback)
-		if fb > 0 {
-			return fb, true
-		}
+	if present {
+		return val, false
 	}
-	return val, false
+	fb, fbPresent, _ := c.queryScalar(ctx, fallback)
+	if fbPresent && fb > 0 {
+		return fb, true
+	}
+	return 0, false
 }
 
 // queryCPUPair returns CPU cores for the main workload container only (excludes exporter sidecars).
@@ -472,39 +480,34 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 
 	// Cache tier: redis + cache-proxy (separate queries so exporter sidecars are not summed).
 	cmCache := ComponentMetrics{Component: "cache"}
-	redisCPUUser, _ := c.query(ctx, fmt.Sprintf(
+	redisCPUUser, redisUserPresent, _ := c.queryScalar(ctx, fmt.Sprintf(
 		`sum(rate(redis_cpu_user_seconds_total{namespace=%q}[30s]))`,
 		ns,
 	))
-	redisCPUSys, _ := c.query(ctx, fmt.Sprintf(
+	redisCPUSys, redisSysPresent, _ := c.queryScalar(ctx, fmt.Sprintf(
 		`sum(rate(redis_cpu_sys_seconds_total{namespace=%q}[30s]))`,
 		ns,
 	))
-	redisCPU := redisCPUUser + redisCPUSys
+	redisExporterPresent := redisUserPresent || redisSysPresent
+	redisCPUFromExporter := redisCPUUser + redisCPUSys
 	cacheCPU1 := 0.0
 	cacheCPU1Est := true
-	if redisCPU > 0 {
-		cacheCPU1 = redisCPU
+	if redisExporterPresent {
+		cacheCPU1 = redisCPUFromExporter
 		cacheCPU1Est = false
 	} else {
 		cacheCPU1, cacheCPU1Est = c.queryCPUPair(ctx, ns, "redis.*", "redis")
 	}
 	if c.debugMetrics {
 		kubeEstCPU, _ := c.queryCPUPair(ctx, ns, "redis.*", "redis")
-		c.debugCompare("cache", "cpu", redisCPU, kubeEstCPU, "redis_cpu_user+sys", "kube_requests")
+		c.debugCompare("cache", "cpu", redisCPUFromExporter, kubeEstCPU, "redis_cpu_user+sys", "kube_requests")
 	}
 	// Cache-proxy is a Go process; use scrape-side process_* series (works on Autopilot without cAdvisor).
 	cacheCPU2, cacheCPU2Est := c.queryProcessCPU(ctx, ns, "cache-proxy.*", "cache-proxy")
-	if cacheCPU2 == 0 {
-		cacheCPU2Est = false
-	}
 	cmCache.CPUUsage = cacheCPU1 + cacheCPU2
 	cmCache.CPUIsEstimated = cacheCPU1Est || cacheCPU2Est
 	cacheMem1, cacheMem1Est := c.queryMemPair(ctx, ns, "redis.*", "redis")
 	cacheMem2, cacheMem2Est := c.queryProcessMemory(ctx, ns, "cache-proxy.*", "cache-proxy")
-	if cacheMem2 == 0 {
-		cacheMem2Est = false
-	}
 	cmCache.MemoryBytes = int64(cacheMem1 + cacheMem2)
 	cmCache.MemIsEstimated = cacheMem1Est || cacheMem2Est
 	cmCache.CPULimit = c.kubeLimitCPU(ctx, ns, "redis.*", "redis") + c.kubeLimitCPU(ctx, ns, "cache-proxy.*", "cache-proxy")
