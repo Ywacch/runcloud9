@@ -186,13 +186,27 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 		// 1) internal Redis (imageRedis)
 		// 2) caching-proxy (HTTP->Redis->DB wrapper)
 		redisLabels := map[string]string{"app": "redis-internal", "deployment": cfg.Namespace}
+		internalRedisExporter := corev1.Container{
+			Name:      "redis-exporter",
+			Image:     "oliver006/redis_exporter:v1.67.0",
+			Ports:     []corev1.ContainerPort{{ContainerPort: 9121}},
+			Resources: ExporterResources(),
+			Env:       []corev1.EnvVar{{Name: "REDIS_ADDR", Value: "localhost:6379"}},
+		}
 		internalRedisDep := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Name: "redis-internal", Namespace: cfg.Namespace},
 			Spec: appsv1.DeploymentSpec{
 				Replicas: ptr(replicas),
 				Selector: &metav1.LabelSelector{MatchLabels: redisLabels},
 				Template: corev1.PodTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{Labels: redisLabels},
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: redisLabels,
+						Annotations: map[string]string{
+							"prometheus.io/scrape": "true",
+							"prometheus.io/port":   "9121",
+							"prometheus.io/path":   "/metrics",
+						},
+					},
 					Spec: corev1.PodSpec{
 						Containers: []corev1.Container{
 							{
@@ -209,6 +223,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 									FailureThreshold:    3,
 								},
 							},
+							internalRedisExporter,
 						},
 					},
 				},
@@ -287,6 +302,9 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 						Labels: proxyLabels,
 						Annotations: map[string]string{
 							"cloud9.io/proxy-queries-checksum": checksum,
+							"prometheus.io/scrape":             "true",
+							"prometheus.io/port":               "8081",
+							"prometheus.io/path":               "/metrics",
 						},
 					},
 					Spec: corev1.PodSpec{
