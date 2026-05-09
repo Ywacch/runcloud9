@@ -220,10 +220,12 @@ func (db *DB) GetFeedPull(ctx context.Context, userID, limit int) ([]FeedItem, e
 		dbQueryDuration.WithLabelValues("get_feed_pull").Observe(time.Since(start).Seconds())
 		logDBOp(ctx, "get_feed_pull", start)
 	}()
+	// Deduplicate follow edges so duplicate (follower_id, following_id) rows —
+	// possible if pg_restore loaded data without a working follows_pkey — do not multiply feed rows.
 	rows, err := db.pool.Query(ctx, `
 		SELECT p.id, p.user_id, u.username, p.content, p.created_at
 		FROM posts p
-		JOIN follows f ON f.following_id = p.user_id
+		JOIN (SELECT DISTINCT follower_id, following_id FROM follows) f ON f.following_id = p.user_id
 		JOIN users u ON u.id = p.user_id
 		WHERE f.follower_id = $1
 		ORDER BY p.created_at DESC
@@ -250,7 +252,10 @@ func (db *DB) GetFollowers(ctx context.Context, userID int) ([]int, error) {
 		dbQueryDuration.WithLabelValues("get_followers").Observe(time.Since(start).Seconds())
 		logDBOp(ctx, "get_followers", start)
 	}()
-	rows, err := db.pool.Query(ctx, `SELECT follower_id FROM follows WHERE following_id = $1`, userID)
+	rows, err := db.pool.Query(ctx,
+		`SELECT DISTINCT follower_id FROM follows WHERE following_id = $1`,
+		userID,
+	)
 	if err != nil {
 		return nil, err
 	}
