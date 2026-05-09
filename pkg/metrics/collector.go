@@ -528,7 +528,10 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	))
 	cacheCPU2Est := !cacheProxyPresent
 	cmCache.CPUUsage = cacheCPU1 + cacheCPU2
-	cmCache.CPUIsEstimated = cacheCPU1Est || cacheCPU2Est
+	// Mark cache CPU estimated only when both sources are missing.
+	// If Redis exporter is live but cache-proxy process metric is absent (or vice versa),
+	// report the live portion without labeling it as allocated.
+	cmCache.CPUIsEstimated = cacheCPU1Est && cacheCPU2Est
 	cacheMem1, cacheRedisMemPresent := c.queryContainerMemoryPrimaryOnly(ctx, ns, "redis.*", "redis")
 	cacheMem1Est := !cacheRedisMemPresent
 	cacheMem2, cacheProxyMemPresent, _ := c.queryScalar(ctx, fmt.Sprintf(
@@ -537,7 +540,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	))
 	cacheMem2Est := !cacheProxyMemPresent
 	cmCache.MemoryBytes = int64(cacheMem1 + cacheMem2)
-	cmCache.MemIsEstimated = cacheMem1Est || cacheMem2Est
+	cmCache.MemIsEstimated = cacheMem1Est && cacheMem2Est
 	cmCache.CPULimit = c.kubeLimitCPU(ctx, ns, "redis.*", "redis") + c.kubeLimitCPU(ctx, ns, "cache-proxy.*", "cache-proxy")
 	cmCache.MemoryLimit = c.kubeLimitMem(ctx, ns, "redis.*", "redis") + c.kubeLimitMem(ctx, ns, "cache-proxy.*", "cache-proxy")
 	// UNDERSTAND: assign cache to dm.Components after app metrics so hit/miss counters can be mirrored.
