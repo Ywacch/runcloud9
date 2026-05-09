@@ -606,6 +606,27 @@ func TestValidateTopology_WorkerWithAllDeps(t *testing.T) {
 	}
 }
 
+func TestValidateTopology_MQWithoutWorker(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "mq1", Type: "mq", Name: "MQ"},
+			{ID: "a1", Type: "app-server", Name: "App"},
+			{ID: "d1", Type: "db", Name: "DB"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "a1", TargetID: "d1"},
+		},
+	}
+
+	err := ValidateTopology(design)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	if want := "requires a worker node"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("expected error to contain %q, got %q", want, err.Error())
+	}
+}
+
 func TestDisplayCacheStrategyForApp_ProxyUsesCacheNodeStrategy(t *testing.T) {
 	design := DeploymentDesign{
 		Nodes: []DeploymentNode{
