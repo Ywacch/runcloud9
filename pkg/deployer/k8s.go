@@ -32,6 +32,21 @@ const (
 	waitReadyRestartFailThreshold int32 = 3
 )
 
+// templateHTTPReadinessProbe returns GET /health readiness for template app containers.
+// /health commonly touches Postgres/cache/MQ; default probe timeout is only 1s — under load that
+// causes flaky NotReady. Caller picks delays appropriate for startup vs steady state.
+func templateHTTPReadinessProbe(port, initialDelaySeconds, periodSeconds, failureThreshold, timeoutSeconds int32) *corev1.Probe {
+	return &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{Path: "/health", Port: intstr.FromInt32(port)},
+		},
+		InitialDelaySeconds: initialDelaySeconds,
+		PeriodSeconds:       periodSeconds,
+		TimeoutSeconds:      timeoutSeconds,
+		FailureThreshold:    failureThreshold,
+	}
+}
+
 // K8sDeployer is the real Kubernetes implementation of ComponentDeployer.
 // clientset is the typed HTTP client for the K8s API.
 // Every call on it (Create, Delete, Watch) maps to an HTTP request
@@ -441,15 +456,8 @@ func (k *K8sDeployer) deployAppServer(ctx context.Context, cfg DeployConfig, res
 						Ports:           []corev1.ContainerPort{{ContainerPort: 8080}},
 						Resources:       resources,
 						// UNDERSTAND: we use HTTP readiness to make PodReady reflect /health.
-						ReadinessProbe: &corev1.Probe{
-							ProbeHandler: corev1.ProbeHandler{
-								HTTPGet: &corev1.HTTPGetAction{Path: "/health", Port: intstr.FromInt32(8080)},
-							},
-							InitialDelaySeconds: 3,
-							PeriodSeconds:       2,
-							FailureThreshold:    5,
-						},
-						Env: envMapToK8s(envVars),
+						ReadinessProbe: templateHTTPReadinessProbe(8080, 3, 5, 8, 5),
+						Env:            envMapToK8s(envVars),
 					}},
 				},
 			},
@@ -493,14 +501,7 @@ func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, resour
 		Ports:           []corev1.ContainerPort{{ContainerPort: 8080}},
 		Resources:       resources,
 		Env:             envMapToK8s(envVars),
-		ReadinessProbe: &corev1.Probe{
-			ProbeHandler: corev1.ProbeHandler{
-				HTTPGet: &corev1.HTTPGetAction{Path: "/health", Port: intstr.FromInt32(8080)},
-			},
-			InitialDelaySeconds: 5,
-			PeriodSeconds:       3,
-			FailureThreshold:    10,
-		},
+		ReadinessProbe: templateHTTPReadinessProbe(8080, 5, 5, 10, 5),
 	}
 	// busybox exits immediately without a long-running command — keep pod Ready for QA placeholders.
 	if img == imageBusybox || strings.HasSuffix(img, "/"+imageBusybox) {
@@ -891,14 +892,7 @@ func newCacheProxyContainer(image string, resources corev1.ResourceRequirements,
 		Ports:           []corev1.ContainerPort{{ContainerPort: 8081}},
 		Resources:       resources,
 		Env:             env,
-		ReadinessProbe: &corev1.Probe{
-			ProbeHandler: corev1.ProbeHandler{
-				HTTPGet: &corev1.HTTPGetAction{Path: "/health", Port: intstr.FromInt32(8081)},
-			},
-			InitialDelaySeconds: 3,
-			PeriodSeconds:       2,
-			FailureThreshold:    5,
-		},
+		ReadinessProbe: templateHTTPReadinessProbe(8081, 3, 5, 8, 5),
 	}
 }
 

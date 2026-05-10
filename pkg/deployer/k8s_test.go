@@ -33,6 +33,13 @@ func TestNewCacheProxyContainer_SetsPullAlways(t *testing.T) {
 	if c.ReadinessProbe == nil || c.ReadinessProbe.HTTPGet == nil {
 		t.Fatal("expected HTTP readiness probe for cache-proxy")
 	}
+	if c.ReadinessProbe.TimeoutSeconds != 5 || c.ReadinessProbe.PeriodSeconds != 5 {
+		t.Fatalf("cache-proxy readiness: TimeoutSeconds=%d PeriodSeconds=%d want 5/5",
+			c.ReadinessProbe.TimeoutSeconds, c.ReadinessProbe.PeriodSeconds)
+	}
+	if c.ReadinessProbe.FailureThreshold != 8 {
+		t.Fatalf("cache-proxy readiness FailureThreshold: got %d want 8", c.ReadinessProbe.FailureThreshold)
+	}
 }
 
 func TestK8sDeployer_Deploy_CreatesNamespaceAndDeployment(t *testing.T) {
