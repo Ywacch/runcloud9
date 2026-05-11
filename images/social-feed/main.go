@@ -411,7 +411,14 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 		Path:   "/" + cfg.DBName,
 		User:   url.UserPassword(cfg.DBUser, cfg.DBPassword),
 	}
-	pool, err := pgxpool.New(ctx, connURL.String())
+	poolCfg, err := pgxpool.ParseConfig(connURL.String())
+	if err != nil {
+		return nil, err
+	}
+	// Enough concurrent heavy feed queries vs default max(4, NumCPU()); keep replicas×MaxConns
+	// under Postgres max_connections (default 100) in multi-pod deployments.
+	poolCfg.MaxConns = 15
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return nil, err
 	}

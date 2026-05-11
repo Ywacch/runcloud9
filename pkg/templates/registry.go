@@ -44,6 +44,8 @@ type TemplateSpec struct {
 	ProxyQueries        []ProxyQueryRule `json:"-"`
 	AppDatabaseMode     string           `json:"-"`
 	WorkerTimelineStore string           `json:"-"`
+	// LoadgenDefaultRPS is the suggested default RPS when starting loadgen with no rps in the request (0 = use global 50).
+	LoadgenDefaultRPS int `json:"loadgenDefaultRps,omitempty"`
 }
 
 // PresetNode is a fully-configured node for canvas population.
@@ -131,6 +133,7 @@ type templateDef struct {
 	ProxyQueries        []ProxyQueryRule `yaml:"proxyQueries"`
 	AppDatabaseMode     string           `yaml:"appDatabaseMode"`
 	WorkerTimelineStore string           `yaml:"workerTimelineStore"`
+	LoadgenDefaultRPS   int              `yaml:"loadgenDefaultRps"`
 }
 
 // embeddedFree is the in-repo YAML definitions (always available).
@@ -235,6 +238,9 @@ func defToSpec(def *templateDef) TemplateSpec {
 	}
 	if def.WorkerTimelineStore != "" {
 		spec.WorkerTimelineStore = def.WorkerTimelineStore
+	}
+	if def.LoadgenDefaultRPS > 0 {
+		spec.LoadgenDefaultRPS = def.LoadgenDefaultRPS
 	}
 	if def.WorkerImageKey != "" {
 		spec.WorkerImage = imageFor(def.WorkerImageKey)

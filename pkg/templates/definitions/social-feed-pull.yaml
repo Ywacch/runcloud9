@@ -11,6 +11,8 @@ premium: false
 tags: [read-heavy, beginner]
 simulatable: true
 deployable: true
+# Lower default loadgen rate: most traffic hits expensive fan-out-on-read feed queries at alpha resources.
+loadgenDefaultRps: 25
 imageKey: social-feed
 appDatabaseMode: always
 seed:

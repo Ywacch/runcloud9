@@ -68,7 +68,14 @@ func (db *DB) InitSchema(ctx context.Context) error {
 		CREATE INDEX IF NOT EXISTS idx_follows_follower ON follows(follower_id);
 		CREATE INDEX IF NOT EXISTS idx_follows_following ON follows(following_id);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	// Requires Postgres started with shared_preload_libraries=pg_stat_statements (see deployer db spec).
+	if _, err := db.pool.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS pg_stat_statements`); err != nil {
+		return fmt.Errorf("create extension pg_stat_statements: %w", err)
+	}
+	return nil
 }
 
 func (db *DB) SeedIfEmpty(ctx context.Context) error {
@@ -220,12 +227,11 @@ func (db *DB) GetFeedPull(ctx context.Context, userID, limit int) ([]FeedItem, e
 		dbQueryDuration.WithLabelValues("get_feed_pull").Observe(time.Since(start).Seconds())
 		logDBOp(ctx, "get_feed_pull", start)
 	}()
-	// Deduplicate follow edges so duplicate (follower_id, following_id) rows —
-	// possible if pg_restore loaded data without a working follows_pkey — do not multiply feed rows.
+	// follows has PRIMARY KEY (follower_id, following_id) — no DISTINCT needed.
 	rows, err := db.pool.Query(ctx, `
 		SELECT p.id, p.user_id, u.username, p.content, p.created_at
 		FROM posts p
-		JOIN (SELECT DISTINCT follower_id, following_id FROM follows) f ON f.following_id = p.user_id
+		JOIN follows f ON f.following_id = p.user_id
 		JOIN users u ON u.id = p.user_id
 		WHERE f.follower_id = $1
 		ORDER BY p.created_at DESC
