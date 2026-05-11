@@ -181,6 +181,19 @@ func TestEmbeddedProxyQueries(t *testing.T) {
 	}
 }
 
+func TestLoadgenDefaultRPSByTemplate(t *testing.T) {
+	t.Parallel()
+
+	sfp := GetTemplate("social-feed-pull")
+	if sfp == nil || sfp.LoadgenDefaultRPS != 25 {
+		t.Fatalf("social-feed-pull loadgenDefaultRps: got %+v", sfp)
+	}
+	us := GetTemplate("url-shortener")
+	if us == nil || us.LoadgenDefaultRPS != 0 {
+		t.Fatalf("url-shortener loadgenDefaultRps: want 0 (unset), got %+v", us)
+	}
+}
+
 func TestAppDatabaseModeByTemplate(t *testing.T) {
 	t.Parallel()
 

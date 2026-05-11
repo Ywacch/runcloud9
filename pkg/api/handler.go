@@ -749,7 +749,8 @@ func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 	err := json.NewDecoder(r.Body).Decode(&profile)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
-			profile = loadgen.DefaultProfile()
+			// Zero profile: template comes from deployment row below; NormalizeProfile fills RPS (template-aware).
+			profile = loadgen.LoadProfile{}
 		} else {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid json: %v", err))
 			return

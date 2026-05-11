@@ -1,6 +1,10 @@
 package loadgen
 
-import "time"
+import (
+	"time"
+
+	"github.com/ywacch/cloud9/pkg/templates"
+)
 
 // EndpointSpec describes one endpoint the load generator can target.
 // UNDERSTAND: templates define their own endpoints — the load generator
@@ -69,7 +73,15 @@ func DefaultProfile() LoadProfile {
 func NormalizeProfile(p LoadProfile) LoadProfile {
 	def := DefaultProfile()
 	if p.RPS <= 0 {
-		p.RPS = def.RPS
+		if p.Template != "" {
+			if t := templates.GetTemplate(p.Template); t != nil && t.LoadgenDefaultRPS > 0 {
+				p.RPS = t.LoadgenDefaultRPS
+			} else {
+				p.RPS = def.RPS
+			}
+		} else {
+			p.RPS = def.RPS
+		}
 	}
 	if p.DurationSeconds < 0 {
 		p.DurationSeconds = 0

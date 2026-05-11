@@ -126,6 +126,12 @@ var componentRegistry = map[string]ComponentSpec{
 		Ports:       []int32{5432},
 		ServiceName: "db",
 		ServicePort: 5432,
+		// Keep docker-entrypoint so init/db creation still runs (Command replaces image CMD).
+		Command: []string{
+			"docker-entrypoint.sh",
+			"postgres",
+			"-c", "shared_preload_libraries=pg_stat_statements",
+		},
 		DefaultEnv: map[string]string{
 			"POSTGRES_DB":       "syscrack",
 			"POSTGRES_USER":     "syscrack",
