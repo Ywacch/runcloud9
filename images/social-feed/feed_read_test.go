@@ -32,7 +32,7 @@ func TestFetchFeedItems_noCachePull(t *testing.T) {
 	}
 }
 
-func TestFetchFeedItems_cacheEmptyFallback(t *testing.T) {
+func TestFetchFeedItems_cacheEmptyReturnsEmptyPushRedis(t *testing.T) {
 	t.Parallel()
 	srv, err := miniredis.Run()
 	if err != nil {
@@ -46,25 +46,49 @@ func TestFetchFeedItems_cacheEmptyFallback(t *testing.T) {
 
 	ctx := context.Background()
 	pullHits := 0
-	want := []FeedItem{{PostID: 99, AuthorID: 3, Username: "x", Content: "db", CreatedAt: time.Unix(2, 0).UTC()}}
 	items, mode, err := fetchFeedItems(ctx, cache, 20, 7, func(c context.Context, userID, limit int) ([]FeedItem, error) {
 		pullHits++
-		if userID != 7 || limit != 20 {
-			t.Fatalf("pull args: userID=%d limit=%d", userID, limit)
-		}
-		return want, nil
+		return []FeedItem{{PostID: 99, AuthorID: 3, Username: "x", Content: "db", CreatedAt: time.Unix(2, 0).UTC()}}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pullHits != 1 {
-		t.Fatalf("want 1 DB pull, got %d", pullHits)
+	if pullHits != 0 {
+		t.Fatalf("push mode must not DB pull when Redis is present but empty, pulls=%d", pullHits)
 	}
-	if mode != "push-fallback" {
-		t.Fatalf("mode: want push-fallback, got %q", mode)
+	if mode != "push-redis" {
+		t.Fatalf("mode: want push-redis, got %q", mode)
 	}
-	if len(items) != 1 || items[0].PostID != 99 {
-		t.Fatalf("items: %+v", items)
+	if len(items) != 0 {
+		t.Fatalf("want empty feed, got %+v", items)
+	}
+}
+
+func TestFetchFeedItems_redisErrorPropagates(t *testing.T) {
+	t.Parallel()
+	srv, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rdb := redis.NewClient(&redis.Options{Addr: srv.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	cache := newCache(rdb, false)
+	srv.Close()
+
+	ctx := context.Background()
+	pullHits := 0
+	_, mode, err := fetchFeedItems(ctx, cache, 10, 1, func(c context.Context, userID, limit int) ([]FeedItem, error) {
+		pullHits++
+		return nil, nil
+	})
+	if err == nil {
+		t.Fatal("expected error when Redis is unavailable")
+	}
+	if pullHits != 0 {
+		t.Fatalf("pull must not run on Redis error, pulls=%d", pullHits)
+	}
+	if mode != "push-redis" {
+		t.Fatalf("mode: want push-redis, got %q", mode)
 	}
 }
 

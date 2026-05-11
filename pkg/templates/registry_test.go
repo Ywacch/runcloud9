@@ -194,6 +194,35 @@ func TestLoadgenDefaultRPSByTemplate(t *testing.T) {
 	}
 }
 
+func TestSocialFeedPull_NoRedisInTopologyOrPreset(t *testing.T) {
+	t.Parallel()
+	sfp := GetTemplate("social-feed-pull")
+	if sfp == nil {
+		t.Fatal("social-feed-pull missing")
+	}
+	if sfp.Components != 3 {
+		t.Fatalf("social-feed-pull components: want 3, got %d", sfp.Components)
+	}
+	for _, th := range sfp.Topology {
+		if th.Type == "cache" {
+			t.Fatalf("social-feed-pull topology must not include cache, got %+v", sfp.Topology)
+		}
+	}
+	if sfp.Preset == nil {
+		t.Fatal("social-feed-pull preset missing")
+	}
+	for _, n := range sfp.Preset.Nodes {
+		if n.Type == "cache" {
+			t.Fatalf("social-feed-pull preset must not include cache node, got %+v", n)
+		}
+	}
+	for _, e := range sfp.Preset.Edges {
+		if e.TargetID == "cache-1" || e.SourceID == "cache-1" || strings.Contains(e.ID, "cache") {
+			t.Fatalf("social-feed-pull preset must not include cache edges, got %+v", e)
+		}
+	}
+}
+
 func TestAppDatabaseModeByTemplate(t *testing.T) {
 	t.Parallel()
 

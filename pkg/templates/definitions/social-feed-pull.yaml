@@ -4,7 +4,7 @@ description: >-
   Fan-out on read: feeds are generated on demand by joining posts and follows.
   Simple architecture but reads get expensive as follower counts grow.
   Compare with Push variant to see the tradeoff.
-components: 4
+components: 3
 bottleneck: "JOIN query latency scaling with follower count"
 available: true
 premium: false
@@ -25,10 +25,8 @@ topology:
     position: [0, 0]
   - type: compute
     position: [2, 0]
-  - type: cache
-    position: [4, 0]
   - type: database
-    position: [6, 0]
+    position: [4, 0]
 preset:
   nodes:
     - id: lb-1
@@ -44,16 +42,9 @@ preset:
       config:
         replicas: 1
         instanceSize: small
-    - id: cache-1
-      type: cache
-      position: [3, 0.3, -1.2]
-      label: Redis
-      config:
-        strategy: cache-aside
-        evictionPolicy: allkeys-lru
     - id: db-1
       type: database
-      position: [3, 0.3, 1.2]
+      position: [3, 0.3, 0]
       label: PostgreSQL
       config:
         engine: postgresql
@@ -64,10 +55,6 @@ preset:
       sourceId: lb-1
       targetId: app-1
       protocol: http
-    - id: e-app-cache
-      sourceId: app-1
-      targetId: cache-1
-      protocol: tcp
     - id: e-app-db
       sourceId: app-1
       targetId: db-1
