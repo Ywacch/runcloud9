@@ -9,6 +9,9 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,10 +28,10 @@ var (
 		Name: "social_worker_processed_total",
 		Help: "Total posts successfully fanned out",
 	})
-	workerErrorsTotal = promauto.NewCounter(prometheus.CounterOpts{
+	workerErrorsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "social_worker_errors_total",
-		Help: "Total failed fan-out attempts",
-	})
+		Help: "Total failed fan-out attempts by bounded reason",
+	}, []string{"reason"})
 	workerProcessingDuration = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "social_worker_processing_duration_seconds",
 		Help:    "Time to fan out one post to all followers",
@@ -59,6 +62,19 @@ func envOrDefault(key, defaultVal string) string {
 	return defaultVal
 }
 
+func envIntOrDefault(key string, defaultVal int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return defaultVal
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		slog.Warn("invalid integer env; using default", "key", key, "value", raw, "default", defaultVal)
+		return defaultVal
+	}
+	return n
+}
+
 func requiredEnv(key, msg string) string {
 	v := os.Getenv(key)
 	if v == "" {
@@ -84,15 +100,38 @@ func openDB(ctx context.Context) (*pgxpool.Pool, error) {
 	return pgxpool.New(ctx, connURL.String())
 }
 
+func classifyFanoutError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "db "):
+		return "db"
+	case strings.Contains(msg, "redis") && strings.Contains(msg, "connection refused"):
+		return "redis_connection_refused"
+	case strings.Contains(msg, "redis") && strings.Contains(msg, "connect:"):
+		return "redis_connect"
+	case strings.Contains(msg, "redis") && strings.Contains(msg, "timeout"):
+		return "redis_timeout"
+	case strings.Contains(msg, "redis") && strings.Contains(msg, "i/o timeout"):
+		return "redis_timeout"
+	case strings.Contains(msg, "no rows"), strings.Contains(msg, "sql"), strings.Contains(msg, "postgres"):
+		return "db"
+	default:
+		return "unknown"
+	}
+}
+
 func fanoutPost(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, msg fanoutMessage) error {
 	var username string
 	if err := pool.QueryRow(ctx, `SELECT username FROM users WHERE id = $1`, msg.UserID).Scan(&username); err != nil {
-		return err
+		return fmt.Errorf("db user lookup: %w", err)
 	}
 
 	rows, err := pool.Query(ctx, `SELECT follower_id FROM follows WHERE following_id = $1`, msg.UserID)
 	if err != nil {
-		return err
+		return fmt.Errorf("db follower lookup: %w", err)
 	}
 	defer rows.Close()
 
@@ -100,12 +139,12 @@ func fanoutPost(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, msg 
 	for rows.Next() {
 		var followerID int
 		if err := rows.Scan(&followerID); err != nil {
-			return err
+			return fmt.Errorf("db follower scan: %w", err)
 		}
 		followers = append(followers, followerID)
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return fmt.Errorf("db follower rows: %w", err)
 	}
 
 	workerFanoutSize.Observe(float64(len(followers)))
@@ -126,8 +165,33 @@ func fanoutPost(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, msg 
 		})
 		pipe.ZRemRangeByRank(ctx, key, 0, -1001)
 	}
-	_, err = pipe.Exec(ctx)
-	return err
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("redis timeline pipeline: %w", err)
+	}
+	return nil
+}
+
+func processDelivery(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, d amqp.Delivery) uint64 {
+	start := time.Now()
+	defer func() {
+		workerProcessingDuration.Observe(time.Since(start).Seconds())
+	}()
+
+	var msg fanoutMessage
+	if err := json.Unmarshal(d.Body, &msg); err != nil {
+		workerErrorsTotal.WithLabelValues("decode").Inc()
+		slog.Error("invalid fanout message", "error", err)
+		return d.DeliveryTag
+	}
+
+	if err := fanoutPost(ctx, pool, rdb, msg); err != nil {
+		reason := classifyFanoutError(err)
+		workerErrorsTotal.WithLabelValues(reason).Inc()
+		slog.Error("fanout failed", "post_id", msg.PostID, "author_id", msg.UserID, "reason", reason, "error", err)
+	} else {
+		workerProcessedTotal.Inc()
+	}
+	return d.DeliveryTag
 }
 
 func healthHandler(pool *pgxpool.Pool, conn *amqp.Connection, rdb *redis.Client) http.HandlerFunc {
@@ -295,7 +359,9 @@ func main() {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	if err := ch.Qos(10, 0, false); err != nil {
+	prefetch := envIntOrDefault("WORKER_PREFETCH", 10)
+	concurrency := envIntOrDefault("WORKER_CONCURRENCY", 1)
+	if err := ch.Qos(prefetch, 0, false); err != nil {
 		slog.Error("failed to set QoS prefetch", "error", err)
 		os.Exit(1)
 	}
@@ -307,35 +373,57 @@ func main() {
 	}
 	slog.Info("mq consumer registered", "queue", "fanout")
 
-	slog.Info("fanout-worker started", "queue", "fanout")
-	for {
-		select {
-		case <-ctx.Done():
-			slog.Info("fanout-worker shutting down")
-			return
-		case d, ok := <-msgs:
-			if !ok {
-				slog.Error("mq consumer channel closed")
-				return
-			}
-			start := time.Now()
-			var msg fanoutMessage
-			if err := json.Unmarshal(d.Body, &msg); err != nil {
-				workerErrorsTotal.Inc()
-				slog.Error("invalid fanout message", "error", err)
-				_ = d.Ack(false)
-				workerProcessingDuration.Observe(time.Since(start).Seconds())
-				continue
-			}
+	slog.Info("fanout-worker started", "queue", "fanout", "prefetch", prefetch, "concurrency", concurrency)
 
-			if err := fanoutPost(ctx, pool, rdb, msg); err != nil {
-				workerErrorsTotal.Inc()
-				slog.Error("fanout failed", "post_id", msg.PostID, "author_id", msg.UserID, "error", err)
-			} else {
-				workerProcessedTotal.Inc()
+	ackCh := make(chan uint64, prefetch+concurrency)
+	ackDone := make(chan struct{})
+	go func() {
+		defer close(ackDone)
+		for tag := range ackCh {
+			if err := ch.Ack(tag, false); err != nil {
+				slog.Warn("mq ack failed", "delivery_tag", tag, "error", err)
 			}
-			workerProcessingDuration.Observe(time.Since(start).Seconds())
-			_ = d.Ack(false)
 		}
+	}()
+
+	var wg sync.WaitGroup
+	for workerID := 1; workerID <= concurrency; workerID++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			slog.Info("fanout worker goroutine started", "worker_id", id)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case d, ok := <-msgs:
+					if !ok {
+						return
+					}
+					tag := processDelivery(ctx, pool, rdb, d)
+					select {
+					case ackCh <- tag:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}(workerID)
 	}
+
+	workersDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(workersDone)
+	}()
+
+	select {
+	case <-ctx.Done():
+		slog.Info("fanout-worker shutting down")
+	case <-workersDone:
+		slog.Error("mq consumer channel closed")
+	}
+	wg.Wait()
+	close(ackCh)
+	<-ackDone
 }

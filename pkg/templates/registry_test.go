@@ -284,3 +284,25 @@ func TestSocialFeedPreset_UsesCanonicalWorkerToMQEdge(t *testing.T) {
 		t.Fatal("social-feed preset must not include legacy mq->worker edge")
 	}
 }
+
+func TestSocialFeedPreset_LabelsRedisAsTimelineStore(t *testing.T) {
+	t.Parallel()
+
+	sf := GetTemplate("social-feed")
+	if sf == nil || sf.Preset == nil {
+		t.Fatalf("social-feed preset missing: %+v", sf)
+	}
+	for _, n := range sf.Preset.Nodes {
+		if n.ID != "cache-1" {
+			continue
+		}
+		if got := n.Config["strategy"]; got != "timeline-store" {
+			t.Fatalf("social-feed cache strategy: want timeline-store, got %v", got)
+		}
+		if got := n.Config["cacheStrategy"]; got != "timeline-store" {
+			t.Fatalf("social-feed cacheStrategy: want timeline-store, got %v", got)
+		}
+		return
+	}
+	t.Fatal("social-feed preset missing cache-1")
+}

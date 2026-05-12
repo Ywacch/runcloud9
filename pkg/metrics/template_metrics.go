@@ -27,10 +27,14 @@ func (c *MetricsCollector) collectTemplateMetrics(ctx context.Context, nsSel, te
 		put("feed.push_p95", fmt.Sprintf(`histogram_quantile(0.95, sum(rate(social_feed_latency_seconds_bucket{%s,mode=~"push.*"}[30s])) by (le))`, nsSel))
 		put("worker.processed", fmt.Sprintf(`sum(social_worker_processed_total{%s})`, nsSel))
 		put("worker.errors", fmt.Sprintf(`sum(social_worker_errors_total{%s})`, nsSel))
+		put("worker.errors.redis", fmt.Sprintf(`sum(rate(social_worker_errors_total{%s,reason=~"redis.*"}[30s]))`, nsSel))
 		put("worker.writes.redis", fmt.Sprintf(`sum(social_worker_writes_total{%s,store="redis"})`, nsSel))
+		put("worker.redis_write_rate", fmt.Sprintf(`sum(rate(social_worker_writes_total{%s,store="redis"}[30s]))`, nsSel))
+		put("worker.consume_rate", fmt.Sprintf(`sum(rate(social_worker_processed_total{%s}[30s]))`, nsSel))
 		put("worker.fanout_size_p99", fmt.Sprintf(`histogram_quantile(0.99, sum(rate(social_worker_fanout_size_bucket{%s}[30s])) by (le))`, nsSel))
 		put("worker.latency_p99", fmt.Sprintf(`histogram_quantile(0.99, sum(rate(social_worker_processing_duration_seconds_bucket{%s}[30s])) by (le))`, nsSel))
 		put("mq.publish_total", fmt.Sprintf(`sum(social_mq_publish_total{%s})`, nsSel))
+		put("mq.produce_rate", fmt.Sprintf(`sum(rate(social_mq_publish_total{%s}[30s]))`, nsSel))
 		put("mq.publish_errors", fmt.Sprintf(`sum(social_mq_publish_errors_total{%s})`, nsSel))
 
 	case "ecommerce":
@@ -52,4 +56,33 @@ func (c *MetricsCollector) collectTemplateMetrics(ctx context.Context, nsSel, te
 	}
 
 	return out
+}
+
+func (c *MetricsCollector) augmentTemplateMetrics(dm *DeploymentMetrics, template string) {
+	if dm == nil || template != "social-feed" {
+		return
+	}
+	if dm.TemplateMetrics == nil {
+		dm.TemplateMetrics = make(map[string]float64)
+	}
+	if mq, ok := dm.Components["mq"]; ok {
+		dm.TemplateMetrics["mq.queue_depth"] = mq.QueueDepth
+		dm.TemplateMetrics["mq.consume_rate"] = mq.ConsumeRate
+		dm.TemplateMetrics["mq.saturation_ratio"] = mq.MQSaturationRatio
+		dm.TemplateMetrics["worker.backlog"] = mq.QueueDepth
+		if mq.ProduceRate > 0 {
+			dm.TemplateMetrics["mq.produce_rate"] = mq.ProduceRate
+		}
+	}
+	if worker, ok := dm.Components["worker"]; ok {
+		if worker.RequestRate > 0 {
+			dm.TemplateMetrics["worker.consume_rate"] = worker.RequestRate
+		}
+	}
+	if cache, ok := dm.Components["cache"]; ok {
+		dm.TemplateMetrics["redis.ops_per_sec"] = cache.RedisOpsPerSec
+		dm.TemplateMetrics["redis.connected_clients"] = cache.ActiveConnections
+		dm.TemplateMetrics["redis.rejected_connections_rate"] = cache.RedisRejectedRate
+		dm.TemplateMetrics["redis.avg_latency"] = cache.AvgLatency
+	}
 }

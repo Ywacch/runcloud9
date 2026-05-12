@@ -408,6 +408,42 @@ func (c *MetricsCollector) lbMetadataFromCluster(ctx context.Context, namespace 
 // nginxWorkerConnections matches worker_connections in pkg/deployer/k8s.go (LB nginx template).
 const nginxWorkerConnections = 1024
 
+func redisCommandPattern(template string) string {
+	switch template {
+	case "social-feed":
+		return "^(zadd|zrevrange|zremrangebyrank)$"
+	default:
+		return "^(get|set|del|mget|mset)$"
+	}
+}
+
+func redisLatencyCommandPattern(template string) string {
+	switch template {
+	case "social-feed":
+		return "^(zadd|zrevrange|zremrangebyrank)$"
+	default:
+		return "^(get|set)$"
+	}
+}
+
+func annotateCacheForTemplate(cm *ComponentMetrics, template string) {
+	if cm == nil {
+		return
+	}
+	switch template {
+	case "social-feed":
+		cm.CacheStrategy = "timeline-store"
+		cm.CacheMetricMode = "sorted-set timelines"
+		cm.CacheReadOperation = "ZREVRANGE"
+		cm.CacheWriteOperation = "ZADD"
+	case "url-shortener", "ecommerce":
+		cm.CacheStrategy = "cache-aside"
+		cm.CacheMetricMode = "keyspace hits/misses"
+		cm.CacheReadOperation = "GET"
+		cm.CacheWriteOperation = "SET"
+	}
+}
+
 // Collect queries all metrics for a deployment namespace and returns a snapshot.
 // template is the deployment template id (e.g. social-feed); empty skips template-specific PromQL.
 func (c *MetricsCollector) Collect(ctx context.Context, namespace, template string) (*DeploymentMetrics, error) {
@@ -617,10 +653,12 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmCache.CacheMisses = cmApp.CacheMisses
 	cmCache.CacheHitsLast9m = cmApp.CacheHitsLast9m
 	cmCache.CacheMissesLast9m = cmApp.CacheMissesLast9m
+	redisCmdPattern := redisCommandPattern(template)
 	redisOps, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(redis_commands_total{namespace=%q,cmd=~"^(get|set|del|mget|mset)$"}[30s]))`,
-		ns,
+		`sum(rate(redis_commands_total{namespace=%q,cmd=~%q}[30s]))`,
+		ns, redisCmdPattern,
 	))
+	cmCache.RedisOpsPerSec = redisOps
 	if redisOps > 0 {
 		cmCache.RequestRate = redisOps
 	} else {
@@ -645,10 +683,13 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	rm, _ := c.query(ctx, fmt.Sprintf(`sum(rate(redis_keyspace_misses_total{namespace=%q}[30s]))`, ns))
 	cmCache.RedisKeyspaceHits = rh
 	cmCache.RedisKeyspaceMisses = rm
+	rejected, _ := c.query(ctx, fmt.Sprintf(`sum(rate(redis_rejected_connections_total{namespace=%q}[30s]))`, ns))
+	cmCache.RedisRejectedRate = rejected
 	// Redis latency percentiles from histogram buckets (microseconds -> seconds).
+	redisLatCmdPattern := redisLatencyCommandPattern(template)
 	redisLatBucket := fmt.Sprintf(
-		`sum(rate(redis_commands_latencies_usec_bucket{namespace=%q,cmd=~"^(get|set)$"}[30s])) by (le)`,
-		ns,
+		`sum(rate(redis_commands_latencies_usec_bucket{namespace=%q,cmd=~%q}[30s])) by (le)`,
+		ns, redisLatCmdPattern,
 	)
 	redisP50usec, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.50, %s)`, redisLatBucket))
 	redisP95usec, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.95, %s)`, redisLatBucket))
@@ -660,16 +701,16 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	}
 
 	// Average latency fallback from duration/count.
-	redisGetDur, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(redis_commands_duration_seconds_total{namespace=%q,cmd="get"}[30s]))`,
-		ns,
+	redisCmdDur, _ := c.query(ctx, fmt.Sprintf(
+		`sum(rate(redis_commands_duration_seconds_total{namespace=%q,cmd=~%q}[30s]))`,
+		ns, redisLatCmdPattern,
 	))
-	redisGetCount, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(redis_commands_total{namespace=%q,cmd="get"}[30s]))`,
-		ns,
+	redisCmdCount, _ := c.query(ctx, fmt.Sprintf(
+		`sum(rate(redis_commands_total{namespace=%q,cmd=~%q}[30s]))`,
+		ns, redisLatCmdPattern,
 	))
-	if redisGetCount > 0 {
-		cmCache.AvgLatency = redisGetDur / redisGetCount
+	if redisCmdCount > 0 {
+		cmCache.AvgLatency = redisCmdDur / redisCmdCount
 	}
 	c.debugCompare("cache", "p99", cmCache.P99Latency, cmCache.AvgLatency, "histogram_quantile(redis_latencies_usec_bucket)", "duration/count avg")
 
@@ -681,6 +722,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		}
 	}
 
+	annotateCacheForTemplate(&cmCache, template)
 	dm.Components["cache"] = cmCache
 
 	cmMQ := ComponentMetrics{Component: "mq"}
@@ -783,6 +825,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	dm.Components["lb"] = cmLB
 
 	dm.TemplateMetrics = c.collectTemplateMetrics(ctx, nsSel, template)
+	c.augmentTemplateMetrics(dm, template)
 
 	// Attach load generator stats to the metrics snapshot.
 	// UNDERSTAND: load stats are embedded in the existing metrics stream

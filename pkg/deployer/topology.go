@@ -114,11 +114,12 @@ func ValidateTopology(design DeploymentDesign) error {
 				continue
 			}
 			if target.Type == "db" {
+				strategy := configString(cacheNode.Config, "strategy", "cache-aside")
 				return fmt.Errorf(
-					"cache node %q uses cache-aside strategy but is connected to db %q — "+
-						"cache-aside Redis does not talk to the database; "+
+					"cache node %q uses non-proxy strategy %q but is connected to db %q — "+
+						"Non-proxy cache stores do not connect to the database directly; "+
 						"remove the cache -> db edge, or change strategy to write-through/read-through",
-					cacheNode.Name, target.Name,
+					cacheNode.Name, strategy, target.Name,
 				)
 			}
 		}
@@ -510,6 +511,13 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 			env["CACHE_TTL"] = configString(node.Config, "cacheTtlSeconds", "300")
 			env["WRITE_BEHIND_INTERVAL"] = configString(node.Config, "writeBehindIntervalSeconds", "30")
 		}
+	case "worker":
+		if prefetch := configString(node.Config, "workerPrefetch", ""); prefetch != "" {
+			env["WORKER_PREFETCH"] = prefetch
+		}
+		if concurrency := configString(node.Config, "workerConcurrency", ""); concurrency != "" {
+			env["WORKER_CONCURRENCY"] = concurrency
+		}
 	}
 
 	return env
@@ -541,6 +549,10 @@ func configString(config map[string]any, key, defaultVal string) string {
 	switch v := val.(type) {
 	case string:
 		return v
+	case int:
+		return strconv.Itoa(v)
+	case int64:
+		return strconv.FormatInt(v, 10)
 	case float64:
 		return strconv.FormatFloat(v, 'f', -1, 64)
 	case bool:
