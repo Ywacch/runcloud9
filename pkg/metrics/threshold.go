@@ -21,16 +21,16 @@ func NewThresholdDetector() *ThresholdDetector {
 }
 
 const (
-	ruleCacheHitLow      = "cache_hit_low"
-	ruleErrorRate        = "error_rate"
-	ruleDBLatency        = "db_latency"
-	ruleQueueDepth       = "queue_depth"
-	ruleDBConnPressure   = "db_conn_pressure"
-	ruleMQBackpressure   = "mq_backpressure"
+	ruleCacheHitLow    = "cache_hit_low"
+	ruleErrorRate      = "error_rate"
+	ruleDBLatency      = "db_latency"
+	ruleQueueDepth     = "queue_depth"
+	ruleDBConnPressure = "db_conn_pressure"
+	ruleMQBackpressure = "mq_backpressure"
 )
 
 // Eval returns threshold events for conditions that just crossed into a bad state.
-func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics) []Event {
+func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics, topo TopologyFlags) []Event {
 	if t == nil || dm == nil || namespace == "" {
 		return nil
 	}
@@ -46,14 +46,17 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics) []Even
 	totalWindow := cache.CacheHitsLast9m + cache.CacheMissesLast9m
 	if totalWindow > 0 && hitRate < 30 {
 		if t.fire(namespace, ruleCacheHitLow) {
-			out = append(out, Event{
+			ev := Event{
 				Timestamp:   now,
 				Type:        "threshold",
 				Source:      "detector",
 				Component:   "cache",
 				Title:       "Low cache hit rate",
 				Description: "Rolling 9m cache hit rate dropped below 30%",
-			})
+			}
+			n := Narrate(ruleCacheHitLow, dm, topo)
+			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
+			out = append(out, ev)
 		}
 	} else {
 		t.clear(namespace, ruleCacheHitLow)
@@ -61,14 +64,17 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics) []Even
 
 	if app.ErrorRate > 1 {
 		if t.fire(namespace, ruleErrorRate) {
-			out = append(out, Event{
+			ev := Event{
 				Timestamp:   now,
 				Type:        "threshold",
 				Source:      "detector",
 				Component:   "app-server",
 				Title:       "Elevated HTTP error rate",
 				Description: "HTTP 5xx rate exceeds 1 req/s",
-			})
+			}
+			n := Narrate(ruleErrorRate, dm, topo)
+			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
+			out = append(out, ev)
 		}
 	} else {
 		t.clear(namespace, ruleErrorRate)
@@ -76,14 +82,17 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics) []Even
 
 	if db.DbQueryLatency > 0.5 {
 		if t.fire(namespace, ruleDBLatency) {
-			out = append(out, Event{
+			ev := Event{
 				Timestamp:   now,
 				Type:        "threshold",
 				Source:      "detector",
 				Component:   "db",
 				Title:       "High DB query latency",
 				Description: "Average DB query latency exceeds 500ms",
-			})
+			}
+			n := Narrate(ruleDBLatency, dm, topo)
+			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
+			out = append(out, ev)
 		}
 	} else {
 		t.clear(namespace, ruleDBLatency)
@@ -91,14 +100,17 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics) []Even
 
 	if mq.QueueDepth > 100 {
 		if t.fire(namespace, ruleQueueDepth) {
-			out = append(out, Event{
+			ev := Event{
 				Timestamp:   now,
 				Type:        "threshold",
 				Source:      "detector",
 				Component:   "mq",
 				Title:       "Queue depth high",
 				Description: "RabbitMQ queue depth exceeds 100 messages",
-			})
+			}
+			n := Narrate(ruleQueueDepth, dm, topo)
+			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
+			out = append(out, ev)
 		}
 	} else {
 		t.clear(namespace, ruleQueueDepth)
@@ -106,14 +118,17 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics) []Even
 
 	if db.MaxConnections > 0 && db.DbActiveConnections/db.MaxConnections > 0.8 {
 		if t.fire(namespace, ruleDBConnPressure) {
-			out = append(out, Event{
+			ev := Event{
 				Timestamp:   now,
 				Type:        "threshold",
 				Source:      "detector",
 				Component:   "db",
 				Title:       "Database connection pressure",
 				Description: "Active connections exceed 80% of max_connections",
-			})
+			}
+			n := Narrate(ruleDBConnPressure, dm, topo)
+			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
+			out = append(out, ev)
 		}
 	} else {
 		t.clear(namespace, ruleDBConnPressure)
@@ -121,14 +136,17 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics) []Even
 
 	if mq.MQSaturationRatio > 2 && mq.QueueDepth > 50 {
 		if t.fire(namespace, ruleMQBackpressure) {
-			out = append(out, Event{
+			ev := Event{
 				Timestamp:   now,
 				Type:        "threshold",
 				Source:      "detector",
 				Component:   "mq",
 				Title:       "Producer outpacing consumer",
 				Description: "MQ saturation ratio > 2 with queue depth > 50",
-			})
+			}
+			n := Narrate(ruleMQBackpressure, dm, topo)
+			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
+			out = append(out, ev)
 		}
 	} else {
 		t.clear(namespace, ruleMQBackpressure)
