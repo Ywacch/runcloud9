@@ -839,11 +839,12 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	if c.eventBus != nil {
 		ev = append(ev, c.eventBus.Drain(namespace)...)
 	}
+	topo := TopologyFlagsFromDeployment(dm, template)
 	if c.thresholds != nil {
-		ev = append(ev, c.thresholds.Eval(namespace, dm)...)
+		ev = append(ev, c.thresholds.Eval(namespace, dm, topo)...)
 	}
 	if c.cascade != nil {
-		ev = append(ev, c.cascade.Eval(namespace, dm)...)
+		ev = append(ev, c.cascade.Eval(namespace, dm, topo)...)
 	}
 	dm.Events = ev
 

@@ -64,15 +64,15 @@ func NewCascadeDetector() *CascadeDetector {
 }
 
 const (
-	cascadeRuleCacheDB       = "cascade_cache_db"
-	cascadeRuleQueueWorker   = "cascade_queue_worker"
-	cascadeRuleDBPoolErrors  = "cascade_dbpool_errors"
-	cascadeRuleLatencyMiss   = "cascade_latency_miss"
+	cascadeRuleCacheDB        = "cascade_cache_db"
+	cascadeRuleQueueWorker    = "cascade_queue_worker"
+	cascadeRuleDBPoolErrors   = "cascade_dbpool_errors"
+	cascadeRuleLatencyMiss    = "cascade_latency_miss"
 	cascadeRuleMQBackpressure = "cascade_mq_backpressure"
 )
 
 // Eval compares the latest snapshot to the previous tick and returns new cascade events.
-func (cd *CascadeDetector) Eval(namespace string, dm *DeploymentMetrics) []Event {
+func (cd *CascadeDetector) Eval(namespace string, dm *DeploymentMetrics, topo TopologyFlags) []Event {
 	if cd == nil || namespace == "" || dm == nil {
 		return nil
 	}
@@ -100,14 +100,17 @@ func (cd *CascadeDetector) Eval(namespace string, dm *DeploymentMetrics) []Event
 	if hitDrop && dbUp {
 		if cd.fire(namespace, cascadeRuleCacheDB) {
 			slog.Info("cascade detected", "namespace", namespace, "rule", cascadeRuleCacheDB)
-			out = append(out, Event{
+			ev := Event{
 				Timestamp:   now,
 				Type:        "cascade",
 				Source:      "detector",
 				Component:   "cache",
 				Title:       "Cache miss spike increasing DB load",
 				Description: "Cache hit rate fell >20% while DB query rate rose >30% vs prior tick",
-			})
+			}
+			n := Narrate(cascadeRuleCacheDB, dm, topo)
+			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
+			out = append(out, ev)
 		}
 	} else {
 		cd.clearRule(namespace, cascadeRuleCacheDB)
@@ -119,14 +122,17 @@ func (cd *CascadeDetector) Eval(namespace string, dm *DeploymentMetrics) []Event
 	if qUp && wUp {
 		if cd.fire(namespace, cascadeRuleQueueWorker) {
 			slog.Info("cascade detected", "namespace", namespace, "rule", cascadeRuleQueueWorker)
-			out = append(out, Event{
+			ev := Event{
 				Timestamp:   now,
 				Type:        "cascade",
 				Source:      "detector",
 				Component:   "mq",
 				Title:       "Queue backlog driving worker CPU",
 				Description: "Queue depth rose >50% while worker CPU rose >20% vs prior tick",
-			})
+			}
+			n := Narrate(cascadeRuleQueueWorker, dm, topo)
+			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
+			out = append(out, ev)
 		}
 	} else {
 		cd.clearRule(namespace, cascadeRuleQueueWorker)
@@ -137,14 +143,17 @@ func (cd *CascadeDetector) Eval(namespace string, dm *DeploymentMetrics) []Event
 	if cur.DBConnPct > 80 && errDouble {
 		if cd.fire(namespace, cascadeRuleDBPoolErrors) {
 			slog.Info("cascade detected", "namespace", namespace, "rule", cascadeRuleDBPoolErrors)
-			out = append(out, Event{
+			ev := Event{
 				Timestamp:   now,
 				Type:        "cascade",
 				Source:      "detector",
 				Component:   "db",
 				Title:       "Connection pool stress and rising errors",
 				Description: "DB connections >80% of max while HTTP error rate more than doubled vs prior tick",
-			})
+			}
+			n := Narrate(cascadeRuleDBPoolErrors, dm, topo)
+			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
+			out = append(out, ev)
 		}
 	} else {
 		cd.clearRule(namespace, cascadeRuleDBPoolErrors)
@@ -156,14 +165,17 @@ func (cd *CascadeDetector) Eval(namespace string, dm *DeploymentMetrics) []Event
 	if p99Up && missUp {
 		if cd.fire(namespace, cascadeRuleLatencyMiss) {
 			slog.Info("cascade detected", "namespace", namespace, "rule", cascadeRuleLatencyMiss)
-			out = append(out, Event{
+			ev := Event{
 				Timestamp:   now,
 				Type:        "cascade",
 				Source:      "detector",
 				Component:   "app-server",
 				Title:       "Cold cache degrading latency",
 				Description: "p99 latency more than tripled while cache miss share rose >50% vs prior tick",
-			})
+			}
+			n := Narrate(cascadeRuleLatencyMiss, dm, topo)
+			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
+			out = append(out, ev)
 		}
 	} else {
 		cd.clearRule(namespace, cascadeRuleLatencyMiss)
@@ -173,14 +185,17 @@ func (cd *CascadeDetector) Eval(namespace string, dm *DeploymentMetrics) []Event
 	if cur.MQSat > 2 && cur.QueueDepth > 50 {
 		if cd.fire(namespace, cascadeRuleMQBackpressure) {
 			slog.Info("cascade detected", "namespace", namespace, "rule", cascadeRuleMQBackpressure)
-			out = append(out, Event{
+			ev := Event{
 				Timestamp:   now,
 				Type:        "cascade",
 				Source:      "detector",
 				Component:   "mq",
 				Title:       "Producer outpacing consumer",
 				Description: "MQ saturation ratio >2 with queue depth >50",
-			})
+			}
+			n := Narrate(cascadeRuleMQBackpressure, dm, topo)
+			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
+			out = append(out, ev)
 		}
 	} else {
 		cd.clearRule(namespace, cascadeRuleMQBackpressure)

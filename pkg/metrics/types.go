@@ -25,6 +25,10 @@ type Event struct {
 	Component   string    `json:"component,omitempty"`
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
+	// Storytelling: cause→effect narrative and topology-only suggestions for the UI.
+	Narrative  string   `json:"narrative,omitempty"`
+	Suggestion string   `json:"suggestion,omitempty"`
+	Related    []string `json:"related,omitempty"`
 }
 
 // ComparisonMetrics is reserved for side-by-side deployment streams (future).
