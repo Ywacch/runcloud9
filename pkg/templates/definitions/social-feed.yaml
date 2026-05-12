@@ -62,12 +62,15 @@ preset:
       config:
         replicas: 1
         instanceSize: small
+        workerPrefetch: 10
+        workerConcurrency: 1
     - id: cache-1
       type: cache
       position: [2, 0.3, 1.4]
       label: Redis
       config:
-        strategy: cache-aside
+        strategy: timeline-store
+        cacheStrategy: timeline-store
         evictionPolicy: allkeys-lru
     - id: db-1
       type: database

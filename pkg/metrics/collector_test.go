@@ -367,6 +367,50 @@ func TestCollect_SetsLBConnectionLimit(t *testing.T) {
 	}
 }
 
+func TestCollect_SocialFeedUsesSortedSetRedisMetrics(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		mu.Lock()
+		queries = append(queries, q)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "redis_commands_total") && strings.Contains(q, "zadd|zrevrange|zremrangebyrank"):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("42"))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	dm, err := c.Collect(context.Background(), "ns-social", "social-feed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := dm.Components["cache"]
+	if cache.CacheStrategy != "timeline-store" {
+		t.Fatalf("CacheStrategy: want timeline-store, got %q", cache.CacheStrategy)
+	}
+	if cache.CacheReadOperation != "ZREVRANGE" || cache.CacheWriteOperation != "ZADD" {
+		t.Fatalf("cache operations: read=%q write=%q", cache.CacheReadOperation, cache.CacheWriteOperation)
+	}
+	if cache.RedisOpsPerSec != 42 || cache.RequestRate != 42 {
+		t.Fatalf("redis rates: RedisOpsPerSec=%v RequestRate=%v", cache.RedisOpsPerSec, cache.RequestRate)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, q := range queries {
+		if strings.Contains(q, "redis_commands_total") && strings.Contains(q, "get|set|del") {
+			t.Fatalf("social-feed Redis command query must not use GET/SET cache-aside pattern: %s", q)
+		}
+	}
+}
+
 func TestQueryCPUPair_PromQLFilters(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex

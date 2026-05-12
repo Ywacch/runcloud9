@@ -468,7 +468,7 @@ func TestValidateTopology_CacheAsideWithCacheToDBForbidden(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
-	if want := "cache-aside Redis does not talk to the database"; !strings.Contains(err.Error(), want) {
+	if want := "Non-proxy cache stores do not connect to the database directly"; !strings.Contains(err.Error(), want) {
 		t.Fatalf("expected error to contain %q, got %q", want, err.Error())
 	}
 }
@@ -691,6 +691,30 @@ func TestDisplayCacheStrategyForApp_FallbackCacheStrategyKey(t *testing.T) {
 	}
 	if got := DisplayCacheStrategyForApp("a", design); got != "write-around" {
 		t.Fatalf("want write-around from cacheStrategy, got %q", got)
+	}
+}
+
+func TestDeriveEnvVars_WorkerTuningKnobs(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{
+				ID:   "w",
+				Type: "worker",
+				Name: "Fan-out Worker",
+				Config: map[string]any{
+					"workerPrefetch":    25,
+					"workerConcurrency": 4,
+				},
+			},
+		},
+	}
+
+	env := DeriveEnvVars(design.Nodes[0], design)
+	if env["WORKER_PREFETCH"] != "25" {
+		t.Fatalf("WORKER_PREFETCH: want 25, got %q", env["WORKER_PREFETCH"])
+	}
+	if env["WORKER_CONCURRENCY"] != "4" {
+		t.Fatalf("WORKER_CONCURRENCY: want 4, got %q", env["WORKER_CONCURRENCY"])
 	}
 }
 

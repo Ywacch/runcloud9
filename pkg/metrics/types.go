@@ -47,9 +47,9 @@ type ComponentMetrics struct {
 	P95Latency    float64 `json:"p95Latency"` // seconds
 	P99Latency    float64 `json:"p99Latency"` // seconds, 0 if not applicable
 	// AvgLatency is used for components that don't expose histogram buckets (e.g. Redis commands).
-	AvgLatency float64 `json:"avgLatency,omitempty"` // seconds
-	CacheHits     float64 `json:"cacheHits"`   // hits/sec, 0 if not applicable
-	CacheMisses   float64 `json:"cacheMisses"` // misses/sec, 0 if not applicable
+	AvgLatency  float64 `json:"avgLatency,omitempty"` // seconds
+	CacheHits   float64 `json:"cacheHits"`            // hits/sec, 0 if not applicable
+	CacheMisses float64 `json:"cacheMisses"`          // misses/sec, 0 if not applicable
 	// CacheHitsLast9m / CacheMissesLast9m are Prometheus increase(...[9m]) sums (estimated counts in window).
 	CacheHitsLast9m   float64 `json:"cacheHitsLast9m"`
 	CacheMissesLast9m float64 `json:"cacheMissesLast9m"`
@@ -64,6 +64,12 @@ type ComponentMetrics struct {
 	// Redis exporter keyspace rates (supplement app-reported cache hit/miss).
 	RedisKeyspaceHits   float64 `json:"redisKeyspaceHits,omitempty"`
 	RedisKeyspaceMisses float64 `json:"redisKeyspaceMisses,omitempty"`
+	RedisOpsPerSec      float64 `json:"redisOpsPerSec,omitempty"`
+	RedisRejectedRate   float64 `json:"redisRejectedRate,omitempty"`
+	CacheStrategy       string  `json:"cacheStrategy,omitempty"`
+	CacheMetricMode     string  `json:"cacheMetricMode,omitempty"`
+	CacheReadOperation  string  `json:"cacheReadOperation,omitempty"`
+	CacheWriteOperation string  `json:"cacheWriteOperation,omitempty"`
 	// kube_pod_container_resource_limits / redis maxmemory (capacity denominator for UI %).
 	CPULimit    float64 `json:"cpuLimit,omitempty"`
 	MemoryLimit int64   `json:"memoryLimit,omitempty"`
@@ -84,7 +90,7 @@ type ComponentMetrics struct {
 	PerBackendRPS map[string]float64 `json:"perBackendRps,omitempty"`
 	// Capacity / utilization (component-specific; omit when unknown or N/A).
 	LBConnectionLimit float64 `json:"lbConnectionLimit,omitempty"` // nginx worker_connections (see deployer k8s LB template)
-	RedisMaxClients   float64 `json:"redisMaxClients,omitempty"`     // from redis_exporter, if scraped
+	RedisMaxClients   float64 `json:"redisMaxClients,omitempty"`   // from redis_exporter, if scraped
 	MQMemoryUsed      float64 `json:"mqMemoryUsed,omitempty"`      // RabbitMQ management /api/nodes
 	MQMemoryLimit     float64 `json:"mqMemoryLimit,omitempty"`
 	MQSaturationRatio float64 `json:"mqSaturationRatio,omitempty"` // produce/consume; >1 means consumer falling behind
