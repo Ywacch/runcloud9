@@ -59,3 +59,37 @@ preset:
       sourceId: app-1
       targetId: db-1
       protocol: tcp
+
+storytelling:
+  roles:
+    app-server:
+      base: "Handles feed reads and post creation"
+      variants:
+        - when: { topology: "!hasCache" }
+          label: "Pull mode — every feed read is a DB JOIN"
+    db:
+      base: "Source of truth — users, posts, follows graph"
+    lb:
+      base: "Distributes requests across app-server instances"
+  journeys:
+    - id: feed-read
+      method: GET
+      path: "/feed/{userId}"
+      label: "Feed reads"
+      trafficPercent: 100
+      steps:
+        - component: lb
+          action: "Routes to app-server."
+          requires: [lb]
+        - component: app-server
+          action: "Runs fan-out-on-read query per request."
+          metricsKey: p99Latency
+        - component: db
+          action: "JOIN posts × follows × users for the timeline."
+          requires: [db]
+      explanation: >-
+        Pull mode: every feed read hits Postgres with a multi-table JOIN.
+  narrativeContext:
+    db_latency:
+      cause: "Every feed read performs a 3-table JOIN as follower counts grow."
+      suggestion: "Compare with the push template: add cache + MQ + worker to precompute timelines in Redis."

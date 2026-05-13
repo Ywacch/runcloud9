@@ -3,6 +3,8 @@ package metrics
 import (
 	"fmt"
 	"strings"
+
+	"github.com/ywacch/cloud9/pkg/templates"
 )
 
 // NarrativeOutput holds storytelling prose for a single detector rule.
@@ -14,36 +16,62 @@ type NarrativeOutput struct {
 
 // Narrate generates cause→effect narrative and topology-only canvas suggestions for a rule id.
 // rule must match constants from threshold and cascade detectors (e.g. ruleCacheHitLow, cascadeRuleCacheDB).
-func Narrate(rule string, dm *DeploymentMetrics, topo TopologyFlags) NarrativeOutput {
+// tmpl may be nil; when set, template YAML narrativeContext overlays generic metric prose.
+func Narrate(rule string, dm *DeploymentMetrics, topo TopologyFlags, tmpl *templates.TemplateSpec) NarrativeOutput {
 	if dm == nil {
 		return NarrativeOutput{}
 	}
 	switch rule {
 	case ruleCacheHitLow:
-		return narrateCacheHitLow(dm, topo)
+		return applyNarrativeFromTemplate(rule, dm, tmpl, narrateCacheHitLow(dm, topo))
 	case ruleErrorRate:
-		return narrateErrorRate(dm, topo)
+		return applyNarrativeFromTemplate(rule, dm, tmpl, narrateErrorRate(dm, topo))
 	case ruleDBLatency:
-		return narrateDBLatency(dm, topo)
+		return applyNarrativeFromTemplate(rule, dm, tmpl, narrateDBLatency(dm, topo))
 	case ruleQueueDepth:
-		return narrateQueueDepth(dm, topo)
+		return applyNarrativeFromTemplate(rule, dm, tmpl, narrateQueueDepth(dm, topo))
 	case ruleDBConnPressure:
-		return narrateDBConnPressure(dm, topo)
+		return applyNarrativeFromTemplate(rule, dm, tmpl, narrateDBConnPressure(dm, topo))
 	case ruleMQBackpressure:
-		return narrateMQBackpressure(dm, topo)
+		return applyNarrativeFromTemplate(rule, dm, tmpl, narrateMQBackpressure(dm, topo))
 	case cascadeRuleCacheDB:
-		return narrateCascadeCacheDB(dm, topo)
+		return applyNarrativeFromTemplate(rule, dm, tmpl, narrateCascadeCacheDB(dm, topo))
 	case cascadeRuleQueueWorker:
-		return narrateCascadeQueueWorker(dm, topo)
+		return applyNarrativeFromTemplate(rule, dm, tmpl, narrateCascadeQueueWorker(dm, topo))
 	case cascadeRuleDBPoolErrors:
-		return narrateCascadeDBPoolErrors(dm, topo)
+		return applyNarrativeFromTemplate(rule, dm, tmpl, narrateCascadeDBPoolErrors(dm, topo))
 	case cascadeRuleLatencyMiss:
-		return narrateCascadeLatencyMiss(dm, topo)
+		return applyNarrativeFromTemplate(rule, dm, tmpl, narrateCascadeLatencyMiss(dm, topo))
 	case cascadeRuleMQBackpressure:
-		return narrateCascadeMQBackpressure(dm, topo)
+		return applyNarrativeFromTemplate(rule, dm, tmpl, narrateCascadeMQBackpressure(dm, topo))
 	default:
 		return NarrativeOutput{}
 	}
+}
+
+func applyNarrativeFromTemplate(rule string, dm *DeploymentMetrics, tmpl *templates.TemplateSpec, base NarrativeOutput) NarrativeOutput {
+	if tmpl == nil || tmpl.Storytelling == nil || tmpl.Storytelling.NarrativeContext == nil {
+		return base
+	}
+	ctx, ok := tmpl.Storytelling.NarrativeContext[rule]
+	if !ok {
+		return base
+	}
+	out := base
+	if ctx.Cause != "" {
+		extra := strings.TrimSpace(interpolateNarrativePlaceholders(ctx.Cause, dm))
+		if extra != "" {
+			if out.Narrative != "" {
+				out.Narrative = strings.TrimSpace(out.Narrative + " " + extra)
+			} else {
+				out.Narrative = extra
+			}
+		}
+	}
+	if ctx.Suggestion != "" {
+		out.Suggestion = strings.TrimSpace(interpolateNarrativePlaceholders(ctx.Suggestion, dm))
+	}
+	return out
 }
 
 func tmplFloat(dm *DeploymentMetrics, key string) float64 {
@@ -60,17 +88,10 @@ func narrateCacheHitLow(dm *DeploymentMetrics, topo TopologyFlags) NarrativeOutp
 	total := cache.CacheHitsLast9m + cache.CacheMissesLast9m
 
 	var b strings.Builder
-	if topo.CacheStrategy == "timeline-store" || strings.EqualFold(topo.Template, "social-feed") {
-		fmt.Fprintf(&b,
-			"The rolling ~9 minute window shows a low hit share (%.1f%%) for timeline-style Redis traffic. "+
-				"Sorted-set timelines are not classic cache-aside GET/SET; a low ratio can mean cold timelines, eviction under memory pressure, or traffic patterns that rarely reuse keys. ",
-			hr)
-	} else {
-		fmt.Fprintf(&b,
-			"The rolling ~9 minute cache hit rate is %.1f%% based on hit/miss counters in Prometheus. "+
-				"When this drops, more read paths miss Redis and fall through to the database. ",
-			hr)
-	}
+	fmt.Fprintf(&b,
+		"The rolling ~9 minute cache hit rate is %.1f%% based on hit/miss counters in Prometheus. "+
+			"When this drops, more read paths miss Redis and fall through to the database. ",
+		hr)
 	if total > 0 {
 		fmt.Fprintf(&b, "In this window there were about %.0f hits and %.0f misses.", cache.CacheHitsLast9m, cache.CacheMissesLast9m)
 	} else {
@@ -79,9 +100,8 @@ func narrateCacheHitLow(dm *DeploymentMetrics, topo TopologyFlags) NarrativeOutp
 	if db.DbQueryRate > 0 {
 		fmt.Fprintf(&b, " DB query rate is about %.1f/s, so Postgres may be absorbing work that would be cheaper on Redis.", db.DbQueryRate)
 	}
-	b.WriteString(".")
 
-	sug := "On the canvas, ensure a cache node is present and sized for your working set; if eviction is likely, add Redis memory or shard timelines across more cache capacity."
+	sug := "On the canvas, ensure a cache node is present and sized for your working set; if eviction is likely, add Redis memory or scale out cache capacity."
 	if !topo.HasCache {
 		sug = "Add a cache node to the topology so hot reads can be served without hitting the database on every request."
 	}
@@ -107,7 +127,6 @@ func narrateErrorRate(dm *DeploymentMetrics, topo TopologyFlags) NarrativeOutput
 	} else {
 		b.WriteString("Downstream saturation or application faults often show up first as rising 5xx on the edge.")
 	}
-	b.WriteString(".")
 
 	related := []string{"app-server"}
 	if topo.HasCache || cache.RedisOpsPerSec > 0 {
@@ -135,13 +154,7 @@ func narrateDBLatency(dm *DeploymentMetrics, topo TopologyFlags) NarrativeOutput
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Average database query latency is about %.0f ms. ", latMs)
-	switch topo.Template {
-	case "social-feed", "social-feed-pull":
-		b.WriteString("For social-feed read paths that still hit Postgres, work often involves joining posts, follows, and users, which can get expensive as data grows.")
-	default:
-		b.WriteString("Higher averages usually mean heavier queries, lock contention, or the database running out of CPU or I/O headroom.")
-	}
-	b.WriteString(".")
+	b.WriteString("Higher averages usually mean heavier queries, lock contention, or the database running out of CPU or I/O headroom.")
 
 	related := []string{"db"}
 	if !topo.HasCache {
@@ -149,9 +162,6 @@ func narrateDBLatency(dm *DeploymentMetrics, topo TopologyFlags) NarrativeOutput
 	}
 
 	sug := "Add a cache node and route hot reads through it, or add read replicas so query load is split across more Postgres instances."
-	if topo.Template == "social-feed" || topo.Template == "social-feed-pull" {
-		sug = "Add a cache node with the timeline-store pattern and wire MQ plus worker nodes so timelines are precomputed; reads then come from Redis instead of large joins on every request."
-	}
 
 	return NarrativeOutput{
 		Narrative:  strings.TrimSpace(b.String()),
@@ -172,7 +182,6 @@ func narrateQueueDepth(dm *DeploymentMetrics, topo TopologyFlags) NarrativeOutpu
 	} else {
 		b.WriteString("Consume rate is near zero or unknown, so backlog may persist until consumers come online.")
 	}
-	b.WriteString(".")
 
 	sug := "Add more worker replicas so the topology can drain the queue faster."
 	if !topo.HasWorker {
@@ -220,26 +229,12 @@ func narrateMQBackpressure(dm *DeploymentMetrics, topo TopologyFlags) NarrativeO
 	if cons <= 0 {
 		cons = mq.ConsumeRate
 	}
-	fanout := tmplFloat(dm, "worker.fanout_size_p99")
-	redisWrites := tmplFloat(dm, "worker.redis_write_rate")
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Producers are ahead of consumers: saturation ratio is about %.2f with queue depth about %.0f. ", mq.MQSaturationRatio, mq.QueueDepth)
 	fmt.Fprintf(&b, "Publish-side rate is about %.1f/s and consume-side rate about %.1f/s. ", prod, cons)
 
-	if strings.EqualFold(topo.Template, "social-feed") && (fanout > 0 || redisWrites > 0 || prod > 0) {
-		if fanout > 0 && prod > 0 && redisWrites > 0 {
-			fmt.Fprintf(&b,
-				"For social-feed, p99 fan-out is about %.0f followers per post while publish rate is about %.1f posts/s; Redis write rate from workers is about %.1f/s, "+
-					"so each post can amplify to many timeline writes before readers see warm timelines.",
-				fanout, prod, redisWrites)
-		} else {
-			b.WriteString("For social-feed, each published post can fan out to many follower timelines, so modest publish rates can still create large Redis write volume.")
-		}
-	} else {
-		b.WriteString("When publish rate exceeds consume rate, depth grows and downstream writers (for example workers updating a store) can fall behind.")
-	}
-	b.WriteString(".")
+	b.WriteString("When publish rate exceeds consume rate, depth grows and downstream writers (for example workers updating a store) can fall behind.")
 
 	sug := "Add more worker replicas to increase consume and fan-out throughput."
 	if !topo.HasWorker {
@@ -253,35 +248,29 @@ func narrateMQBackpressure(dm *DeploymentMetrics, topo TopologyFlags) NarrativeO
 	}
 }
 
-func narrateCascadeCacheDB(dm *DeploymentMetrics, topo TopologyFlags) NarrativeOutput {
+func narrateCascadeCacheDB(dm *DeploymentMetrics, _ TopologyFlags) NarrativeOutput {
 	cache := dm.Components["cache"]
 	db := dm.Components["db"]
 	hr := lifetimeHitRate(cache)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Cache hit rate is about %.1f%% while DB query rate is about %.1f/s. ", hr, db.DbQueryRate)
-	if topo.CacheStrategy == "timeline-store" {
-		b.WriteString("When timeline freshness or eviction shifts what is resident in Redis, read paths can lean harder on Postgres even though the data model is push-oriented.")
-	} else {
-		b.WriteString("When hit rate drops and DB rate rises together, Postgres is often doing work that would have been cheap on Redis.")
-	}
-	b.WriteString(".")
+	b.WriteString("When hit rate drops and DB rate rises together, Postgres is often doing work that would have been cheap on Redis.")
 
 	return NarrativeOutput{
 		Narrative:  strings.TrimSpace(b.String()),
-		Suggestion: "On the canvas, add Redis memory or cache capacity if timelines or keys are being evicted, or add read replicas if the database is the sustained bottleneck.",
+		Suggestion: "On the canvas, add Redis memory or cache capacity if hot keys are being evicted, or add read replicas if the database is the sustained bottleneck.",
 		Related:    []string{"cache", "db"},
 	}
 }
 
-func narrateCascadeQueueWorker(dm *DeploymentMetrics, topo TopologyFlags) NarrativeOutput {
+func narrateCascadeQueueWorker(dm *DeploymentMetrics, _ TopologyFlags) NarrativeOutput {
 	mq := dm.Components["mq"]
 	w := dm.Components["worker"]
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Queue depth is about %.0f while worker CPU is about %.3f cores. ", mq.QueueDepth, w.CPUUsage)
 	b.WriteString("Depth growing together with worker CPU usually means consumers are busy but still not keeping up with arrival rate, which is common when each message triggers many writes.")
-	b.WriteString(".")
 
 	return NarrativeOutput{
 		Narrative:  strings.TrimSpace(b.String()),
@@ -290,7 +279,7 @@ func narrateCascadeQueueWorker(dm *DeploymentMetrics, topo TopologyFlags) Narrat
 	}
 }
 
-func narrateCascadeDBPoolErrors(dm *DeploymentMetrics, topo TopologyFlags) NarrativeOutput {
+func narrateCascadeDBPoolErrors(dm *DeploymentMetrics, _ TopologyFlags) NarrativeOutput {
 	db := dm.Components["db"]
 	app := dm.Components["app-server"]
 
@@ -301,7 +290,6 @@ func narrateCascadeDBPoolErrors(dm *DeploymentMetrics, topo TopologyFlags) Narra
 		fmt.Fprintf(&b, "Database connections are elevated while HTTP errors are about %.2f/s. ", app.ErrorRate)
 	}
 	b.WriteString("When the pool is exhausted, new requests cannot acquire a session and the app-server often returns errors to clients.")
-	b.WriteString(".")
 
 	return NarrativeOutput{
 		Narrative:  strings.TrimSpace(b.String()),
@@ -310,23 +298,15 @@ func narrateCascadeDBPoolErrors(dm *DeploymentMetrics, topo TopologyFlags) Narra
 	}
 }
 
-func narrateCascadeLatencyMiss(dm *DeploymentMetrics, topo TopologyFlags) NarrativeOutput {
+func narrateCascadeLatencyMiss(dm *DeploymentMetrics, _ TopologyFlags) NarrativeOutput {
 	app := dm.Components["app-server"]
 	p99ms := app.P99Latency * 1000
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "App p99 latency is about %.0f ms while cache miss share in the rolling window is elevated. ", p99ms)
-	if topo.CacheStrategy == "timeline-store" {
-		b.WriteString("For timeline-store, rising latency with more misses often means timelines are cold or incomplete and read paths are doing more expensive work than a hot ZREVRANGE path.")
-	} else {
-		b.WriteString("That pattern usually means more requests miss Redis and pay the full database latency stack.")
-	}
-	b.WriteString(".")
+	b.WriteString("That pattern usually means more requests miss Redis and pay the full database latency stack.")
 
 	sug := "Add or enlarge the cache tier so hot keys stay resident, or add read replicas if the database dominates latency."
-	if strings.EqualFold(topo.Template, "social-feed") {
-		sug = "Wire MQ and worker nodes so timelines are precomputed into Redis; keep the cache node so reads stay on sorted-set timelines instead of large joins."
-	}
 
 	return NarrativeOutput{
 		Narrative:  strings.TrimSpace(b.String()),
@@ -335,7 +315,7 @@ func narrateCascadeLatencyMiss(dm *DeploymentMetrics, topo TopologyFlags) Narrat
 	}
 }
 
-func narrateCascadeMQBackpressure(dm *DeploymentMetrics, topo TopologyFlags) NarrativeOutput {
+func narrateCascadeMQBackpressure(dm *DeploymentMetrics, _ TopologyFlags) NarrativeOutput {
 	mq := dm.Components["mq"]
 	prod := mq.ProduceRate
 	cons := mq.ConsumeRate
@@ -343,14 +323,10 @@ func narrateCascadeMQBackpressure(dm *DeploymentMetrics, topo TopologyFlags) Nar
 	var b strings.Builder
 	fmt.Fprintf(&b, "MQ saturation is about %.2f with depth about %.0f. ", mq.MQSaturationRatio, mq.QueueDepth)
 	fmt.Fprintf(&b, "Produce is about %.1f/s versus consume about %.1f/s, so backlog builds when that gap persists over consecutive ticks.", prod, cons)
-	if strings.EqualFold(topo.Template, "social-feed") {
-		b.WriteString(" On social-feed, sustained gaps often mean fan-out writes to Redis cannot keep up with posting load.")
-	}
-	b.WriteString(".")
 
 	return NarrativeOutput{
 		Narrative:  strings.TrimSpace(b.String()),
-		Suggestion: "Add worker replicas to raise aggregate consume throughput, and ensure a cache node exists for the timeline store that workers write into.",
+		Suggestion: "Add worker replicas to raise aggregate consume throughput.",
 		Related:    []string{"mq", "worker", "cache"},
 	}
 }

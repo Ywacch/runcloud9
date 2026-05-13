@@ -57,7 +57,7 @@ func TestCollect_CacheIncreaseQueries(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, nil, nil)
-	dm, err := c.Collect(context.Background(), "ns-test", "")
+	dm, err := c.Collect(context.Background(), "ns-test", "", TopologyFlags{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestCollect_NoDeprecatedRateWindows(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, nil, nil)
-	_, err := c.Collect(context.Background(), "ns-prod", "")
+	_, err := c.Collect(context.Background(), "ns-prod", "", TopologyFlags{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestCollect_HistogramQuantilesUse30sBucketRate(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, nil, nil)
-	dm, err := c.Collect(context.Background(), "ns-x", "")
+	dm, err := c.Collect(context.Background(), "ns-x", "", TopologyFlags{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +309,7 @@ func TestCollect_DBCPUUsesProcessMetricWhenNonZero(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, nil, nil)
-	dm, err := c.Collect(context.Background(), "ns1", "")
+	dm, err := c.Collect(context.Background(), "ns1", "", TopologyFlags{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +335,7 @@ func TestCollect_DBCPUFallbackToKubeWhenProcessMetricEmpty(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, nil, nil)
-	dm, err := c.Collect(context.Background(), "ns1", "")
+	dm, err := c.Collect(context.Background(), "ns1", "", TopologyFlags{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +357,7 @@ func TestCollect_SetsLBConnectionLimit(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, nil, nil)
-	dm, err := c.Collect(context.Background(), "ns-cap", "")
+	dm, err := c.Collect(context.Background(), "ns-cap", "", TopologyFlags{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +387,7 @@ func TestCollect_SocialFeedUsesSortedSetRedisMetrics(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, nil, nil)
-	dm, err := c.Collect(context.Background(), "ns-social", "social-feed")
+	dm, err := c.Collect(context.Background(), "ns-social", "social-feed", TopologyFlags{})
 	if err != nil {
 		t.Fatal(err)
 	}

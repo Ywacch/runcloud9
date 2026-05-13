@@ -46,6 +46,8 @@ type TemplateSpec struct {
 	WorkerTimelineStore string           `json:"-"`
 	// LoadgenDefaultRPS is the suggested default RPS when starting loadgen with no rps in the request (0 = use global 50).
 	LoadgenDefaultRPS int `json:"loadgenDefaultRps,omitempty"`
+	// Storytelling is optional template-authored copy for UI narratives, roles, and journeys.
+	Storytelling *StorytellingSpec `json:"storytelling,omitempty"`
 }
 
 // PresetNode is a fully-configured node for canvas population.
@@ -130,10 +132,11 @@ type templateDef struct {
 		Container string `yaml:"container"`
 		PodLabel  string `yaml:"podLabel"`
 	} `yaml:"seed"`
-	ProxyQueries        []ProxyQueryRule `yaml:"proxyQueries"`
-	AppDatabaseMode     string           `yaml:"appDatabaseMode"`
-	WorkerTimelineStore string           `yaml:"workerTimelineStore"`
-	LoadgenDefaultRPS   int              `yaml:"loadgenDefaultRps"`
+	ProxyQueries        []ProxyQueryRule  `yaml:"proxyQueries"`
+	AppDatabaseMode     string            `yaml:"appDatabaseMode"`
+	WorkerTimelineStore string            `yaml:"workerTimelineStore"`
+	LoadgenDefaultRPS   int               `yaml:"loadgenDefaultRps"`
+	Storytelling        *StorytellingSpec `yaml:"storytelling"`
 }
 
 // embeddedFree is the in-repo YAML definitions (always available).
@@ -261,6 +264,12 @@ func defToSpec(def *templateDef) TemplateSpec {
 	}
 	if len(def.ProxyQueries) > 0 {
 		spec.ProxyQueries = append([]ProxyQueryRule(nil), def.ProxyQueries...)
+	}
+	if def.Storytelling != nil {
+		// Shallow copy: Journeys, Roles, and NarrativeContext still alias the parsed YAML backing
+		// store; safe because template defs are read-only after registry load.
+		st := *def.Storytelling
+		spec.Storytelling = &st
 	}
 	if def.Preset != nil {
 		preset := &TemplatePreset{

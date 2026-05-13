@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/loadgen"
+	"github.com/ywacch/cloud9/pkg/templates"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -446,7 +447,8 @@ func annotateCacheForTemplate(cm *ComponentMetrics, template string) {
 
 // Collect queries all metrics for a deployment namespace and returns a snapshot.
 // template is the deployment template id (e.g. social-feed); empty skips template-specific PromQL.
-func (c *MetricsCollector) Collect(ctx context.Context, namespace, template string) (*DeploymentMetrics, error) {
+// topo is derived from the saved deployment design (may be zero); used for narratives and cache-strategy overlay.
+func (c *MetricsCollector) Collect(ctx context.Context, namespace, template string, topo TopologyFlags) (*DeploymentMetrics, error) {
 	dm := &DeploymentMetrics{
 		Timestamp:  time.Now(),
 		Namespace:  namespace,
@@ -723,6 +725,9 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	}
 
 	annotateCacheForTemplate(&cmCache, template)
+	if topo.CacheStrategy != "" {
+		cmCache.CacheStrategy = topo.CacheStrategy
+	}
 	dm.Components["cache"] = cmCache
 
 	cmMQ := ComponentMetrics{Component: "mq"}
@@ -839,12 +844,12 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	if c.eventBus != nil {
 		ev = append(ev, c.eventBus.Drain(namespace)...)
 	}
-	topo := TopologyFlagsFromDeployment(dm, template)
+	tmpl := templates.GetTemplate(template)
 	if c.thresholds != nil {
-		ev = append(ev, c.thresholds.Eval(namespace, dm, topo)...)
+		ev = append(ev, c.thresholds.Eval(namespace, dm, topo, tmpl)...)
 	}
 	if c.cascade != nil {
-		ev = append(ev, c.cascade.Eval(namespace, dm, topo)...)
+		ev = append(ev, c.cascade.Eval(namespace, dm, topo, tmpl)...)
 	}
 	dm.Events = ev
 

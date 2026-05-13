@@ -237,7 +237,9 @@ func main() {
 		}
 		// Collect final metrics snapshot and merge into existing summary (preserves 'seeded' and other fields).
 		if metricsCollector != nil {
-			dm, err := metricsCollector.Collect(ctx, namespace, tpl)
+			design, _ := deployer.DesignFromMap(row.Design)
+			topo := api.MetricsTopologyFromDeploymentDesign(design, tpl)
+			dm, err := metricsCollector.Collect(ctx, namespace, tpl, topo)
 			if err == nil && dm != nil {
 				for k, v := range metricsCollector.PeakSummaryForNamespace(namespace, dm) {
 					summary[k] = v

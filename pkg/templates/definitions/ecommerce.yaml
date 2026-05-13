@@ -128,3 +128,64 @@ proxyQueries:
       )
       FROM (SELECT id FROM products ORDER BY id LIMIT 50) AS x
     params: []
+
+storytelling:
+  roles:
+    cache:
+      base: "Product catalog cache"
+    db:
+      base: "Inventory and order storage"
+    mq:
+      base: "Order queue for async fulfillment"
+    worker:
+      base: "Order fulfillment processor"
+    app-server:
+      base: "Handles catalog browsing and checkout"
+    lb:
+      base: "Distributes requests across app-server instances"
+  journeys:
+    - id: catalog
+      method: GET
+      path: "/catalog"
+      label: "Catalog browse"
+      trafficPercent: 40
+      steps:
+        - component: lb
+          action: "Routes to app-server."
+          requires: [lb]
+        - component: app-server
+          action: "Serves catalog payload."
+          metricsKey: p99Latency
+        - component: cache
+          action: "Hot product rows when cached."
+          requires: [cache]
+        - component: db
+          action: "Loads catalog on miss."
+          requires: [db]
+      explanation: "Read-heavy catalog benefits from cache-aside."
+    - id: checkout
+      method: POST
+      path: "/checkout"
+      label: "Checkout"
+      trafficPercent: 30
+      steps:
+        - component: lb
+          action: "Routes checkout."
+          requires: [lb]
+        - component: app-server
+          action: "Validates cart and inventory."
+          metricsKey: p99Latency
+        - component: db
+          action: "Inventory update and order row."
+          requires: [db]
+        - component: mq
+          action: "Publishes order.placed when present."
+          requires: [mq]
+        - component: worker
+          action: "Async fulfillment when present."
+          requires: [mq, worker]
+      explanation: "Writes hit Postgres; optional MQ/worker handle async fulfillment."
+  narrativeContext:
+    db_latency:
+      cause: "Checkout and catalog paths contend on shared Postgres under load."
+      suggestion: "Add cache or read replicas to spread read load; scale workers if the queue backs up."

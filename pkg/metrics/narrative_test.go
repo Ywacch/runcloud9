@@ -3,6 +3,8 @@ package metrics
 import (
 	"strings"
 	"testing"
+
+	"github.com/ywacch/cloud9/pkg/templates"
 )
 
 func TestNarrate_AllRulesNonEmpty(t *testing.T) {
@@ -16,6 +18,7 @@ func TestNarrate_AllRulesNonEmpty(t *testing.T) {
 		Template:      "url-shortener",
 	}
 	dm := deploymentForNarrativeTests("url-shortener")
+	tmpl := templates.GetTemplate("url-shortener")
 
 	rules := []string{
 		ruleCacheHitLow,
@@ -34,7 +37,7 @@ func TestNarrate_AllRulesNonEmpty(t *testing.T) {
 		rule := rule
 		t.Run(rule, func(t *testing.T) {
 			t.Parallel()
-			out := Narrate(rule, dm, topo)
+			out := Narrate(rule, dm, topo, tmpl)
 			if out.Narrative == "" {
 				t.Fatalf("Narrative empty for %s", rule)
 			}
@@ -49,6 +52,7 @@ func TestNarrate_RelatedComponents(t *testing.T) {
 	t.Parallel()
 	topo := TopologyFlags{HasCache: true, HasMQ: true, HasWorker: true, Template: "url-shortener"}
 	dm := deploymentForNarrativeTests("url-shortener")
+	tmpl := templates.GetTemplate("url-shortener")
 
 	tests := []struct {
 		rule     string
@@ -64,7 +68,7 @@ func TestNarrate_RelatedComponents(t *testing.T) {
 		tt := tt
 		t.Run(tt.rule, func(t *testing.T) {
 			t.Parallel()
-			out := Narrate(tt.rule, dm, topo)
+			out := Narrate(tt.rule, dm, topo, tmpl)
 			for _, comp := range tt.required {
 				if !containsString(out.Related, comp) {
 					t.Fatalf("Related %#v missing %q", out.Related, comp)
@@ -88,7 +92,8 @@ func TestNarrate_SocialFeedMQBackpressureIncludesFanout(t *testing.T) {
 	dm.TemplateMetrics["mq.produce_rate"] = 12
 	dm.TemplateMetrics["worker.redis_write_rate"] = 48000
 
-	out := Narrate(ruleMQBackpressure, dm, topo)
+	tmpl := templates.GetTemplate("social-feed")
+	out := Narrate(ruleMQBackpressure, dm, topo, tmpl)
 	if !strings.Contains(out.Narrative, "5000") {
 		t.Fatalf("expected fanout in narrative: %q", out.Narrative)
 	}
@@ -101,7 +106,8 @@ func TestNarrate_UrlShortenerNoSocialFeedJargon(t *testing.T) {
 	t.Parallel()
 	topo := TopologyFlags{HasCache: true, Template: "url-shortener", CacheStrategy: "cache-aside"}
 	dm := deploymentForNarrativeTests("url-shortener")
-	out := Narrate(ruleMQBackpressure, dm, topo)
+	tmpl := templates.GetTemplate("url-shortener")
+	out := Narrate(ruleMQBackpressure, dm, topo, tmpl)
 	if strings.Contains(strings.ToLower(out.Narrative), "fan-out") {
 		t.Fatalf("unexpected fan-out wording for url-shortener: %q", out.Narrative)
 	}

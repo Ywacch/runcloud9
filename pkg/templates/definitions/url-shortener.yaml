@@ -79,3 +79,89 @@ proxyQueries:
     params:
       - capture: 1
         dbType: text
+
+storytelling:
+  roles:
+    cache:
+      base: "Lookup cache for shortened URLs"
+      variants:
+        - when: { strategy: "write-through" }
+          label: "Write-through cache — writes go to Redis first, then Postgres"
+        - when: { strategy: "cache-aside" }
+          label: "Cache-aside — reads check Redis, misses fall through to Postgres"
+    db:
+      base: "URL storage — code-to-original mapping"
+    app-server:
+      base: "Handles shorten and resolve requests"
+    lb:
+      base: "Distributes requests across app-server instances"
+  journeys:
+    - id: resolve
+      method: GET
+      path: "/r/{code}"
+      label: "Resolve short URL"
+      trafficPercent: 80
+      steps:
+        - component: lb
+          action: "Routes GET /r/{code} to app-server."
+          requires: [lb]
+        - component: app-server
+          action: "Looks up the short code."
+          metricsKey: p99Latency
+        - component: cache
+          action: "GET short:{code} — hot path for popular links."
+          metricsKey: redisAvgLatency
+          requires: [cache]
+        - component: db
+          action: "SELECT original URL by code when cache misses."
+          detail: "SELECT url FROM urls WHERE code = ?"
+          requires: [db]
+          condition: "On miss"
+      explanation: >-
+        Classic cache-aside: try Redis for the mapping, fall back to Postgres on miss.
+      explanationVariants:
+        - when: { strategy: "write-through" }
+          text: >-
+            Write-through: Redis is kept warm because writes go through the cache layer before durable storage.
+    - id: shorten
+      method: POST
+      path: "/shorten"
+      label: "Create short URL"
+      trafficPercent: 20
+      steps:
+        - component: lb
+          action: "Routes POST /shorten."
+          requires: [lb]
+        - component: app-server
+          action: "Allocates a code, inserts row, returns short URL."
+          metricsKey: p99Latency
+        - component: db
+          action: "INSERT mapping (code → original URL)."
+          requires: [db]
+          excludeWhen: { strategy: "write-through" }
+        - component: cache
+          action: "SET short:{code} for fast resolves."
+          metricsKey: redisAvgLatency
+          requires: [cache]
+          excludeWhen: { strategy: "write-through" }
+        - component: cache
+          action: "SET short:{code} — write-through persists to Postgres."
+          metricsKey: redisAvgLatency
+          requires: [cache]
+          onlyWhen: { strategy: "write-through" }
+        - component: db
+          action: "Persisted by cache write-through layer."
+          requires: [db]
+          onlyWhen: { strategy: "write-through" }
+      explanation: >-
+        Write path persists the mapping then warms cache for subsequent reads.
+      explanationVariants:
+        - when: { strategy: "write-through" }
+          text: >-
+            Write-through: the app writes to Redis first; the cache layer persists to Postgres.
+  narrativeContext:
+    db_latency:
+      cause: "URL lookups hit Postgres directly on cache miss."
+      suggestion: "Add a cache node to serve hot lookups from Redis."
+    cache_hit_low:
+      cause: "More lookups are missing Redis and falling through to Postgres."

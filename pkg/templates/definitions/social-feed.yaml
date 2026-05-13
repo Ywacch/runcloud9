@@ -109,3 +109,117 @@ preset:
       sourceId: app-1
       targetId: db-1
       protocol: tcp
+
+storytelling:
+  roles:
+    cache:
+      base: "Timeline store for follower feeds"
+      variants:
+        - when: { topology: "hasMQ+hasWorker" }
+          label: "Receives async fan-out writes from worker"
+        - when: { topology: "!hasMQ" }
+          label: "Receives sync fan-out writes from app-server"
+    mq:
+      base: "Post queue — buffers new posts for async fan-out"
+    worker:
+      base: "Fan-out worker — writes to follower timelines"
+      variants:
+        - when: { topology: "!hasCache" }
+          label: "No cache target — fan-out writes have nowhere to go"
+    db:
+      base: "Source of truth — users, posts, follows graph"
+    app-server:
+      base: "Handles post creation and feed reads"
+      variants:
+        - when: { topology: "!hasCache+!hasMQ" }
+          label: "Pull mode — every feed read is a DB JOIN"
+        - when: { topology: "hasCache+!hasMQ" }
+          label: "Sync fan-out on write, Redis reads on read"
+        - when: { topology: "hasMQ" }
+          label: "Posts go to MQ, feed reads from Redis"
+    lb:
+      base: "Distributes requests across app-server instances"
+  journeys:
+    - id: feed-read
+      method: GET
+      path: "/feed/{userId}"
+      label: "Feed reads"
+      trafficPercent: 60
+      steps:
+        - component: lb
+          action: "Routes to app-server."
+          requires: [lb]
+        - component: app-server
+          action: "Check Redis for materialized timeline."
+          metricsKey: p99Latency
+          requires: [cache]
+        - component: cache
+          action: "ZREVRANGE timeline:{userId} 0 19"
+          detail: "Redis sorted set lookup, sub-ms when warm."
+          metricsKey: redisAvgLatency
+          requires: [cache]
+        - component: db
+          action: "3-table JOIN: posts × follows × users."
+          detail: "SELECT ... WHERE follower_id = ? ORDER BY created_at DESC"
+          condition: "If Redis empty or no cache"
+          requires: [db]
+      explanation: >-
+        In push mode, most warm reads hit Redis. Without cache, every read does a 3-table JOIN.
+    - id: post-create
+      method: POST
+      path: "/post"
+      label: "Create post"
+      trafficPercent: 30
+      steps:
+        - component: lb
+          action: "Routes to app-server."
+          requires: [lb]
+        - component: app-server
+          action: "INSERT post into Postgres."
+          metricsKey: p99Latency
+        - component: mq
+          action: "Publish post to fanout exchange."
+          detail: "Async — response returns here."
+          requires: [mq]
+        - component: worker
+          action: "Consume from queue, fetch followers from DB."
+          requires: [mq, worker]
+        - component: cache
+          action: "ZADD to timeline:{followerId} for each follower."
+          detail: "Batched pipeline fan-out."
+          requires: [worker, cache]
+        - component: cache
+          action: "App-server does sync ZADD to follower timelines."
+          detail: "Fire-and-forget goroutine, does not block response."
+          requires: [cache]
+          excludeWhen: { topology: "hasMQ" }
+          onlyWhen: { topology: "!hasMQ+hasCache" }
+  narrativeContext:
+    cache_hit_low:
+      cause: >-
+        Sorted-set timelines are not classic cache-aside GET/SET; a low hit share can mean cold timelines, eviction under memory pressure, or traffic patterns that rarely reuse keys.
+      suggestion: >-
+        Add Redis memory or shard timelines across more capacity so follower timelines stay resident under fan-out load.
+    mq_backpressure:
+      cause: >-
+        Each post fans out to ~{worker.fanout_size_p99} followers.
+        At {mq.produce_rate} posts/s, workers deliver ~{worker.redis_write_rate} Redis writes/s.
+      suggestion: "Add more worker replicas to increase fan-out throughput."
+    cascade_cache_db:
+      cause: >-
+        When timeline freshness or eviction shifts what is resident in Redis, read paths can lean harder on Postgres even though the data model is push-oriented.
+      suggestion: >-
+        Add Redis memory or cache capacity if timelines are being evicted, or add read replicas if Postgres is the sustained bottleneck.
+    cascade_latency_miss:
+      cause: >-
+        For a Redis timeline store, rising latency with more misses often means timelines are cold or incomplete, so read paths do more work than a hot sorted-set lookup; when timelines are not materialized you also pay the full 3-table JOIN cost.
+      suggestion: >-
+        Keep workers fed through MQ so timelines stay warm; add Redis memory or replicas if eviction is trimming hot keys.
+    cascade_mq_backpressure:
+      suggestion: >-
+        Add worker replicas and ensure the cache tier exists for the timeline store workers write into.
+    db_latency:
+      cause: >-
+        Feed reads that miss Redis do a 3-table JOIN (posts × follows × users), which is expensive as data grows.
+      suggestion: >-
+        Add MQ + worker nodes so timelines are precomputed into Redis; reads stay on sorted-set timelines instead of large joins.

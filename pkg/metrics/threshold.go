@@ -3,6 +3,8 @@ package metrics
 import (
 	"sync"
 	"time"
+
+	"github.com/ywacch/cloud9/pkg/templates"
 )
 
 // ThresholdDetector emits at most one "threshold" event per rule while a condition stays true;
@@ -30,7 +32,7 @@ const (
 )
 
 // Eval returns threshold events for conditions that just crossed into a bad state.
-func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics, topo TopologyFlags) []Event {
+func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics, topo TopologyFlags, tmpl *templates.TemplateSpec) []Event {
 	if t == nil || dm == nil || namespace == "" {
 		return nil
 	}
@@ -54,7 +56,7 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics, topo T
 				Title:       "Low cache hit rate",
 				Description: "Rolling 9m cache hit rate dropped below 30%",
 			}
-			n := Narrate(ruleCacheHitLow, dm, topo)
+			n := Narrate(ruleCacheHitLow, dm, topo, tmpl)
 			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
 			out = append(out, ev)
 		}
@@ -72,7 +74,7 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics, topo T
 				Title:       "Elevated HTTP error rate",
 				Description: "HTTP 5xx rate exceeds 1 req/s",
 			}
-			n := Narrate(ruleErrorRate, dm, topo)
+			n := Narrate(ruleErrorRate, dm, topo, tmpl)
 			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
 			out = append(out, ev)
 		}
@@ -90,7 +92,7 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics, topo T
 				Title:       "High DB query latency",
 				Description: "Average DB query latency exceeds 500ms",
 			}
-			n := Narrate(ruleDBLatency, dm, topo)
+			n := Narrate(ruleDBLatency, dm, topo, tmpl)
 			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
 			out = append(out, ev)
 		}
@@ -108,7 +110,7 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics, topo T
 				Title:       "Queue depth high",
 				Description: "RabbitMQ queue depth exceeds 100 messages",
 			}
-			n := Narrate(ruleQueueDepth, dm, topo)
+			n := Narrate(ruleQueueDepth, dm, topo, tmpl)
 			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
 			out = append(out, ev)
 		}
@@ -126,7 +128,7 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics, topo T
 				Title:       "Database connection pressure",
 				Description: "Active connections exceed 80% of max_connections",
 			}
-			n := Narrate(ruleDBConnPressure, dm, topo)
+			n := Narrate(ruleDBConnPressure, dm, topo, tmpl)
 			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
 			out = append(out, ev)
 		}
@@ -144,7 +146,7 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics, topo T
 				Title:       "Producer outpacing consumer",
 				Description: "MQ saturation ratio > 2 with queue depth > 50",
 			}
-			n := Narrate(ruleMQBackpressure, dm, topo)
+			n := Narrate(ruleMQBackpressure, dm, topo, tmpl)
 			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
 			out = append(out, ev)
 		}

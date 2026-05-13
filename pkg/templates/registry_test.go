@@ -124,6 +124,28 @@ func TestImageFor_ManifestOverridesEnvTag(t *testing.T) {
 	}
 }
 
+func TestRegistryJSON_IncludesStorytelling(t *testing.T) {
+	t.Parallel()
+	b, err := json.Marshal(Registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if !strings.Contains(s, `"storytelling"`) {
+		t.Fatalf("JSON should include storytelling for templates that define it: %s", s)
+	}
+	us := GetTemplate("url-shortener")
+	if us == nil || us.Storytelling == nil || len(us.Storytelling.Roles) == 0 {
+		t.Fatalf("url-shortener storytelling missing: %+v", us)
+	}
+	if _, ok := us.Storytelling.Roles["cache"]; !ok {
+		t.Fatal("expected cache role")
+	}
+	if len(us.Storytelling.Journeys) < 1 {
+		t.Fatal("expected journeys")
+	}
+}
+
 func TestRegistryJSON_IncludesSimulatableDeployable(t *testing.T) {
 	t.Parallel()
 	b, err := json.Marshal(Registry())
