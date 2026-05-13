@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/ywacch/cloud9/pkg/templates"
 )
 
 // cascadeCompact holds the fields needed for correlation rules (cheap to store in a short window).
@@ -72,7 +74,7 @@ const (
 )
 
 // Eval compares the latest snapshot to the previous tick and returns new cascade events.
-func (cd *CascadeDetector) Eval(namespace string, dm *DeploymentMetrics, topo TopologyFlags) []Event {
+func (cd *CascadeDetector) Eval(namespace string, dm *DeploymentMetrics, topo TopologyFlags, tmpl *templates.TemplateSpec) []Event {
 	if cd == nil || namespace == "" || dm == nil {
 		return nil
 	}
@@ -108,7 +110,7 @@ func (cd *CascadeDetector) Eval(namespace string, dm *DeploymentMetrics, topo To
 				Title:       "Cache miss spike increasing DB load",
 				Description: "Cache hit rate fell >20% while DB query rate rose >30% vs prior tick",
 			}
-			n := Narrate(cascadeRuleCacheDB, dm, topo)
+			n := Narrate(cascadeRuleCacheDB, dm, topo, tmpl)
 			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
 			out = append(out, ev)
 		}
@@ -130,7 +132,7 @@ func (cd *CascadeDetector) Eval(namespace string, dm *DeploymentMetrics, topo To
 				Title:       "Queue backlog driving worker CPU",
 				Description: "Queue depth rose >50% while worker CPU rose >20% vs prior tick",
 			}
-			n := Narrate(cascadeRuleQueueWorker, dm, topo)
+			n := Narrate(cascadeRuleQueueWorker, dm, topo, tmpl)
 			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
 			out = append(out, ev)
 		}
@@ -151,7 +153,7 @@ func (cd *CascadeDetector) Eval(namespace string, dm *DeploymentMetrics, topo To
 				Title:       "Connection pool stress and rising errors",
 				Description: "DB connections >80% of max while HTTP error rate more than doubled vs prior tick",
 			}
-			n := Narrate(cascadeRuleDBPoolErrors, dm, topo)
+			n := Narrate(cascadeRuleDBPoolErrors, dm, topo, tmpl)
 			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
 			out = append(out, ev)
 		}
@@ -173,7 +175,7 @@ func (cd *CascadeDetector) Eval(namespace string, dm *DeploymentMetrics, topo To
 				Title:       "Cold cache degrading latency",
 				Description: "p99 latency more than tripled while cache miss share rose >50% vs prior tick",
 			}
-			n := Narrate(cascadeRuleLatencyMiss, dm, topo)
+			n := Narrate(cascadeRuleLatencyMiss, dm, topo, tmpl)
 			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
 			out = append(out, ev)
 		}
@@ -193,7 +195,7 @@ func (cd *CascadeDetector) Eval(namespace string, dm *DeploymentMetrics, topo To
 				Title:       "Producer outpacing consumer",
 				Description: "MQ saturation ratio >2 with queue depth >50",
 			}
-			n := Narrate(cascadeRuleMQBackpressure, dm, topo)
+			n := Narrate(cascadeRuleMQBackpressure, dm, topo, tmpl)
 			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
 			out = append(out, ev)
 		}

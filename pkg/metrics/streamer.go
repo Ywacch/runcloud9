@@ -19,11 +19,13 @@ const (
 // StreamMetrics collects metrics every 2s and streams them to a WebSocket connection
 // until the context is cancelled or the connection closes.
 //
+// topo summarizes the saved deployment topology (zero value ok); passed to Collect for storytelling.
+//
 // gorilla/websocket connections are NOT goroutine-safe for concurrent writes.
 // We use a single writer goroutine that owns the connection. The collector goroutine
 // sends to a buffered channel; the writer goroutine reads and sends. This is the
 // standard Go WebSocket pattern — never call conn.WriteJSON from multiple goroutines.
-func StreamMetrics(ctx context.Context, conn *websocket.Conn, collector *MetricsCollector, namespace, template string) {
+func StreamMetrics(ctx context.Context, conn *websocket.Conn, collector *MetricsCollector, namespace, template string, topo TopologyFlags) {
 	writeCh := make(chan *DeploymentMetrics, 4)
 
 	go func() {
@@ -83,7 +85,7 @@ func StreamMetrics(ctx context.Context, conn *websocket.Conn, collector *Metrics
 			if col == nil {
 				col = NewMetricsCollector("", nil, nil, nil)
 			}
-			dm, err := col.Collect(ctx, namespace, template)
+			dm, err := col.Collect(ctx, namespace, template, topo)
 			if err != nil {
 				slog.Warn("metrics collect failed", "namespace", namespace, "error", err)
 				continue
