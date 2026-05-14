@@ -87,6 +87,10 @@ storytelling:
       variants:
         - when: { strategy: "write-through" }
           label: "Write-through cache — writes go to Redis first, then Postgres"
+        - when: { strategy: "write-behind" }
+          label: "Write-behind cache — Redis accepts first; Postgres catches up asynchronously"
+        - when: { strategy: "read-through" }
+          label: "Read-through proxy — misses fetch from Postgres and populate Redis transparently"
         - when: { strategy: "cache-aside" }
           label: "Cache-aside — reads check Redis, misses fall through to Postgres"
     db:
@@ -117,12 +121,25 @@ storytelling:
           detail: "SELECT url FROM urls WHERE code = ?"
           requires: [db]
           condition: "On miss"
+          excludeWhen: { strategy: "read-through" }
+        - component: db
+          action: "On miss, the caching proxy runs configured SQL, repopulates short:{code}, then returns the URL to the app."
+          detail: "Proxy-driven SELECT + backfill"
+          requires: [db]
+          condition: "On miss"
+          onlyWhen: { strategy: "read-through" }
       explanation: >-
         Classic cache-aside: try Redis for the mapping, fall back to Postgres on miss.
       explanationVariants:
         - when: { strategy: "write-through" }
           text: >-
-            Write-through: Redis is kept warm because writes go through the cache layer before durable storage.
+            Write-through: Redis stays warm for recently shortened codes because every write lands in the cache layer before durable storage; resolves rarely miss for fresh keys.
+        - when: { strategy: "write-behind" }
+          text: >-
+            Write-behind: new codes appear in Redis immediately while Postgres persistence trails; hot keys stay warm so resolves are fast once the async flush completes.
+        - when: { strategy: "read-through" }
+          text: >-
+            Read-through: the app still checks Redis first; on miss the caching proxy loads from Postgres, fills short:{code}, and serves the mapping without the app hand-rolling a second hop.
     - id: shorten
       method: POST
       path: "/shorten"
@@ -133,32 +150,60 @@ storytelling:
           action: "Routes POST /shorten."
           requires: [lb]
         - component: app-server
-          action: "Allocates a code, inserts row, returns short URL."
+          action: "Allocates a code, persists the mapping, returns short URL."
           metricsKey: p99Latency
+        # cache-aside (default): durable row first, then warm Redis.
         - component: db
           action: "INSERT mapping (code → original URL)."
           requires: [db]
-          excludeWhen: { strategy: "write-through" }
+          onlyWhen: { strategy: "cache-aside" }
         - component: cache
-          action: "SET short:{code} for fast resolves."
+          action: "SET short:{code} after durable insert."
           metricsKey: redisAvgLatency
           requires: [cache]
-          excludeWhen: { strategy: "write-through" }
+          onlyWhen: { strategy: "cache-aside" }
+        # read-through writes: same order as cache-aside (DB first → cache).
+        - component: db
+          action: "INSERT mapping (code → original URL)."
+          requires: [db]
+          onlyWhen: { strategy: "read-through" }
         - component: cache
-          action: "SET short:{code} — write-through persists to Postgres."
+          action: "SET short:{code} after durable insert (same write shape as cache-aside)."
+          metricsKey: redisAvgLatency
+          requires: [cache]
+          onlyWhen: { strategy: "read-through" }
+        # write-through: cache first; proxy persists to Postgres synchronously.
+        - component: cache
+          action: "SET short:{code} — caching proxy persists to Postgres before completing the write."
           metricsKey: redisAvgLatency
           requires: [cache]
           onlyWhen: { strategy: "write-through" }
         - component: db
-          action: "Persisted by cache write-through layer."
+          action: "Row written via caching-proxy after Redis accept."
           requires: [db]
           onlyWhen: { strategy: "write-through" }
+        # write-behind: cache first; Postgres updated asynchronously by proxy.
+        - component: cache
+          action: "SET short:{code} — proxy acknowledges immediately; durable INSERT is asynchronous."
+          metricsKey: redisAvgLatency
+          requires: [cache]
+          onlyWhen: { strategy: "write-behind" }
+        - component: db
+          action: "INSERT applied asynchronously by the caching-proxy after the hot write path."
+          requires: [db]
+          onlyWhen: { strategy: "write-behind" }
       explanation: >-
-        Write path persists the mapping then warms cache for subsequent reads.
+        Cache-aside write path: insert into Postgres first, then SET Redis so GET /r/{code} stays fast.
       explanationVariants:
         - when: { strategy: "write-through" }
           text: >-
-            Write-through: the app writes to Redis first; the cache layer persists to Postgres.
+            Write-through: the app writes to Redis first; the caching-proxy persists to Postgres synchronously before the write completes.
+        - when: { strategy: "write-behind" }
+          text: >-
+            Write-behind: Redis accepts SET immediately for low latency; the proxy flushes the row to Postgres in the background (brief window where Redis is ahead of durable storage).
+        - when: { strategy: "read-through" }
+          text: >-
+            Read-through resolves use the proxy on reads, but writes for this template still follow DB-first then SET so the mapping is durable before it is advertised in Redis.
   narrativeContext:
     db_latency:
       cause: "URL lookups hit Postgres directly on cache miss."
