@@ -110,6 +110,7 @@ preset:
       targetId: db-1
       protocol: tcp
 
+# Storytelling targets timeline-store on Redis (fan-out / sorted sets), not caching-proxy strategy matrix.
 storytelling:
   roles:
     cache:
