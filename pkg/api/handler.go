@@ -877,6 +877,7 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 			}
 			if hist := h.metricsCollector.DownsampledSessionHistory(namespace); len(hist) > 0 {
 				summary["session_history"] = hist
+				summary["events_summary"] = metrics.BuildEventsSummary(hist, 10)
 			}
 			summary["terminated_at"] = time.Now().Format(time.RFC3339)
 			if rowErr == nil {
