@@ -107,6 +107,7 @@ func (cd *CascadeDetector) Eval(namespace string, dm *DeploymentMetrics, topo To
 				Type:        "cascade",
 				Source:      "detector",
 				Component:   "cache",
+				RuleID:      cascadeRuleCacheDB,
 				Title:       "Cache miss spike increasing DB load",
 				Description: "Cache hit rate fell >20% while DB query rate rose >30% vs prior tick",
 			}
@@ -129,6 +130,7 @@ func (cd *CascadeDetector) Eval(namespace string, dm *DeploymentMetrics, topo To
 				Type:        "cascade",
 				Source:      "detector",
 				Component:   "mq",
+				RuleID:      cascadeRuleQueueWorker,
 				Title:       "Queue backlog driving worker CPU",
 				Description: "Queue depth rose >50% while worker CPU rose >20% vs prior tick",
 			}
@@ -150,6 +152,7 @@ func (cd *CascadeDetector) Eval(namespace string, dm *DeploymentMetrics, topo To
 				Type:        "cascade",
 				Source:      "detector",
 				Component:   "db",
+				RuleID:      cascadeRuleDBPoolErrors,
 				Title:       "Connection pool stress and rising errors",
 				Description: "DB connections >80% of max while HTTP error rate more than doubled vs prior tick",
 			}
@@ -172,6 +175,7 @@ func (cd *CascadeDetector) Eval(namespace string, dm *DeploymentMetrics, topo To
 				Type:        "cascade",
 				Source:      "detector",
 				Component:   "app-server",
+				RuleID:      cascadeRuleLatencyMiss,
 				Title:       "Cold cache degrading latency",
 				Description: "p99 latency more than tripled while cache miss share rose >50% vs prior tick",
 			}
@@ -192,6 +196,7 @@ func (cd *CascadeDetector) Eval(namespace string, dm *DeploymentMetrics, topo To
 				Type:        "cascade",
 				Source:      "detector",
 				Component:   "mq",
+				RuleID:      cascadeRuleMQBackpressure,
 				Title:       "Producer outpacing consumer",
 				Description: "MQ saturation ratio >2 with queue depth >50",
 			}

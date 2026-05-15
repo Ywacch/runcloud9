@@ -19,12 +19,14 @@ type DeploymentMetrics struct {
 
 // Event annotates the metrics timeline (loadgen, thresholds, future cascades).
 type Event struct {
-	Timestamp   time.Time `json:"timestamp"`
-	Type        string    `json:"type"` // "action" | "threshold" | "cascade"
-	Source      string    `json:"source"`
-	Component   string    `json:"component,omitempty"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
+	Timestamp time.Time `json:"timestamp"`
+	Type      string    `json:"type"` // "action" | "threshold" | "cascade"
+	Source    string    `json:"source"`
+	Component string    `json:"component,omitempty"`
+	// RuleID is the stable detector key (e.g. "cache_hit_low", "cascade_cache_db") for UI prediction matching.
+	RuleID      string `json:"ruleId,omitempty"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
 	// Storytelling: cause→effect narrative and topology-only suggestions for the UI.
 	Narrative  string   `json:"narrative,omitempty"`
 	Suggestion string   `json:"suggestion,omitempty"`

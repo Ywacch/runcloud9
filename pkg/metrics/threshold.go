@@ -53,6 +53,7 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics, topo T
 				Type:        "threshold",
 				Source:      "detector",
 				Component:   "cache",
+				RuleID:      ruleCacheHitLow,
 				Title:       "Low cache hit rate",
 				Description: "Rolling 9m cache hit rate dropped below 30%",
 			}
@@ -71,6 +72,7 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics, topo T
 				Type:        "threshold",
 				Source:      "detector",
 				Component:   "app-server",
+				RuleID:      ruleErrorRate,
 				Title:       "Elevated HTTP error rate",
 				Description: "HTTP 5xx rate exceeds 1 req/s",
 			}
@@ -89,6 +91,7 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics, topo T
 				Type:        "threshold",
 				Source:      "detector",
 				Component:   "db",
+				RuleID:      ruleDBLatency,
 				Title:       "High DB query latency",
 				Description: "Average DB query latency exceeds 500ms",
 			}
@@ -107,6 +110,7 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics, topo T
 				Type:        "threshold",
 				Source:      "detector",
 				Component:   "mq",
+				RuleID:      ruleQueueDepth,
 				Title:       "Queue depth high",
 				Description: "RabbitMQ queue depth exceeds 100 messages",
 			}
@@ -125,6 +129,7 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics, topo T
 				Type:        "threshold",
 				Source:      "detector",
 				Component:   "db",
+				RuleID:      ruleDBConnPressure,
 				Title:       "Database connection pressure",
 				Description: "Active connections exceed 80% of max_connections",
 			}
@@ -143,6 +148,7 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics, topo T
 				Type:        "threshold",
 				Source:      "detector",
 				Component:   "mq",
+				RuleID:      ruleMQBackpressure,
 				Title:       "Producer outpacing consumer",
 				Description: "MQ saturation ratio > 2 with queue depth > 50",
 			}
