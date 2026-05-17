@@ -83,22 +83,22 @@ proxyQueries:
 storytelling:
   roles:
     cache:
-      base: "Lookup cache for shortened URLs"
+      base: "Redis holds short code to URL mappings"
       variants:
         - when: { strategy: "write-through" }
-          label: "Write-through cache — writes go to Redis first, then Postgres"
+          label: "SET hits Redis first; the caching proxy writes the row to Postgres before the write completes"
         - when: { strategy: "write-behind" }
-          label: "Write-behind cache — Redis accepts first; Postgres catches up asynchronously"
+          label: "SET lands in Redis; the proxy flushes the row to Postgres later"
         - when: { strategy: "read-through" }
-          label: "Read-through proxy — misses fetch from Postgres and populate Redis transparently"
+          label: "On miss the proxy runs SQL, fills Redis, and returns the URL"
         - when: { strategy: "cache-aside" }
-          label: "Cache-aside — reads check Redis, misses fall through to Postgres"
+          label: "App checks Redis; on miss it reads Postgres and SETs the key"
     db:
-      base: "URL storage — code-to-original mapping"
+      base: "Postgres table mapping codes to original URLs"
     app-server:
-      base: "Handles shorten and resolve requests"
+      base: "Handles POST /shorten and GET /r/{code}"
     lb:
-      base: "Distributes requests across app-server instances"
+      base: "Routes traffic across app-server replicas"
   journeys:
     - id: resolve
       method: GET

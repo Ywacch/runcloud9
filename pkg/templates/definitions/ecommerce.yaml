@@ -130,29 +130,20 @@ proxyQueries:
     params: []
 
 storytelling:
-  # Journeys describe cache-aside catalog reads + checkout; proxy strategies on the cache node are not modeled here yet.
+  # Catalog and checkout use direct Redis (cache-aside). Proxy cache strategies are not deployable here (appDatabaseMode: always).
   roles:
     cache:
-      base: "Product catalog cache"
-      variants:
-        - when: { strategy: "write-through" }
-          label: "Write-through — hot catalog rows can be written through the proxy first"
-        - when: { strategy: "write-behind" }
-          label: "Write-behind — proxy may acknowledge cache before durable catalog rows land"
-        - when: { strategy: "read-through" }
-          label: "Read-through — proxy can load catalog JSON from Postgres on miss"
-        - when: { strategy: "cache-aside" }
-          label: "Cache-aside — app checks Redis, loads catalog on miss"
+      base: "App checks Redis for catalog and product keys; misses load from Postgres"
     db:
-      base: "Inventory and order storage"
+      base: "Products, inventory, and order rows"
     mq:
-      base: "Order queue for async fulfillment"
+      base: "Checkout publishes order.placed for workers"
     worker:
-      base: "Order fulfillment processor"
+      base: "Consumes orders from the queue and runs fulfillment"
     app-server:
-      base: "Handles catalog browsing and checkout"
+      base: "GET /catalog and POST /checkout"
     lb:
-      base: "Distributes requests across app-server instances"
+      base: "Routes traffic across app-server replicas"
   journeys:
     - id: catalog
       method: GET
@@ -172,17 +163,9 @@ storytelling:
         - component: db
           action: "Loads catalog on miss."
           requires: [db]
-      explanation: "Read-heavy catalog benefits from cache-aside."
-      explanationVariants:
-        - when: { strategy: "write-through" }
-          text: >-
-            Write-through on the catalog tier keeps Redis warm for rows written through the proxy; reads still prefer cache with Postgres as source of truth behind the proxy.
-        - when: { strategy: "write-behind" }
-          text: >-
-            Write-behind can make Redis slightly ahead of Postgres briefly; catalog reads should still treat DB-backed proxy rules as authoritative once flushed.
-        - when: { strategy: "read-through" }
-          text: >-
-            Read-through: on miss the caching-proxy can run the configured catalog SQL and populate Redis so the app sees a filled cache entry without hand-written fan-out.
+      explanation: >-
+        Catalog GET checks Redis first. On miss the app loads from Postgres and SETs the key.
+        Checkout always writes inventory and orders to Postgres directly.
     - id: checkout
       method: POST
       path: "/checkout"
