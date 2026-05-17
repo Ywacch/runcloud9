@@ -135,9 +135,9 @@ storytelling:
         - when: { topology: "!hasCache+!hasMQ" }
           label: "Pull mode: every feed read runs a DB JOIN"
         - when: { topology: "hasCache+!hasMQ" }
-          label: "Sync push (no queue): app fans out on write, reads from Redis"
+          label: "Fans out new posts in-process; serves feeds from Redis"
         - when: { topology: "hasMQ" }
-          label: "Posts go to the queue, feed reads from Redis"
+          label: "Publishes new posts to the queue; serves feeds from Redis"
     lb:
       base: "Routes requests across app-server replicas"
   journeys:

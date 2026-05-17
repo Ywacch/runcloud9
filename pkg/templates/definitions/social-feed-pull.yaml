@@ -66,11 +66,11 @@ storytelling:
       base: "Handles feed reads and post creation"
       variants:
         - when: { topology: "!hasCache" }
-          label: "Pull mode — every feed read is a DB JOIN"
+          label: "Pull mode: every feed read is a DB JOIN"
     db:
-      base: "Source of truth — users, posts, follows graph"
+      base: "Stores users, posts, and the follower graph"
     lb:
-      base: "Distributes requests across app-server instances"
+      base: "Routes requests across app-server replicas"
   journeys:
     - id: feed-read
       method: GET
