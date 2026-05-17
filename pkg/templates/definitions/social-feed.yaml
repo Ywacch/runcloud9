@@ -159,15 +159,24 @@ storytelling:
           detail: "Redis sorted set lookup, sub-ms when warm."
           metricsKey: redisAvgLatency
           requires: [cache]
+          lesson: >-
+            Push read path: twenty newest posts from a pre-built timeline. Score is post time;
+            no JOIN when the zset is warm.
         - component: db
           action: "3-table JOIN: posts × follows × users."
           detail: "SELECT ... WHERE follower_id = ? ORDER BY created_at DESC"
           condition: "If Redis empty or no cache"
           requires: [db]
+          lesson: >-
+            Optional miss path when the timeline key is empty. Strict push mode usually
+            returns an empty feed instead of falling back here.
         - component: app-server
           action: "3-table JOIN: posts, follows, users. Returns top 20 by timestamp."
           detail: "SELECT p.* FROM posts p JOIN follows f ON f.followed_id = p.user_id WHERE f.follower_id = $1 ORDER BY p.created_at DESC LIMIT 20"
           onlyWhen: { topology: "!hasCache" }
+          lesson: >-
+            Pull mode: every GET runs this JOIN. Latency tracks how many accounts you follow,
+            not how many posts landed in Redis ahead of time.
       explanation: >-
         In push mode, most warm reads hit Redis. Without cache, every read does a 3-table JOIN.
       explanationVariants:
@@ -196,19 +205,31 @@ storytelling:
           action: "Publish post to fanout exchange."
           detail: "Async — response returns here."
           requires: [mq]
+          lesson: >-
+            The client gets 202 after Postgres and a successful publish. Timeline writes
+            happen later on workers, not on this HTTP thread.
         - component: worker
           action: "Consume from queue, fetch followers from DB."
           requires: [mq, worker]
+          lesson: >-
+            Each message triggers a follower query and a batch of ZADDs. Queue depth
+            and worker count decide how fast timelines catch up.
         - component: cache
           action: "ZADD to timeline:{followerId} for each follower."
           detail: "Batched pipeline fan-out."
           requires: [worker, cache]
+          lesson: >-
+            One post becomes N sorted-set updates. That write amplification is the cost
+            of O(1) feed reads later.
         - component: cache
           action: "App-server does sync ZADD to follower timelines."
           detail: "Fire-and-forget goroutine, does not block response."
           requires: [cache]
           excludeWhen: { topology: "hasMQ" }
           onlyWhen: { topology: "!hasMQ+hasCache" }
+          lesson: >-
+            Sync push: the app loads followers before it responds, then ZADD runs in a
+            goroutine. Reads still hit Redis; POST latency still scales with follower count.
       explanation: >-
         With RabbitMQ, the app inserts the post, publishes one message, and returns
         202 once the broker accepts it. A worker loads followers from Postgres and
