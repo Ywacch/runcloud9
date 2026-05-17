@@ -116,12 +116,16 @@ storytelling:
           action: "GET short:{code} — hot path for popular links."
           metricsKey: redisAvgLatency
           requires: [cache]
+          lesson: >-
+            Most traffic should stop here. A hit avoids Postgres on the read path.
         - component: db
           action: "SELECT original URL by code when cache misses."
           detail: "SELECT url FROM urls WHERE code = ?"
           requires: [db]
           condition: "On miss"
           excludeWhen: { strategy: "read-through" }
+          lesson: >-
+            Cache-aside miss: the app loads the row and can warm Redis for the next GET.
         - component: db
           action: "On miss, the caching proxy runs configured SQL, repopulates short:{code}, then returns the URL to the app."
           detail: "Proxy-driven SELECT + backfill"
@@ -178,6 +182,9 @@ storytelling:
           metricsKey: redisAvgLatency
           requires: [cache]
           onlyWhen: { strategy: "write-through" }
+          lesson: >-
+            Write-through: Redis accepts first; the proxy persists to Postgres before the
+            write completes so later GETs stay warm.
         - component: db
           action: "Row written via caching-proxy after Redis accept."
           requires: [db]

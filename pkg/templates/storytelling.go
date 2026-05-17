@@ -55,6 +55,9 @@ type JourneyStepSpec struct {
 	Condition   string    `yaml:"condition,omitempty" json:"condition,omitempty"`
 	OnlyWhen    *WhenSpec `yaml:"onlyWhen,omitempty" json:"onlyWhen,omitempty"`
 	ExcludeWhen *WhenSpec `yaml:"excludeWhen,omitempty" json:"excludeWhen,omitempty"`
+	// Lesson is optional walkthrough copy for this step only. When empty, the UI should
+	// not repeat the journey-level explanation here (show journey.explanation on the last step only).
+	Lesson string `yaml:"lesson,omitempty" json:"lesson,omitempty"`
 }
 
 // NarrativeRuleContext augments detector narratives (keys = rule ids, e.g. "mq_backpressure").
