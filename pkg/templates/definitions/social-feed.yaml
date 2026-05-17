@@ -195,6 +195,13 @@ storytelling:
           requires: [cache]
           excludeWhen: { topology: "hasMQ" }
           onlyWhen: { topology: "!hasMQ+hasCache" }
+      explanation: >-
+        With RabbitMQ, the app inserts the post, publishes one message, and returns
+        202 once the broker accepts it. A worker loads followers from Postgres and
+        ZADDs each timeline. Your client never waits on Redis.
+        Remove the queue and the app still answers before Redis finishes: it loads
+        followers on the request thread and starts pipeline ZADD in a goroutine.
+        Large follower lists can slow the POST even when the response returns early.
   narrativeContext:
     cache_hit_low:
       cause: >-
