@@ -135,7 +135,7 @@ introspection:
     tables: [products, orders, inventory]
   cache:
     engine: redis
-    keyPatterns: ["product:*", "cart:*"]
+    keyPatterns: ["product:*", "cart:*", "catalog", "product-pool"]
 
 storytelling:
   # Catalog and checkout use direct Redis (cache-aside). Proxy cache strategies are not deployable here (appDatabaseMode: always).
