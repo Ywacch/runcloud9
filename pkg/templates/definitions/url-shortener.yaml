@@ -86,7 +86,7 @@ introspection:
     tables: [urls]
   cache:
     engine: redis
-    keyPatterns: ["short:*"]
+    keyPatterns: ["*"]
 
 storytelling:
   roles:
