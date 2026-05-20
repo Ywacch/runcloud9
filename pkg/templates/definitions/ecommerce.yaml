@@ -129,6 +129,14 @@ proxyQueries:
       FROM (SELECT id FROM products ORDER BY id LIMIT 50) AS x
     params: []
 
+introspection:
+  db:
+    engine: postgres
+    tables: [products, orders, inventory]
+  cache:
+    engine: redis
+    keyPatterns: ["product:*", "cart:*"]
+
 storytelling:
   # Catalog and checkout use direct Redis (cache-aside). Proxy cache strategies are not deployable here (appDatabaseMode: always).
   roles:

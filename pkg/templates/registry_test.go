@@ -7,6 +7,31 @@ import (
 	"testing"
 )
 
+func TestIntrospectionConfig(t *testing.T) {
+	t.Parallel()
+	tmpl := GetTemplate("url-shortener")
+	if tmpl == nil {
+		t.Fatal("template not found")
+	}
+	dbSpec, ok := tmpl.Introspection["db"]
+	if !ok {
+		t.Fatal("db introspection missing")
+	}
+	if dbSpec.Engine != "postgres" {
+		t.Fatalf("want postgres, got %s", dbSpec.Engine)
+	}
+	if len(dbSpec.Tables) == 0 {
+		t.Fatal("no whitelisted tables")
+	}
+	cacheSpec, ok := tmpl.Introspection["cache"]
+	if !ok {
+		t.Fatal("cache introspection missing")
+	}
+	if cacheSpec.Engine != "redis" {
+		t.Fatalf("want redis, got %s", cacheSpec.Engine)
+	}
+}
+
 func TestGetTemplate(t *testing.T) {
 	t.Parallel()
 	if GetTemplate("unknown") != nil {
