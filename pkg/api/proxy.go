@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 var hopByHopResponseHeaders = map[string]struct{}{
@@ -24,9 +26,32 @@ var hopByHopResponseHeaders = map[string]struct{}{
 func setProxyCORS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID")
+	w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID, X-Cloud9-Proxied")
 	w.Header().Set("Access-Control-Max-Age", "86400")
 	_ = r // reserved for future origin checks
+}
+
+// proxyRequestID returns the client trace id or generates one for downstream propagation.
+func proxyRequestID(r *http.Request) string {
+	if id := strings.TrimSpace(r.Header.Get("X-Request-ID")); id != "" {
+		return id
+	}
+	return uuid.NewString()
+}
+
+// proxyRESTHeaders builds outbound headers for the K8s service proxy request.
+func proxyRESTHeaders(r *http.Request, requestID string) map[string]string {
+	h := map[string]string{
+		"X-Request-ID": requestID,
+	}
+	if ct := r.Header.Get("Content-Type"); ct != "" {
+		h["Content-Type"] = ct
+	}
+	if accept := r.Header.Get("Accept"); accept != "" {
+		h["Accept"] = accept
+	}
+	return h
 }
 
 func cacheServiceHTTPPort(design map[string]any) int {
@@ -90,6 +115,7 @@ func resolveProxyTarget(component string, design map[string]any) (host string, p
 func (h *Handler) handleProxy(w http.ResponseWriter, r *http.Request) {
 	setProxyCORS(w, r)
 	if r.Method == http.MethodOptions {
+		w.Header().Set("X-Request-ID", proxyRequestID(r))
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -157,12 +183,11 @@ func (h *Handler) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if len(body) > 0 {
 		restReq = restReq.Body(bytes.NewReader(body))
 	}
-	if ct := r.Header.Get("Content-Type"); ct != "" {
-		restReq = restReq.SetHeader("Content-Type", ct)
+	requestID := proxyRequestID(r)
+	for k, v := range proxyRESTHeaders(r, requestID) {
+		restReq = restReq.SetHeader(k, v)
 	}
-	if accept := r.Header.Get("Accept"); accept != "" {
-		restReq = restReq.SetHeader("Accept", accept)
-	}
+	w.Header().Set("X-Request-ID", requestID)
 
 	result := restReq.Do(ctx)
 	statusCode := 0
