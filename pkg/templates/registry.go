@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/supabase-community/supabase-go"
+	"github.com/ywacch/cloud9/pkg/introspect"
 	"gopkg.in/yaml.v3"
 )
 
@@ -48,6 +49,8 @@ type TemplateSpec struct {
 	LoadgenDefaultRPS int `json:"loadgenDefaultRps,omitempty"`
 	// Storytelling is optional template-authored copy for UI narratives, roles, and journeys.
 	Storytelling *StorytellingSpec `json:"storytelling,omitempty"`
+	// Introspection configures live DB/cache browsing for the data snapshots UI.
+	Introspection introspect.Spec `json:"introspection,omitempty"`
 }
 
 // PresetNode is a fully-configured node for canvas population.
@@ -137,6 +140,7 @@ type templateDef struct {
 	WorkerTimelineStore string            `yaml:"workerTimelineStore"`
 	LoadgenDefaultRPS   int               `yaml:"loadgenDefaultRps"`
 	Storytelling        *StorytellingSpec `yaml:"storytelling"`
+	Introspection       introspect.Spec   `yaml:"introspection"`
 }
 
 // embeddedFree is the in-repo YAML definitions (always available).
@@ -270,6 +274,9 @@ func defToSpec(def *templateDef) TemplateSpec {
 		// store; safe because template defs are read-only after registry load.
 		st := *def.Storytelling
 		spec.Storytelling = &st
+	}
+	if len(def.Introspection) > 0 {
+		spec.Introspection = def.Introspection
 	}
 	if def.Preset != nil {
 		preset := &TemplatePreset{

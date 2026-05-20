@@ -111,6 +111,14 @@ preset:
       protocol: tcp
 
 # Storytelling targets timeline-store on Redis (fan-out / sorted sets), not caching-proxy strategy matrix.
+introspection:
+  db:
+    engine: postgres
+    tables: [users, posts, follows]
+  cache:
+    engine: redis
+    keyPatterns: ["timeline:*"]
+
 storytelling:
   roles:
     cache:

@@ -60,6 +60,11 @@ preset:
       targetId: db-1
       protocol: tcp
 
+introspection:
+  db:
+    engine: postgres
+    tables: [users, posts, follows]
+
 storytelling:
   roles:
     app-server:

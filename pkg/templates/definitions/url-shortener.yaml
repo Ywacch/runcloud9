@@ -80,6 +80,14 @@ proxyQueries:
       - capture: 1
         dbType: text
 
+introspection:
+  db:
+    engine: postgres
+    tables: [urls]
+  cache:
+    engine: redis
+    keyPatterns: ["short:*"]
+
 storytelling:
   roles:
     cache:
