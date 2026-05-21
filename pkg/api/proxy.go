@@ -89,6 +89,16 @@ func cacheServiceHTTPPort(design map[string]any) int {
 	return 6379
 }
 
+// resolveIntrospectRedisHost returns the in-cluster Service name for Redis introspection.
+// Proxy strategies (write-through, write-behind, read-through) expose HTTP on Service "cache"
+// and Redis on Service "redis-internal"; cache-aside uses Service "cache" for Redis directly.
+func resolveIntrospectRedisHost(design map[string]any) string {
+	if cacheServiceHTTPPort(design) == 8081 {
+		return "redis-internal"
+	}
+	return "cache"
+}
+
 // resolveProxyTarget maps a URL component segment to the in-cluster Service DNS name and port.
 // design is the stored deployment JSON (for cache proxy vs redis-only).
 func resolveProxyTarget(component string, design map[string]any) (host string, port int, err error) {

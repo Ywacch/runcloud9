@@ -115,3 +115,54 @@ func TestHandleProxy_OPTIONS_generatesRequestIDWhenMissing(t *testing.T) {
 		t.Fatalf("expected UUID X-Request-ID, got %q: %v", got, err)
 	}
 }
+
+func TestResolveIntrospectRedisHost(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		design map[string]any
+		want   string
+	}{
+		{
+			name: "cache-aside uses cache service",
+			design: map[string]any{
+				"nodes": []any{
+					map[string]any{"type": "cache", "config": map[string]any{"strategy": "cache-aside"}},
+				},
+			},
+			want: "cache",
+		},
+		{
+			name: "write-behind uses redis-internal",
+			design: map[string]any{
+				"nodes": []any{
+					map[string]any{"type": "cache", "config": map[string]any{"strategy": "write-behind"}},
+				},
+			},
+			want: "redis-internal",
+		},
+		{
+			name: "write-through uses redis-internal",
+			design: map[string]any{
+				"nodes": []any{
+					map[string]any{"type": "cache", "config": map[string]any{"strategy": "write-through"}},
+				},
+			},
+			want: "redis-internal",
+		},
+		{
+			name:   "nil design defaults to cache",
+			design: nil,
+			want:   "cache",
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := resolveIntrospectRedisHost(tc.design); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
