@@ -64,12 +64,26 @@ func (h *Handler) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	svcHost, _, err := resolveProxyTarget(component, row.Design)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	var host string
+	switch introSpec.Engine {
+	case "postgres":
+		svcHost, _, err := resolveProxyTarget(component, row.Design)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		host = fmt.Sprintf("%s.%s.svc.cluster.local", svcHost, namespace)
+	case "redis":
+		if component != "cache" {
+			writeError(w, http.StatusBadRequest, "redis introspection only supports cache component")
+			return
+		}
+		svcHost := resolveIntrospectRedisHost(row.Design)
+		host = fmt.Sprintf("%s.%s.svc.cluster.local", svcHost, namespace)
+	default:
+		writeError(w, http.StatusBadRequest, "unsupported engine")
 		return
 	}
-	host := fmt.Sprintf("%s.%s.svc.cluster.local", svcHost, namespace)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
