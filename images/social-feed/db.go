@@ -8,8 +8,12 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrUsernameTaken is returned when CreateUser hits the unique username constraint.
+var ErrUsernameTaken = errors.New("username taken")
 
 var ErrNotFound = errors.New("not found")
 
@@ -248,6 +252,85 @@ func (db *DB) GetFeedPull(ctx context.Context, userID, limit int) ([]FeedItem, e
 			return nil, err
 		}
 		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// Follow inserts a follow edge (idempotent via ON CONFLICT DO NOTHING).
+func (db *DB) Follow(ctx context.Context, followerID, followingID int) error {
+	start := time.Now()
+	defer func() {
+		dbQueryDuration.WithLabelValues("follow").Observe(time.Since(start).Seconds())
+		logDBOp(ctx, "follow", start)
+	}()
+	_, err := db.pool.Exec(ctx,
+		`INSERT INTO follows (follower_id, following_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+		followerID, followingID,
+	)
+	return err
+}
+
+// Unfollow removes a follow edge.
+func (db *DB) Unfollow(ctx context.Context, followerID, followingID int) error {
+	start := time.Now()
+	defer func() {
+		dbQueryDuration.WithLabelValues("unfollow").Observe(time.Since(start).Seconds())
+		logDBOp(ctx, "unfollow", start)
+	}()
+	_, err := db.pool.Exec(ctx,
+		`DELETE FROM follows WHERE follower_id = $1 AND following_id = $2`,
+		followerID, followingID,
+	)
+	return err
+}
+
+// CreateUser inserts a user with the given username.
+func (db *DB) CreateUser(ctx context.Context, username string) (User, error) {
+	start := time.Now()
+	defer func() {
+		dbQueryDuration.WithLabelValues("create_user").Observe(time.Since(start).Seconds())
+		logDBOp(ctx, "create_user", start)
+	}()
+	var u User
+	err := db.pool.QueryRow(ctx,
+		`INSERT INTO users (username) VALUES ($1) RETURNING id, username`,
+		username,
+	).Scan(&u.ID, &u.Username)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return User{}, ErrUsernameTaken
+		}
+		return User{}, err
+	}
+	return u, nil
+}
+
+// ListUsers returns up to limit users ordered by id.
+func (db *DB) ListUsers(ctx context.Context, limit int) ([]User, error) {
+	start := time.Now()
+	defer func() {
+		dbQueryDuration.WithLabelValues("list_users").Observe(time.Since(start).Seconds())
+		logDBOp(ctx, "list_users", start)
+	}()
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := db.pool.Query(ctx,
+		`SELECT id, username, bio FROM users ORDER BY id LIMIT $1`,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]User, 0, limit)
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Username, &u.Bio); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
 	}
 	return out, rows.Err()
 }
