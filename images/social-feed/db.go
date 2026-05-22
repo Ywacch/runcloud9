@@ -8,8 +8,12 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrUsernameTaken is returned when CreateUser hits the unique username constraint.
+var ErrUsernameTaken = errors.New("username taken")
 
 var ErrNotFound = errors.New("not found")
 
@@ -278,6 +282,28 @@ func (db *DB) Unfollow(ctx context.Context, followerID, followingID int) error {
 		followerID, followingID,
 	)
 	return err
+}
+
+// CreateUser inserts a user with the given username.
+func (db *DB) CreateUser(ctx context.Context, username string) (User, error) {
+	start := time.Now()
+	defer func() {
+		dbQueryDuration.WithLabelValues("create_user").Observe(time.Since(start).Seconds())
+		logDBOp(ctx, "create_user", start)
+	}()
+	var u User
+	err := db.pool.QueryRow(ctx,
+		`INSERT INTO users (username) VALUES ($1) RETURNING id, username`,
+		username,
+	).Scan(&u.ID, &u.Username)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return User{}, ErrUsernameTaken
+		}
+		return User{}, err
+	}
+	return u, nil
 }
 
 // ListUsers returns up to limit users ordered by id.

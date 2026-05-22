@@ -40,13 +40,24 @@ func TestHandleUnfollow_rejectsInvalidJSON(t *testing.T) {
 	}
 }
 
-func TestHandleUsersList_rejectsNonGet(t *testing.T) {
+func TestHandleUsers_rejectsUnsupportedMethod(t *testing.T) {
 	t.Parallel()
 	s := &Server{db: newDB(nil)}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/users", nil)
-	s.handleUsersList(rec, req)
+	req := httptest.NewRequest(http.MethodDelete, "/users", nil)
+	s.handleUsers(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status: want 405, got %d", rec.Code)
+	}
+}
+
+func TestHandleUsers_createRejectsEmptyUsername(t *testing.T) {
+	t.Parallel()
+	s := &Server{db: newDB(nil)}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/users", strings.NewReader(`{"username":"   "}`))
+	s.handleUsers(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }

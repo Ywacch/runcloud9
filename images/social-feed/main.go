@@ -65,6 +65,10 @@ type followRequest struct {
 	FollowingID int `json:"following_id"`
 }
 
+type createUserRequest struct {
+	Username string `json:"username"`
+}
+
 func envOrDefault(key, defaultVal string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -173,7 +177,7 @@ func (s *Server) routes() *http.ServeMux {
 		mux.Handle("/post", withRecovery(withMetrics("/post", http.HandlerFunc(s.handlePost))))
 	}
 
-	mux.Handle("/users", withRecovery(http.HandlerFunc(s.handleUsersList)))
+	mux.Handle("/users", withRecovery(http.HandlerFunc(s.handleUsers)))
 	mux.Handle("/users/", withRecovery(withMetrics("/users", http.HandlerFunc(s.handleUser))))
 	mux.Handle("/follow", withRecovery(http.HandlerFunc(s.handleFollow)))
 	mux.Handle("/unfollow", withRecovery(http.HandlerFunc(s.handleUnfollow)))
@@ -375,17 +379,42 @@ func (s *Server) handleUnfollow(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"unfollowed": true})
 }
 
-func (s *Server) handleUsersList(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		users, err := s.db.ListUsers(r.Context(), 20)
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, "failed to list users")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"users": users})
+	case http.MethodPost:
+		var req createUserRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		username := strings.TrimSpace(req.Username)
+		if username == "" {
+			jsonError(w, http.StatusBadRequest, "username is required")
+			return
+		}
+		user, err := s.db.CreateUser(r.Context(), username)
+		if errors.Is(err, ErrUsernameTaken) {
+			jsonError(w, http.StatusConflict, "username already exists")
+			return
+		}
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, "failed to create user")
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"id":       user.ID,
+			"username": user.Username,
+		})
+	default:
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
 	}
-	users, err := s.db.ListUsers(r.Context(), 20)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "failed to list users")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"users": users})
 }
 
 func (s *Server) handleUser(w http.ResponseWriter, r *http.Request) {
