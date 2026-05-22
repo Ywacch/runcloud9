@@ -60,6 +60,11 @@ type postRequest struct {
 	Content string `json:"content"`
 }
 
+type followRequest struct {
+	FollowerID  int `json:"follower_id"`
+	FollowingID int `json:"following_id"`
+}
+
 func envOrDefault(key, defaultVal string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -168,7 +173,10 @@ func (s *Server) routes() *http.ServeMux {
 		mux.Handle("/post", withRecovery(withMetrics("/post", http.HandlerFunc(s.handlePost))))
 	}
 
+	mux.Handle("/users", withRecovery(http.HandlerFunc(s.handleUsersList)))
 	mux.Handle("/users/", withRecovery(withMetrics("/users", http.HandlerFunc(s.handleUser))))
+	mux.Handle("/follow", withRecovery(http.HandlerFunc(s.handleFollow)))
+	mux.Handle("/unfollow", withRecovery(http.HandlerFunc(s.handleUnfollow)))
 	mux.Handle("/health", withRecovery(http.HandlerFunc(s.handleHealth)))
 	mux.Handle("/cache-stats", withRecovery(http.HandlerFunc(s.handleCacheStats)))
 	mux.Handle("/metrics", promhttp.Handler())
@@ -294,6 +302,90 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 	body, _ := json.Marshal(map[string]any{"feed": items, "mode": mode, "count": len(items)})
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(body)
+}
+
+func decodeFollowRequest(w http.ResponseWriter, r *http.Request) (followRequest, bool) {
+	var req followRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid json body")
+		return followRequest{}, false
+	}
+	if req.FollowerID <= 0 || req.FollowingID <= 0 {
+		jsonError(w, http.StatusBadRequest, "follower_id and following_id must be > 0")
+		return followRequest{}, false
+	}
+	return req, true
+}
+
+func (s *Server) validateFollowUsers(ctx context.Context, w http.ResponseWriter, followerID, followingID int) bool {
+	if _, err := s.db.GetUser(ctx, followerID); errors.Is(err, ErrNotFound) {
+		jsonError(w, http.StatusNotFound, "follower not found")
+		return false
+	} else if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to validate follower")
+		return false
+	}
+	if _, err := s.db.GetUser(ctx, followingID); errors.Is(err, ErrNotFound) {
+		jsonError(w, http.StatusNotFound, "following user not found")
+		return false
+	} else if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to validate following user")
+		return false
+	}
+	return true
+}
+
+func (s *Server) handleFollow(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	req, ok := decodeFollowRequest(w, r)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
+	if !s.validateFollowUsers(ctx, w, req.FollowerID, req.FollowingID) {
+		return
+	}
+	if err := s.db.Follow(ctx, req.FollowerID, req.FollowingID); err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to follow")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"followed": true})
+}
+
+func (s *Server) handleUnfollow(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	req, ok := decodeFollowRequest(w, r)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
+	if !s.validateFollowUsers(ctx, w, req.FollowerID, req.FollowingID) {
+		return
+	}
+	if err := s.db.Unfollow(ctx, req.FollowerID, req.FollowingID); err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to unfollow")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"unfollowed": true})
+}
+
+func (s *Server) handleUsersList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	users, err := s.db.ListUsers(r.Context(), 20)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to list users")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"users": users})
 }
 
 func (s *Server) handleUser(w http.ResponseWriter, r *http.Request) {
