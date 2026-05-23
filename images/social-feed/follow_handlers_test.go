@@ -51,6 +51,23 @@ func TestHandleUsers_rejectsUnsupportedMethod(t *testing.T) {
 	}
 }
 
+func TestEscapeLikePattern(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		in, want string
+	}{
+		{"alice", "alice"},
+		{"100%", "100\\%"},
+		{"a_b", `a\_b`},
+		{`a\b`, `a\\b`},
+	}
+	for _, tc := range tests {
+		if got := escapeLikePattern(tc.in); got != tc.want {
+			t.Fatalf("escapeLikePattern(%q): got %q want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestHandleUsers_createRejectsEmptyUsername(t *testing.T) {
 	t.Parallel()
 	s := &Server{db: newDB(nil)}

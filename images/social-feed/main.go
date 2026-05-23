@@ -382,7 +382,24 @@ func (s *Server) handleUnfollow(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		users, err := s.db.ListUsers(r.Context(), 20)
+		query := strings.TrimSpace(r.URL.Query().Get("username"))
+		if alt := strings.TrimSpace(r.URL.Query().Get("q")); query == "" {
+			query = alt
+		}
+		var (
+			users []User
+			err   error
+		)
+		if query != "" {
+			users, err = s.db.SearchUsersByUsername(r.Context(), query, 20)
+			if err != nil {
+				jsonError(w, http.StatusInternalServerError, "failed to search users")
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"users": users, "query": query})
+			return
+		}
+		users, err = s.db.ListUsers(r.Context(), 20)
 		if err != nil {
 			jsonError(w, http.StatusInternalServerError, "failed to list users")
 			return
