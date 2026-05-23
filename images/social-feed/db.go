@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -304,6 +305,43 @@ func (db *DB) CreateUser(ctx context.Context, username string) (User, error) {
 		return User{}, err
 	}
 	return u, nil
+}
+
+// SearchUsersByUsername returns users whose username contains query (case-insensitive).
+func (db *DB) SearchUsersByUsername(ctx context.Context, query string, limit int) ([]User, error) {
+	start := time.Now()
+	defer func() {
+		dbQueryDuration.WithLabelValues("search_users").Observe(time.Since(start).Seconds())
+		logDBOp(ctx, "search_users", start)
+	}()
+	if limit <= 0 {
+		limit = 20
+	}
+	pattern := "%" + escapeLikePattern(query) + "%"
+	rows, err := db.pool.Query(ctx,
+		`SELECT id, username, bio FROM users WHERE username ILIKE $1 ESCAPE '\' ORDER BY username LIMIT $2`,
+		pattern, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]User, 0, limit)
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Username, &u.Bio); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+func escapeLikePattern(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
 }
 
 // ListUsers returns up to limit users ordered by id.
