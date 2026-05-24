@@ -404,7 +404,7 @@ func TestHandleStartLoadGen_URLShortenerOK(t *testing.T) {
 	if out.Status != "started" || out.Template != "url-shortener" {
 		t.Fatalf("response: %+v", out)
 	}
-	lg.Stop("ns-ok")
+	_ = lg.Stop(context.Background(), "ns-ok")
 }
 
 func TestGenerateNamespace_FormatAndUniqueness(t *testing.T) {

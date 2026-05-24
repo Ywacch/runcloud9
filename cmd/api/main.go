@@ -222,7 +222,7 @@ func main() {
 	// teardownFn uses context.Background() so cleanup is never cut short by request cancel or timeout.
 	teardownFn := func(namespace string) {
 		// Stop load generator first — prevents requests to a dying namespace
-		lg.Stop(namespace)
+		_ = lg.Stop(context.Background(), namespace)
 		ctx := context.Background()
 		tpl := ""
 		var row store.DeploymentRow

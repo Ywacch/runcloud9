@@ -17,15 +17,26 @@ import (
 	vegeta "github.com/tsenart/vegeta/v12/lib"
 )
 
-// LoadGenerator manages one vegeta attacker per active deployment.
+// LoadGenerator drives HTTP load for a deployment namespace.
+// LocalLoadGenerator is the in-process Vegeta implementation; remote backends
+// can satisfy the same contract later.
+type LoadGenerator interface {
+	Start(ctx context.Context, namespace string, profile LoadProfile) error
+	Stop(ctx context.Context, namespace string) error
+	GetStats(namespace string) LoadStats
+}
+
+// LocalLoadGenerator manages one vegeta attacker per active deployment.
 // UNDERSTAND: vegeta sends requests from INSIDE the Go API server process.
 // The API server runs inside the K8s cluster (or locally with port-forward),
 // so it can reach deployment services via ClusterIP DNS names.
 // This is simpler than deploying a separate load-gen pod per deployment.
-type LoadGenerator struct {
+type LocalLoadGenerator struct {
 	mu     sync.Mutex
 	active map[string]*attackSession // keyed by namespace
 }
+
+var _ LoadGenerator = (*LocalLoadGenerator)(nil)
 
 type attackSession struct {
 	cancel  context.CancelFunc
@@ -35,8 +46,8 @@ type attackSession struct {
 	mu      sync.RWMutex // protects stats reads
 }
 
-func NewLoadGenerator() *LoadGenerator {
-	return &LoadGenerator{
+func NewLoadGenerator() *LocalLoadGenerator {
+	return &LocalLoadGenerator{
 		active: make(map[string]*attackSession),
 	}
 }
@@ -56,7 +67,8 @@ func resolveLoadgenBaseURL(namespace string, profile LoadProfile) string {
 // If already running, updates the profile (stops and restarts with new config).
 // UNDERSTAND: the app-server Service DNS name is "app-server.{namespace}.svc.cluster.local"
 // but within the cluster, K8s DNS resolves "app-server.{namespace}" just fine.
-func (lg *LoadGenerator) Start(namespace string, profile LoadProfile) error {
+func (lg *LocalLoadGenerator) Start(ctx context.Context, namespace string, profile LoadProfile) error {
+	_ = ctx // reserved for cancellation on future remote implementations
 	profile = NormalizeProfile(profile)
 	if profile.Template == "" {
 		return fmt.Errorf("loadgen: template is required")
@@ -102,7 +114,8 @@ func (lg *LoadGenerator) Start(namespace string, profile LoadProfile) error {
 }
 
 // Stop halts traffic generation for the given namespace.
-func (lg *LoadGenerator) Stop(namespace string) {
+func (lg *LocalLoadGenerator) Stop(ctx context.Context, namespace string) error {
+	_ = ctx
 	lg.mu.Lock()
 	defer lg.mu.Unlock()
 
@@ -113,10 +126,11 @@ func (lg *LoadGenerator) Stop(namespace string) {
 		session.mu.Unlock()
 		delete(lg.active, namespace)
 	}
+	return nil
 }
 
 // finish removes the session when the attack ends naturally (finite duration).
-func (lg *LoadGenerator) finish(namespace string, s *attackSession) {
+func (lg *LocalLoadGenerator) finish(namespace string, s *attackSession) {
 	lg.mu.Lock()
 	defer lg.mu.Unlock()
 	if cur, ok := lg.active[namespace]; ok && cur == s {
@@ -128,7 +142,7 @@ func (lg *LoadGenerator) finish(namespace string, s *attackSession) {
 }
 
 // GetStats returns the current load stats for a namespace (or a zero-value inactive stats).
-func (lg *LoadGenerator) GetStats(namespace string) LoadStats {
+func (lg *LocalLoadGenerator) GetStats(namespace string) LoadStats {
 	lg.mu.Lock()
 	session, ok := lg.active[namespace]
 	lg.mu.Unlock()
@@ -141,7 +155,7 @@ func (lg *LoadGenerator) GetStats(namespace string) LoadStats {
 	return session.stats
 }
 
-func (s *attackSession) run(ctx context.Context, lg *LoadGenerator, namespace string, profile LoadProfile) {
+func (s *attackSession) run(ctx context.Context, lg *LocalLoadGenerator, namespace string, profile LoadProfile) {
 	baseURL := resolveLoadgenBaseURL(namespace, profile)
 	specs := s.specs
 
