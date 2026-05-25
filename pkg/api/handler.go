@@ -623,6 +623,14 @@ func (h *Handler) orchestrate(
 			seedingStatus = "done"
 		}
 	}
+
+	if h.clientset != nil {
+		tier := "explorer"
+		if err := deployer.DeployLoadgen(ctx, h.clientset, namespace, tier); err != nil {
+			log.Printf("loadgen pod deploy failed for namespace=%s (load testing unavailable): %v", namespace, err)
+		}
+	}
+
 	h.emitProvisionStatus(namespace, "running", componentStatus, seedingStatus)
 
 	return &deployer.DeploymentResult{

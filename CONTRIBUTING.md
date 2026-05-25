@@ -113,6 +113,7 @@ Use the Go package name or area:
 | `ecommerce` | `images/ecommerce/` |
 | `fanout-worker` | `images/fanout-worker/` |
 | `caching-proxy` | `images/caching-proxy/` |
+| `loadgen` | `images/loadgen/` |
 | `infra` | Terraform, Helm, k8s manifests |
 | `ci` | GitHub Actions |
 

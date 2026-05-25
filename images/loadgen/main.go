@@ -1,0 +1,327 @@
+// Command loadgen runs an HTTP load generator (Vegeta) for a single deployment namespace.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"math/rand"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	vegeta "github.com/tsenart/vegeta/v12/lib"
+)
+
+const listenAddr = ":9100"
+
+type startRequest struct {
+	RPS             int            `json:"rps"`
+	DurationSeconds int64          `json:"durationSeconds"`
+	Targets         []targetInput  `json:"targets"`
+	Distribution    map[string]int `json:"distribution,omitempty"`
+}
+
+type targetInput struct {
+	URL    string `json:"url"`
+	Method string `json:"method"`
+	Body   string `json:"body"`
+	Weight int    `json:"weight"`
+}
+
+// loadStats matches pkg/loadgen.LoadStats JSON consumed by the API.
+type loadStats struct {
+	Active          bool           `json:"active"`
+	CurrentRPS      float64        `json:"currentRps"`
+	TotalRequests   uint64         `json:"totalRequests"`
+	SuccessRate     float64        `json:"successRate"`
+	MeanLatency     float64        `json:"meanLatency"`
+	P99Latency      float64        `json:"p99Latency"`
+	DurationSeconds float64        `json:"durationSeconds"`
+	StatusCodes     map[string]int `json:"statusCodes"`
+	Distribution    map[string]int `json:"distribution"`
+	StartedAt       *time.Time     `json:"startedAt"`
+}
+
+type server struct {
+	mu sync.Mutex
+
+	running      bool
+	cancel       context.CancelFunc
+	configuredRPS int
+	distribution map[string]int
+	startedAt    *time.Time
+
+	statsMu sync.RWMutex
+	stats   loadStats
+}
+
+func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(logger)
+
+	srv := &server{
+		stats: loadStats{
+			StatusCodes:  map[string]int{},
+			Distribution: map[string]int{},
+		},
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /start", srv.handleStart)
+	mux.HandleFunc("DELETE /stop", srv.handleStop)
+	mux.HandleFunc("GET /metrics", srv.handleMetrics)
+
+	httpServer := &http.Server{
+		Addr:              listenAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	go func() {
+		slog.Info("loadgen listening", "addr", listenAddr)
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("listen failed", "error", err)
+			os.Exit(1)
+		}
+	}()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	<-ctx.Done()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = httpServer.Shutdown(shutdownCtx)
+}
+
+func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req startRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if req.RPS <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rps must be positive"})
+		return
+	}
+	if len(req.Targets) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "targets required"})
+		return
+	}
+
+	s.mu.Lock()
+	if s.running {
+		s.mu.Unlock()
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "load already running"})
+		return
+	}
+
+	if s.cancel != nil {
+		s.cancel()
+	}
+
+	attackCtx, cancel := context.WithCancel(context.Background())
+	s.running = true
+	s.cancel = cancel
+	s.configuredRPS = req.RPS
+	s.distribution = copyIntMap(req.Distribution)
+	now := time.Now()
+	s.startedAt = &now
+
+	s.statsMu.Lock()
+	s.stats = loadStats{
+		Active:       true,
+		CurrentRPS:   float64(req.RPS),
+		StatusCodes:  map[string]int{},
+		Distribution: copyIntMap(req.Distribution),
+		StartedAt:    &now,
+	}
+	s.statsMu.Unlock()
+	s.mu.Unlock()
+
+	go s.runAttack(attackCtx, req)
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
+}
+
+func (s *server) handleStop(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	if s.running && s.cancel != nil {
+		s.cancel()
+	}
+	s.running = false
+	s.cancel = nil
+	s.mu.Unlock()
+
+	s.statsMu.Lock()
+	s.stats.Active = false
+	s.statsMu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+func (s *server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	s.statsMu.RLock()
+	out := s.stats
+	s.statsMu.RUnlock()
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *server) runAttack(ctx context.Context, req startRequest) {
+	defer func() {
+		s.mu.Lock()
+		s.running = false
+		s.cancel = nil
+		s.mu.Unlock()
+
+		s.statsMu.Lock()
+		s.stats.Active = false
+		s.statsMu.Unlock()
+	}()
+
+	targeter := buildTargeter(req.Targets)
+	attacker := vegeta.NewAttacker(
+		vegeta.Timeout(5*time.Second),
+		vegeta.Workers(10),
+		vegeta.MaxWorkers(20),
+	)
+
+	rate := vegeta.Rate{Freq: req.RPS, Per: time.Second}
+	var attackDur time.Duration
+	if req.DurationSeconds > 0 {
+		attackDur = time.Duration(req.DurationSeconds) * time.Second
+	}
+
+	results := attacker.Attack(targeter, rate, attackDur, "cloud9-loadgen-pod")
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	var vm vegeta.Metrics
+	var vmMu sync.Mutex
+
+	for {
+		select {
+		case res, ok := <-results:
+			if !ok {
+				vmMu.Lock()
+				vm.Close()
+				s.pushStats(&vm, req.RPS)
+				vmMu.Unlock()
+				return
+			}
+			vmMu.Lock()
+			vm.Add(res)
+			vmMu.Unlock()
+
+		case <-ticker.C:
+			vmMu.Lock()
+			vm.Close()
+			s.pushStats(&vm, req.RPS)
+			vmMu.Unlock()
+
+		case <-ctx.Done():
+			attacker.Stop()
+			return
+		}
+	}
+}
+
+func (s *server) pushStats(vm *vegeta.Metrics, rps int) {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+
+	s.stats.TotalRequests = vm.Requests
+	s.stats.CurrentRPS = float64(rps)
+	s.stats.SuccessRate = vm.Success * 100
+	s.stats.MeanLatency = vm.Latencies.Mean.Seconds()
+	s.stats.P99Latency = vm.Latencies.P99.Seconds()
+	if s.startedAt != nil {
+		s.stats.DurationSeconds = time.Since(*s.startedAt).Seconds()
+	}
+	s.stats.StatusCodes = copyIntMap(vm.StatusCodes)
+	if len(s.distribution) > 0 {
+		s.stats.Distribution = copyIntMap(s.distribution)
+	}
+}
+
+func buildTargeter(targets []targetInput) vegeta.Targeter {
+	type weighted struct {
+		t      targetInput
+		weight int
+	}
+	var list []weighted
+	total := 0
+	for _, t := range targets {
+		w := t.Weight
+		if w <= 0 {
+			continue
+		}
+		list = append(list, weighted{t: t, weight: w})
+		total += w
+	}
+	if len(list) == 0 && len(targets) > 0 {
+		list = append(list, weighted{t: targets[0], weight: 1})
+		total = 1
+	}
+	if total == 0 {
+		total = 1
+	}
+
+	var mu sync.Mutex
+	return func(tgt *vegeta.Target) error {
+		mu.Lock()
+		defer mu.Unlock()
+
+		r := rand.Intn(total)
+		cumulative := 0
+		var selected targetInput
+		for _, w := range list {
+			cumulative += w.weight
+			if r < cumulative {
+				selected = w.t
+				break
+			}
+		}
+
+		tgt.Method = selected.Method
+		tgt.URL = selected.URL
+		if selected.Body != "" {
+			body := strings.ReplaceAll(selected.Body, "{{.Rand}}", fmt.Sprintf("%d", rand.Intn(1_000_000)))
+			tgt.Body = []byte(body)
+			tgt.Header = http.Header{"Content-Type": []string{"application/json"}}
+		} else {
+			tgt.Body = nil
+			tgt.Header = http.Header{}
+		}
+		tgt.Header.Set("X-Request-ID", fmt.Sprintf("%x", rand.Uint64()))
+		return nil
+	}
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func copyIntMap(m map[string]int) map[string]int {
+	if m == nil {
+		return map[string]int{}
+	}
+	out := make(map[string]int, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
