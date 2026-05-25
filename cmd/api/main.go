@@ -215,14 +215,19 @@ func main() {
 
 	templates.InitRegistry(deploymentStore.SupabaseClient())
 
-	lg := loadgen.NewLoadGenerator()
+	var lg loadgen.LoadGenerator
+	if os.Getenv("DEPLOYER") == "k8s" {
+		lg = loadgen.NewPodLoadGenerator(clientset)
+	} else {
+		lg = loadgen.NewLocalLoadGenerator()
+	}
 	var metricsCollector *metrics.MetricsCollector
 	var diagnosticsCollector *diagnostics.Collector
 
 	// teardownFn uses context.Background() so cleanup is never cut short by request cancel or timeout.
 	teardownFn := func(namespace string) {
 		// Stop load generator first — prevents requests to a dying namespace
-		lg.Stop(namespace)
+		_ = lg.Stop(context.Background(), namespace)
 		ctx := context.Background()
 		tpl := ""
 		var row store.DeploymentRow

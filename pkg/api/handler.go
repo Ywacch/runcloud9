@@ -42,7 +42,7 @@ type Handler struct {
 	metricsCollector *metrics.MetricsCollector
 	diagnostics      *diagnostics.Collector
 	clientset        kubernetes.Interface
-	loadgen          *loadgen.LoadGenerator
+	loadgen          loadgen.LoadGenerator
 	eventBus         *metrics.EventBus
 	provisionMu      sync.Mutex
 	provisionCancel  map[string]context.CancelFunc
@@ -82,7 +82,7 @@ func NewHandler(
 	metricsCollector *metrics.MetricsCollector,
 	diagnosticsCollector *diagnostics.Collector,
 	clientset kubernetes.Interface,
-	lg *loadgen.LoadGenerator,
+	lg loadgen.LoadGenerator,
 	eventBus *metrics.EventBus,
 ) *Handler {
 	var seedSvc seederService
@@ -623,6 +623,14 @@ func (h *Handler) orchestrate(
 			seedingStatus = "done"
 		}
 	}
+
+	if h.clientset != nil {
+		tier := "explorer"
+		if err := deployer.DeployLoadgen(ctx, h.clientset, namespace, tier); err != nil {
+			log.Printf("loadgen pod deploy failed for namespace=%s (load testing unavailable): %v", namespace, err)
+		}
+	}
+
 	h.emitProvisionStatus(namespace, "running", componentStatus, seedingStatus)
 
 	return &deployer.DeploymentResult{
@@ -792,7 +800,7 @@ func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 		profile.BaseURL = fmt.Sprintf("http://lb.%s.svc.cluster.local:80", namespace)
 	}
 
-	if err := h.loadgen.Start(namespace, profile); err != nil {
+	if err := h.loadgen.Start(r.Context(), namespace, profile); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -834,7 +842,7 @@ func (h *Handler) handleStopLoadGen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.loadgen.Stop(namespace)
+	_ = h.loadgen.Stop(r.Context(), namespace)
 	if h.eventBus != nil {
 		h.eventBus.Emit(namespace, metrics.Event{
 			Timestamp:   time.Now(),
@@ -860,7 +868,7 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 	h.cancelProvision(namespace)
 	// Stop load generator if running (prevents requests to a dying namespace)
 	if h.loadgen != nil {
-		h.loadgen.Stop(namespace)
+		_ = h.loadgen.Stop(r.Context(), namespace)
 	}
 	if h.scheduler != nil {
 		h.scheduler.Cancel(namespace)

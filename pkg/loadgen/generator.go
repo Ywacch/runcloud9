@@ -17,28 +17,45 @@ import (
 	vegeta "github.com/tsenart/vegeta/v12/lib"
 )
 
-// LoadGenerator manages one vegeta attacker per active deployment.
+// LoadGenerator drives HTTP load for a deployment namespace.
+// LocalLoadGenerator is the in-process Vegeta implementation; remote backends
+// can satisfy the same contract later.
+type LoadGenerator interface {
+	Start(ctx context.Context, namespace string, profile LoadProfile) error
+	Stop(ctx context.Context, namespace string) error
+	GetStats(namespace string) LoadStats
+}
+
+// LocalLoadGenerator manages one vegeta attacker per active deployment.
 // UNDERSTAND: vegeta sends requests from INSIDE the Go API server process.
 // The API server runs inside the K8s cluster (or locally with port-forward),
 // so it can reach deployment services via ClusterIP DNS names.
 // This is simpler than deploying a separate load-gen pod per deployment.
-type LoadGenerator struct {
+type LocalLoadGenerator struct {
 	mu     sync.Mutex
 	active map[string]*attackSession // keyed by namespace
 }
 
+var _ LoadGenerator = (*LocalLoadGenerator)(nil)
+
 type attackSession struct {
 	cancel  context.CancelFunc
 	profile LoadProfile
-	specs   []EndpointSpec // effective specs (registry copy + weight overrides), frozen for this run
+	targets []ResolvedTarget
 	stats   LoadStats
 	mu      sync.RWMutex // protects stats reads
 }
 
-func NewLoadGenerator() *LoadGenerator {
-	return &LoadGenerator{
+// NewLocalLoadGenerator returns an in-process vegeta load generator.
+func NewLocalLoadGenerator() *LocalLoadGenerator {
+	return &LocalLoadGenerator{
 		active: make(map[string]*attackSession),
 	}
+}
+
+// NewLoadGenerator is deprecated; use NewLocalLoadGenerator.
+func NewLoadGenerator() *LocalLoadGenerator {
+	return NewLocalLoadGenerator()
 }
 
 // resolveLoadgenBaseURL picks the HTTP origin for vegeta. LOADGEN_BASE_URL overrides everything (local port-forward).
@@ -56,22 +73,11 @@ func resolveLoadgenBaseURL(namespace string, profile LoadProfile) string {
 // If already running, updates the profile (stops and restarts with new config).
 // UNDERSTAND: the app-server Service DNS name is "app-server.{namespace}.svc.cluster.local"
 // but within the cluster, K8s DNS resolves "app-server.{namespace}" just fine.
-func (lg *LoadGenerator) Start(namespace string, profile LoadProfile) error {
+func (lg *LocalLoadGenerator) Start(ctx context.Context, namespace string, profile LoadProfile) error {
 	profile = NormalizeProfile(profile)
-	if profile.Template == "" {
-		return fmt.Errorf("loadgen: template is required")
-	}
-	specs, ok := cloneEndpointSpecs(profile.Template)
-	if !ok {
-		return fmt.Errorf("loadgen: unknown template %q", profile.Template)
-	}
-	if len(profile.Distribution) == 0 {
-		return fmt.Errorf("loadgen: no distribution for template %q", profile.Template)
-	}
-	for i := range specs {
-		if w, ok := profile.Distribution[DistributionKey(specs[i])]; ok {
-			specs[i].Weight = w
-		}
+	targets, distribution, err := profileToTargets(ctx, namespace, profile)
+	if err != nil {
+		return err
 	}
 
 	lg.mu.Lock()
@@ -82,27 +88,27 @@ func (lg *LoadGenerator) Start(namespace string, profile LoadProfile) error {
 		delete(lg.active, namespace)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	effectiveDist := EffectiveDistribution(specs)
+	attackCtx, cancel := context.WithCancel(context.Background())
 	session := &attackSession{
 		cancel:  cancel,
 		profile: profile,
-		specs:   specs,
+		targets: targets,
 		stats: LoadStats{
 			Active:       true,
 			StartedAt:    ptrTime(time.Now()),
-			Distribution: copyDist(effectiveDist),
+			Distribution: copyDist(distribution),
 			StatusCodes:  make(map[string]int),
 		},
 	}
 	lg.active[namespace] = session
 
-	go session.run(ctx, lg, namespace, profile)
+	go session.run(attackCtx, lg, namespace, profile)
 	return nil
 }
 
 // Stop halts traffic generation for the given namespace.
-func (lg *LoadGenerator) Stop(namespace string) {
+func (lg *LocalLoadGenerator) Stop(ctx context.Context, namespace string) error {
+	_ = ctx
 	lg.mu.Lock()
 	defer lg.mu.Unlock()
 
@@ -113,10 +119,11 @@ func (lg *LoadGenerator) Stop(namespace string) {
 		session.mu.Unlock()
 		delete(lg.active, namespace)
 	}
+	return nil
 }
 
 // finish removes the session when the attack ends naturally (finite duration).
-func (lg *LoadGenerator) finish(namespace string, s *attackSession) {
+func (lg *LocalLoadGenerator) finish(namespace string, s *attackSession) {
 	lg.mu.Lock()
 	defer lg.mu.Unlock()
 	if cur, ok := lg.active[namespace]; ok && cur == s {
@@ -128,7 +135,7 @@ func (lg *LoadGenerator) finish(namespace string, s *attackSession) {
 }
 
 // GetStats returns the current load stats for a namespace (or a zero-value inactive stats).
-func (lg *LoadGenerator) GetStats(namespace string) LoadStats {
+func (lg *LocalLoadGenerator) GetStats(namespace string) LoadStats {
 	lg.mu.Lock()
 	session, ok := lg.active[namespace]
 	lg.mu.Unlock()
@@ -141,31 +148,20 @@ func (lg *LoadGenerator) GetStats(namespace string) LoadStats {
 	return session.stats
 }
 
-func (s *attackSession) run(ctx context.Context, lg *LoadGenerator, namespace string, profile LoadProfile) {
-	baseURL := resolveLoadgenBaseURL(namespace, profile)
-	specs := s.specs
-
-	pools := fetchParamPools(baseURL, specs)
-	for _, spec := range specs {
-		if spec.ParamName != "" && spec.PoolEndpoint != "" && len(pools[spec.ParamName]) == 0 {
-			slog.Warn("loadgen param pool empty, using random placeholders", "namespace", namespace, "param", spec.ParamName)
-		}
-	}
-
+func (s *attackSession) run(ctx context.Context, lg *LocalLoadGenerator, namespace string, profile LoadProfile) {
 	// UNDERSTAND: vegeta.NewAttacker creates an HTTP client that sends requests
-	// at the specified rate. We build a custom targeter that distributes requests
-	// across endpoints according to the profile weights.
+	// at the specified rate. Targets were resolved in Start via profileToTargets.
 	attacker := vegeta.NewAttacker(
 		vegeta.Timeout(5*time.Second),
 		vegeta.Workers(10),
 		vegeta.MaxWorkers(20),
 	)
 
-	targeter := buildTargeter(baseURL, specs, pools)
+	targeter := buildTargeterFromResolved(s.targets)
 	rate := vegeta.Rate{Freq: profile.RPS, Per: time.Second}
 	attackDur := profile.AttackDuration()
 
-	slog.Info("loadgen started", "namespace", namespace, "template", profile.Template, "rps", profile.RPS, "baseURL", baseURL)
+	slog.Info("loadgen started", "namespace", namespace, "template", profile.Template, "rps", profile.RPS, "targets", len(s.targets))
 
 	var vm vegeta.Metrics
 	var vmMu sync.Mutex
@@ -242,7 +238,7 @@ type poolPair struct {
 
 // fetchParamPools fetches parameter pools for all endpoints that need them.
 // Returns map[paramName][]string. Deduplicates HTTP GET by (PoolEndpoint, PoolField).
-func fetchParamPools(baseURL string, specs []EndpointSpec) map[string][]string {
+func fetchParamPools(ctx context.Context, baseURL string, specs []EndpointSpec) map[string][]string {
 	pools := make(map[string][]string)
 	byKey := make(map[poolPair][]string)
 	for _, s := range specs {
@@ -253,7 +249,7 @@ func fetchParamPools(baseURL string, specs []EndpointSpec) map[string][]string {
 		byKey[k] = append(byKey[k], s.ParamName)
 	}
 	for k, paramNames := range byKey {
-		values := fetchPool(baseURL, k.endpoint, k.field)
+		values := fetchPool(ctx, baseURL, k.endpoint, k.field)
 		if len(values) == 0 {
 			continue
 		}
@@ -267,26 +263,30 @@ func fetchParamPools(baseURL string, specs []EndpointSpec) map[string][]string {
 }
 
 // fetchPool retries a few times — covers the window after seeding where the app may not yet return rows.
-func fetchPool(baseURL, endpoint, field string) []string {
+func fetchPool(ctx context.Context, baseURL, endpoint, field string) []string {
 	for attempt := 0; attempt < 3; attempt++ {
-		values := fetchPoolOnce(baseURL, endpoint, field)
+		values := fetchPoolOnce(ctx, baseURL, endpoint, field)
 		if len(values) > 0 {
 			return values
 		}
 		if attempt < 2 {
 			slog.Info("loadgen pool empty, retrying", "endpoint", endpoint, "attempt", attempt+1)
-			time.Sleep(2 * time.Second)
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(2 * time.Second):
+			}
 		}
 	}
 	slog.Warn("loadgen pool empty after retries, using random placeholders", "endpoint", endpoint)
 	return nil
 }
 
-func fetchPoolOnce(baseURL, endpoint, field string) []string {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func fetchPoolOnce(ctx context.Context, baseURL, endpoint, field string) []string {
+	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+endpoint, nil)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, baseURL+endpoint, nil)
 	if err != nil {
 		return nil
 	}

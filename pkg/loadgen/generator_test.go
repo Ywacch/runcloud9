@@ -1,6 +1,7 @@
 package loadgen
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -58,7 +59,7 @@ func TestFetchPoolOnce_MixedTypePoolValues(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got := fetchPoolOnce(srv.URL, "/product-pool", "productIds")
+	got := fetchPoolOnce(context.Background(), srv.URL, "/product-pool", "productIds")
 	want := []string{"1", "2", "3"}
 	if len(got) != len(want) {
 		t.Fatalf("len: got %d want %d", len(got), len(want))

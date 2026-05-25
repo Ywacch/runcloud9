@@ -570,7 +570,7 @@ go run cmd/api/main.go 8081
 ## 7. Docker
 
 ### Purpose
-Docker builds and pushes the template images (url-shortener, caching-proxy) to GCP Artifact Registry. Images are pulled by GKE at deploy time.
+Docker builds and pushes the template images (url-shortener, caching-proxy, loadgen) to GCP Artifact Registry. Images are pulled by GKE at deploy time.
 
 ### Prerequisites
 - Docker Desktop installed and running
@@ -588,6 +588,10 @@ docker push us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/url-shortene
 # Caching proxy (from images/caching-proxy/)
 docker build -t us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/caching-proxy:${RELEASE_TAG} .
 docker push us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/caching-proxy:${RELEASE_TAG}
+
+# Load generator (from images/loadgen/)
+docker build -t us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/loadgen:${RELEASE_TAG} .
+docker push us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images/loadgen:${RELEASE_TAG}
 ```
 
 Preferred production flow uses a manifest:
@@ -595,7 +599,8 @@ Preferred production flow uses a manifest:
 ```json
 {
   "url-shortener": "git-1a2b3c4",
-  "caching-proxy": "git-1a2b3c4"
+  "caching-proxy": "git-1a2b3c4",
+  "loadgen": "git-1a2b3c4"
 }
 ```
 

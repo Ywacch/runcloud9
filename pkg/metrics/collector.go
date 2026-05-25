@@ -41,7 +41,7 @@ type MetricsCollector struct {
 	prometheusURL string
 	httpClient    *http.Client
 	scrapeClient  *http.Client // short timeout for in-cluster LB / RabbitMQ HTTP scrapes
-	loadgen       *loadgen.LoadGenerator
+	loadgen       loadgen.LoadGenerator
 	clientset     kubernetes.Interface // optional: LB metadata from ConfigMap
 	debugMetrics  bool
 	eventBus      *EventBus
@@ -54,7 +54,7 @@ type MetricsCollector struct {
 }
 
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
-func NewMetricsCollector(prometheusURL string, lg *loadgen.LoadGenerator, clientset kubernetes.Interface, eventBus *EventBus) *MetricsCollector {
+func NewMetricsCollector(prometheusURL string, lg loadgen.LoadGenerator, clientset kubernetes.Interface, eventBus *EventBus) *MetricsCollector {
 	return &MetricsCollector{
 		prometheusURL: prometheusURL,
 		httpClient:    &http.Client{Timeout: 5 * time.Second},
