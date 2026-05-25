@@ -134,6 +134,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("OPTIONS /deployments/{id}/introspect/{component}/key/{param}", auth(http.HandlerFunc(h.handleIntrospect)))
 	mux.Handle("POST /deployments/{id}/loadgen", auth(http.HandlerFunc(h.handleStartLoadGen)))
 	mux.Handle("DELETE /deployments/{id}/loadgen", auth(http.HandlerFunc(h.handleStopLoadGen)))
+	mux.Handle("POST /deployments/{id}/chaos", auth(http.HandlerFunc(h.handleChaos)))
 	mux.HandleFunc("GET /health", h.handleHealth)
 	mux.HandleFunc("GET /templates", h.handleGetTemplates)
 }

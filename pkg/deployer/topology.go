@@ -7,6 +7,11 @@ import (
 )
 
 func requiresProxy(cacheNode DeploymentNode) bool {
+	return RequiresProxy(cacheNode)
+}
+
+// RequiresProxy reports whether the cache node uses proxy strategies (write-through, write-behind, read-through).
+func RequiresProxy(cacheNode DeploymentNode) bool {
 	strategy := configString(cacheNode.Config, "strategy", "cache-aside")
 	switch strategy {
 	case "write-through", "write-behind", "read-through":
