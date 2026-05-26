@@ -10,7 +10,6 @@ import (
 type URLRecord struct {
 	Code      string
 	Original  string
-	HitCount  int
 	CreatedAt time.Time
 }
 
@@ -35,25 +34,16 @@ func (db *DB) SaveURL(ctx context.Context, code, original string) error {
 
 func (db *DB) GetURL(ctx context.Context, code string) (URLRecord, error) {
 	row := db.pool.QueryRow(ctx, `
-		SELECT code, original, hit_count, created_at
+		SELECT code, original, created_at
 		FROM urls
 		WHERE code = $1
 	`, code)
 
 	var rec URLRecord
-	if err := row.Scan(&rec.Code, &rec.Original, &rec.HitCount, &rec.CreatedAt); err != nil {
+	if err := row.Scan(&rec.Code, &rec.Original, &rec.CreatedAt); err != nil {
 		return URLRecord{}, err
 	}
 	return rec, nil
-}
-
-func (db *DB) IncrementHitCount(ctx context.Context, code string) error {
-	_, err := db.pool.Exec(ctx, `
-		UPDATE urls
-		SET hit_count = hit_count + 1
-		WHERE code = $1
-	`, code)
-	return err
 }
 
 func (db *DB) URLExists(ctx context.Context, code string) (bool, error) {
@@ -65,4 +55,3 @@ func (db *DB) URLExists(ctx context.Context, code string) (bool, error) {
 	}
 	return exists, nil
 }
-

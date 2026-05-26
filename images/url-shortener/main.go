@@ -257,9 +257,6 @@ func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 			s.cacheMisses.Add(1)
 			cacheMissesTotal.Inc()
 		}
-		go func() {
-			_ = s.proxy.Increment(context.Background(), code)
-		}()
 
 		writeJSON(w, http.StatusOK, map[string]string{
 			"code":         code,
@@ -274,9 +271,6 @@ func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 		if val, ok := s.cache.Get(ctx, code); ok {
 			s.cacheHits.Add(1)
 			cacheHitsTotal.Inc()
-			go func() {
-				_ = s.db.IncrementHitCount(context.Background(), code)
-			}()
 			writeJSON(w, http.StatusOK, map[string]string{
 				"code":         code,
 				"original_url": val,
@@ -309,9 +303,6 @@ func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 		if err := s.cache.Set(ctx, code, val, s.cfg.CacheTTL); err != nil {
 			slog.Warn("cache set after miss failed", "error", err)
 		}
-		go func() {
-			_ = s.db.IncrementHitCount(context.Background(), code)
-		}()
 
 		writeJSON(w, http.StatusOK, map[string]string{
 			"code":         code,
@@ -331,9 +322,6 @@ func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "failed to fetch url")
 		return
 	}
-	go func() {
-		_ = s.db.IncrementHitCount(context.Background(), code)
-	}()
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"code":         code,
@@ -371,13 +359,12 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"code":         rec.Code,
 			"original_url": rec.Original,
-			"hit_count":    rec.HitCount,
 			"created_at":   rec.CreatedAt,
 		})
 		return
 	}
 
-	// UNDERSTAND: /stats bypasses cache entirely (accurate hit_count).
+	// UNDERSTAND: /stats bypasses cache and reads authoritative row data from Postgres.
 	rec, err := s.db.GetURL(ctx, code)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -392,7 +379,6 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"code":         rec.Code,
 		"original_url": rec.Original,
-		"hit_count":    rec.HitCount,
 		"created_at":   rec.CreatedAt,
 	})
 }
@@ -422,7 +408,7 @@ func (s *Server) handleCodePool(w http.ResponseWriter, r *http.Request) {
 	}
 	const limit = 200
 	rows, err := s.db.pool.Query(r.Context(),
-		`SELECT code FROM urls ORDER BY hit_count DESC LIMIT $1`, limit)
+		`SELECT code FROM urls ORDER BY code LIMIT $1`, limit)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to fetch codes")
 		return
@@ -591,7 +577,17 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 	}
 	connString := connURL.String()
 
-	pool, err := pgxpool.New(ctx, connString)
+	poolCfg, err := pgxpool.ParseConfig(connString)
+	if err != nil {
+		return nil, fmt.Errorf("parse db pool config: %w", err)
+	}
+	maxConns, _ := strconv.Atoi(envOrDefault("DB_POOL_MAX_CONNS", "25"))
+	if maxConns < 1 {
+		maxConns = 25
+	}
+	poolCfg.MaxConns = int32(maxConns)
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -601,8 +597,7 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 		CREATE TABLE IF NOT EXISTS urls (
 			code        VARCHAR(8) PRIMARY KEY,
 			original    TEXT NOT NULL,
-			created_at  TIMESTAMPTZ DEFAULT NOW(),
-			hit_count   INTEGER DEFAULT 0
+			created_at  TIMESTAMPTZ DEFAULT NOW()
 		);
 	`)
 	if err != nil {

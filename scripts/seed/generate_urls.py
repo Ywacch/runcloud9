@@ -80,7 +80,6 @@ def create_table(conn):
             CREATE TABLE IF NOT EXISTS urls (
                 code        VARCHAR(8) PRIMARY KEY,
                 original    TEXT NOT NULL,
-                hit_count   INTEGER NOT NULL DEFAULT 0,
                 created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -100,7 +99,6 @@ def generate_unique_codes(n):
 
 def insert_urls(conn, n=ROW_COUNT, batch_size=BATCH_SIZE):
     all_codes = generate_unique_codes(n)
-    hot_codes = set(random.sample(all_codes, 1000))
 
     print("Pre-computing domain pool...")
     domains = [fake.domain_name() for _ in range(1000)]
@@ -112,10 +110,9 @@ def insert_urls(conn, n=ROW_COUNT, batch_size=BATCH_SIZE):
             buf = io.StringIO()
             for code in batch:
                 url = f"https://{random.choice(domains)}/{''.join(random.choices(string.ascii_lowercase, k=8))}"
-                hits = random.randint(5000, 50000) if code in hot_codes else random.randint(0, 10)
-                buf.write(f"{code}\t{url}\t{hits}\n")
+                buf.write(f"{code}\t{url}\n")
             buf.seek(0)
-            cur.copy_from(buf, "urls", columns=("code", "original", "hit_count"))
+            cur.copy_from(buf, "urls", columns=("code", "original"))
             conn.commit()
             print(f"  {min(i + batch_size, n):,} / {n:,}")
 

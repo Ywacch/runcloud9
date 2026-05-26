@@ -10,7 +10,6 @@ import (
 type URLStats struct {
 	Code      string
 	Original  string
-	HitCount  int
 	CreatedAt time.Time
 }
 
@@ -47,30 +46,16 @@ func (db *DB) GetURL(ctx context.Context, code string) (URLStats, error) {
 		logDBOp(ctx, "get_url", start)
 	}()
 	row := db.pool.QueryRow(ctx, `
-		SELECT code, original, hit_count, created_at
+		SELECT code, original, created_at
 		FROM urls
 		WHERE code = $1
 	`, code)
 
 	var record URLStats
-	if err := row.Scan(&record.Code, &record.Original, &record.HitCount, &record.CreatedAt); err != nil {
+	if err := row.Scan(&record.Code, &record.Original, &record.CreatedAt); err != nil {
 		return URLStats{}, err
 	}
 	return record, nil
-}
-
-func (db *DB) IncrementHitCount(ctx context.Context, code string) error {
-	start := time.Now()
-	defer func() {
-		dbQueryDuration.WithLabelValues("increment_hit").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "increment_hit", start)
-	}()
-	_, err := db.pool.Exec(ctx, `
-		UPDATE urls
-		SET hit_count = hit_count + 1
-		WHERE code = $1
-	`, code)
-	return err
 }
 
 func (db *DB) URLExists(ctx context.Context, code string) (bool, error) {

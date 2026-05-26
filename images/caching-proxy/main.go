@@ -104,8 +104,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.Handle("/set/", withRecovery(s.handleSet))             // POST /set/{code}
 	mux.Handle("/del/", withRecovery(s.handleDel))             // DELETE /del/{code}
 	mux.Handle("/exists/", withRecovery(s.handleExists))       // GET /exists/{code}
-	mux.Handle("/increment/", withRecovery(s.handleIncrement)) // POST /increment/{code}
-	mux.Handle("/stats/", withRecovery(s.handleStats))         // GET /stats/{code}
+	mux.Handle("/stats/", withRecovery(s.handleStats)) // GET /stats/{code}
 	mux.Handle("/codes", withRecovery(s.handleCodes))
 	mux.Handle("/health", withRecovery(s.handleHealth))
 	mux.Handle("/metrics", promhttp.Handler())
@@ -284,27 +283,6 @@ func (s *Server) handleExists(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"exists": ok})
 }
 
-func (s *Server) handleIncrement(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	code := strings.TrimPrefix(r.URL.Path, "/increment/")
-	code = strings.Trim(code, "/")
-	if code == "" {
-		jsonError(w, http.StatusBadRequest, "missing code")
-		return
-	}
-	ctx := r.Context()
-
-	if err := s.db.IncrementHitCount(ctx, code); err != nil {
-		slog.Error("db IncrementHitCount failed", "code", code, "error", err)
-		jsonError(w, http.StatusInternalServerError, "db update failed")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-}
-
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -332,7 +310,6 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"code":         rec.Code,
 		"original_url": rec.Original,
-		"hit_count":    rec.HitCount,
 		"created_at":   rec.CreatedAt,
 	})
 }
@@ -344,7 +321,7 @@ func (s *Server) handleCodes(w http.ResponseWriter, r *http.Request) {
 	}
 	const limit = 200
 	rows, err := s.db.pool.Query(r.Context(),
-		`SELECT code FROM urls ORDER BY hit_count DESC LIMIT $1`, limit)
+		`SELECT code FROM urls ORDER BY code LIMIT $1`, limit)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to fetch codes")
 		return
@@ -463,8 +440,7 @@ func main() {
 		CREATE TABLE IF NOT EXISTS urls (
 			code        VARCHAR(8) PRIMARY KEY,
 			original    TEXT NOT NULL,
-			created_at  TIMESTAMPTZ DEFAULT NOW(),
-			hit_count   INTEGER DEFAULT 0
+			created_at  TIMESTAMPTZ DEFAULT NOW()
 		);
 	`); err != nil {
 		slog.Error("create urls table failed", "error", err)
