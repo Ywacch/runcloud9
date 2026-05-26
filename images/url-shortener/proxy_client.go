@@ -128,33 +128,6 @@ func (c *ProxyClient) Exists(ctx context.Context, code string) (bool, error) {
 	return out.Exists, nil
 }
 
-func (c *ProxyClient) Increment(ctx context.Context, code string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/increment/"+code, nil)
-	if err != nil {
-		return err
-	}
-	setRequestIDHeader(req, ctx)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("proxy INCREMENT failed: status=%d", resp.StatusCode)
-	}
-
-	var out proxyOkResp
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return err
-	}
-	if !out.Ok {
-		return fmt.Errorf("proxy INCREMENT returned ok=false")
-	}
-	return nil
-}
-
 func (c *ProxyClient) Stats(ctx context.Context, code string) (URLStats, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/stats/"+code, nil)
 	if err != nil {
@@ -178,7 +151,6 @@ func (c *ProxyClient) Stats(ctx context.Context, code string) (URLStats, bool, e
 	var out struct {
 		Code        string    `json:"code"`
 		OriginalURL string    `json:"original_url"`
-		HitCount    int       `json:"hit_count"`
 		CreatedAt   time.Time `json:"created_at"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
@@ -188,7 +160,6 @@ func (c *ProxyClient) Stats(ctx context.Context, code string) (URLStats, bool, e
 	return URLStats{
 		Code:      out.Code,
 		Original:  out.OriginalURL,
-		HitCount:  out.HitCount,
 		CreatedAt: out.CreatedAt,
 	}, true, nil
 }
