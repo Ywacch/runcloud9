@@ -735,6 +735,8 @@ $env:PROMETHEUS_URL="http://localhost:9090"   # requires Prometheus port-forward
 
 ## 9. wscat (WebSocket testing)
 
+Frontend charting contract (fields, A/B guidance): [metrics-ui-contract.md](./metrics-ui-contract.md).
+
 ### Purpose
 `wscat` is a CLI WebSocket client used to test the metrics streaming endpoint (`GET /deployments/{id}/metrics`) during development.
 
@@ -771,6 +773,19 @@ wscat -c ws://localhost:8081/deployments/cloud9-url-shortener-<id>/metrics
     },
     "cache": { ... },
     "db": { ... }
+  },
+  "loadgen": {
+    "active": true,
+    "targetRps": 50,
+    "currentRps": 50,
+    "actualRps": 48.5,
+    "intervalP99Ms": 12.3,
+    "intervalActualRps": 49.1,
+    "recentIntervals": [
+      { "t": "2026-03-22T22:56:05Z", "p99Ms": 11.0, "actualRps": 50.2 }
+    ],
+    "p99Latency": 0.015,
+    "successRate": 100
   }
 }
 ```

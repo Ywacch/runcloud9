@@ -898,6 +898,9 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 			for k, v := range h.metricsCollector.PeakSummaryForNamespace(namespace, dm) {
 				summary[k] = v
 			}
+			if rb := h.metricsCollector.RingBufferFor(namespace); rb != nil && rb.Len() > 0 {
+				summary["steady_state"] = metrics.SteadyStateSummary(rb)
+			}
 			if hist := h.metricsCollector.DownsampledSessionHistory(namespace); len(hist) > 0 {
 				summary["session_history"] = hist
 				summary["events_summary"] = metrics.BuildEventsSummary(hist, 10)
