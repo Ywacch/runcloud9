@@ -36,16 +36,21 @@ type targetInput struct {
 
 // loadStats matches pkg/loadgen.LoadStats JSON consumed by the API.
 type loadStats struct {
-	Active          bool           `json:"active"`
-	CurrentRPS      float64        `json:"currentRps"`
-	TotalRequests   uint64         `json:"totalRequests"`
-	SuccessRate     float64        `json:"successRate"`
-	MeanLatency     float64        `json:"meanLatency"`
-	P99Latency      float64        `json:"p99Latency"`
-	DurationSeconds float64        `json:"durationSeconds"`
-	StatusCodes     map[string]int `json:"statusCodes"`
-	Distribution    map[string]int `json:"distribution"`
-	StartedAt       *time.Time     `json:"startedAt"`
+	Active            bool                `json:"active"`
+	CurrentRPS        float64             `json:"currentRps"`
+	TargetRPS         float64             `json:"targetRps"`
+	ActualRPS         float64             `json:"actualRps"`
+	TotalRequests     uint64              `json:"totalRequests"`
+	SuccessRate       float64             `json:"successRate"`
+	MeanLatency       float64             `json:"meanLatency"`
+	P99Latency        float64             `json:"p99Latency"`
+	IntervalP99Ms     float64             `json:"intervalP99Ms"`
+	IntervalActualRPS float64             `json:"intervalActualRps"`
+	RecentIntervals   []loadIntervalStats `json:"recentIntervals,omitempty"`
+	DurationSeconds   float64             `json:"durationSeconds"`
+	StatusCodes       map[string]int      `json:"statusCodes"`
+	Distribution      map[string]int      `json:"distribution"`
+	StartedAt         *time.Time          `json:"startedAt"`
 }
 
 type server struct {
@@ -143,6 +148,7 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	s.stats = loadStats{
 		Active:       true,
 		CurrentRPS:   float64(req.RPS),
+		TargetRPS:    float64(req.RPS),
 		StatusCodes:  map[string]int{},
 		Distribution: copyIntMap(req.Distribution),
 		StartedAt:    &now,
@@ -191,11 +197,7 @@ func (s *server) runAttack(ctx context.Context, req startRequest) {
 	}()
 
 	targeter := buildTargeter(req.Targets)
-	attacker := vegeta.NewAttacker(
-		vegeta.Timeout(5*time.Second),
-		vegeta.Workers(10),
-		vegeta.MaxWorkers(20),
-	)
+	attacker := newVegetaAttacker(req.RPS)
 
 	rate := vegeta.Rate{Freq: req.RPS, Per: time.Second}
 	var attackDur time.Duration
@@ -204,10 +206,13 @@ func (s *server) runAttack(ctx context.Context, req startRequest) {
 	}
 
 	results := attacker.Attack(targeter, rate, attackDur, "cloud9-loadgen-pod")
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	tick1s := time.NewTicker(time.Second)
+	tick5s := time.NewTicker(intervalWindow)
+	defer tick1s.Stop()
+	defer tick5s.Stop()
 
-	var vm vegeta.Metrics
+	var cumulative vegeta.Metrics
+	var window vegeta.Metrics
 	var vmMu sync.Mutex
 
 	for {
@@ -215,43 +220,44 @@ func (s *server) runAttack(ctx context.Context, req startRequest) {
 		case res, ok := <-results:
 			if !ok {
 				vmMu.Lock()
-				vm.Close()
-				s.pushStats(&vm, req.RPS)
+				s.statsMu.Lock()
+				window = closeInterval(&s.stats, &window, time.Now())
+				cumulative.Close()
+				applyMetricsUpdate(&s.stats, &cumulative, req.RPS, s.startedAt)
+				if len(s.distribution) > 0 {
+					s.stats.Distribution = copyIntMap(s.distribution)
+				}
+				s.statsMu.Unlock()
 				vmMu.Unlock()
 				return
 			}
 			vmMu.Lock()
-			vm.Add(res)
+			cumulative.Add(res)
+			window.Add(res)
 			vmMu.Unlock()
 
-		case <-ticker.C:
+		case <-tick1s.C:
 			vmMu.Lock()
-			vm.Close()
-			s.pushStats(&vm, req.RPS)
+			s.statsMu.Lock()
+			cumulative.Close()
+			applyMetricsUpdate(&s.stats, &cumulative, req.RPS, s.startedAt)
+			if len(s.distribution) > 0 {
+				s.stats.Distribution = copyIntMap(s.distribution)
+			}
+			s.statsMu.Unlock()
+			vmMu.Unlock()
+
+		case now := <-tick5s.C:
+			vmMu.Lock()
+			s.statsMu.Lock()
+			window = closeInterval(&s.stats, &window, now)
+			s.statsMu.Unlock()
 			vmMu.Unlock()
 
 		case <-ctx.Done():
 			attacker.Stop()
 			return
 		}
-	}
-}
-
-func (s *server) pushStats(vm *vegeta.Metrics, rps int) {
-	s.statsMu.Lock()
-	defer s.statsMu.Unlock()
-
-	s.stats.TotalRequests = vm.Requests
-	s.stats.CurrentRPS = float64(rps)
-	s.stats.SuccessRate = vm.Success * 100
-	s.stats.MeanLatency = vm.Latencies.Mean.Seconds()
-	s.stats.P99Latency = vm.Latencies.P99.Seconds()
-	if s.startedAt != nil {
-		s.stats.DurationSeconds = time.Since(*s.startedAt).Seconds()
-	}
-	s.stats.StatusCodes = copyIntMap(vm.StatusCodes)
-	if len(s.distribution) > 0 {
-		s.stats.Distribution = copyIntMap(s.distribution)
 	}
 }
 

@@ -52,11 +52,16 @@ func (p LoadProfile) AttackDuration() time.Duration {
 // creating a separate WebSocket — one connection per deployment keeps the frontend simple.
 type LoadStats struct {
 	Active          bool           `json:"active"`          // is load running?
-	CurrentRPS      float64        `json:"currentRps"`      // configured RPS (target)
+	CurrentRPS      float64        `json:"currentRps"`      // configured RPS (target); legacy alias for TargetRPS
+	TargetRPS       float64        `json:"targetRps"`       // configured RPS (target)
+	ActualRPS       float64        `json:"actualRps"`       // achieved RPS from Vegeta throughput (cumulative)
 	TotalRequests   uint64         `json:"totalRequests"`   // cumulative since start
 	SuccessRate     float64        `json:"successRate"`     // percentage 0-100
-	MeanLatency     float64        `json:"meanLatency"`     // seconds
-	P99Latency      float64        `json:"p99Latency"`      // seconds
+	MeanLatency     float64        `json:"meanLatency"`     // seconds (cumulative run)
+	P99Latency      float64         `json:"p99Latency"`      // seconds (cumulative run)
+	IntervalP99Ms   float64        `json:"intervalP99Ms"`   // p99 ms in last closed 5s window (client-side)
+	IntervalActualRPS float64      `json:"intervalActualRps"` // RPS in last closed 5s window
+	RecentIntervals []LoadIntervalStats `json:"recentIntervals,omitempty"` // last N closed 5s buckets
 	DurationSeconds float64        `json:"durationSeconds"` // elapsed run time in seconds
 	StatusCodes     map[string]int `json:"statusCodes"`     // "200" → count, "500" → count
 	Distribution    map[string]int `json:"distribution"`    // effective weights per DistributionKey

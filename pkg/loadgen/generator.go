@@ -95,6 +95,8 @@ func (lg *LocalLoadGenerator) Start(ctx context.Context, namespace string, profi
 		targets: targets,
 		stats: LoadStats{
 			Active:       true,
+			CurrentRPS:   float64(profile.RPS),
+			TargetRPS:    float64(profile.RPS),
 			StartedAt:    ptrTime(time.Now()),
 			Distribution: copyDist(distribution),
 			StatusCodes:  make(map[string]int),
@@ -149,13 +151,7 @@ func (lg *LocalLoadGenerator) GetStats(namespace string) LoadStats {
 }
 
 func (s *attackSession) run(ctx context.Context, lg *LocalLoadGenerator, namespace string, profile LoadProfile) {
-	// UNDERSTAND: vegeta.NewAttacker creates an HTTP client that sends requests
-	// at the specified rate. Targets were resolved in Start via profileToTargets.
-	attacker := vegeta.NewAttacker(
-		vegeta.Timeout(5*time.Second),
-		vegeta.Workers(10),
-		vegeta.MaxWorkers(20),
-	)
+	attacker := NewVegetaAttacker(profile.RPS)
 
 	targeter := buildTargeterFromResolved(s.targets)
 	rate := vegeta.Rate{Freq: profile.RPS, Per: time.Second}
@@ -163,34 +159,49 @@ func (s *attackSession) run(ctx context.Context, lg *LocalLoadGenerator, namespa
 
 	slog.Info("loadgen started", "namespace", namespace, "template", profile.Template, "rps", profile.RPS, "targets", len(s.targets))
 
-	var vm vegeta.Metrics
+	var cumulative vegeta.Metrics
+	var window vegeta.Metrics
 	var vmMu sync.Mutex
 
-	// UNDERSTAND: vegeta.Attack returns a channel of vegeta.Result.
 	results := attacker.Attack(targeter, rate, attackDur, "cloud9-loadgen")
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
+	tick1s := time.NewTicker(time.Second)
+	tick5s := time.NewTicker(IntervalWindow)
+	defer tick1s.Stop()
+	defer tick5s.Stop()
 
 	for {
 		select {
 		case res, ok := <-results:
 			if !ok {
 				vmMu.Lock()
-				vm.Close()
-				s.pushStats(&vm, profile)
+				s.mu.Lock()
+				window = CloseInterval(&s.stats, &window, time.Now())
+				cumulative.Close()
+				ApplyMetricsUpdate(&s.stats, &cumulative, profile.RPS, s.stats.StartedAt)
+				s.mu.Unlock()
 				vmMu.Unlock()
 				lg.finish(namespace, s)
 				slog.Info("loadgen attack finished", "namespace", namespace)
 				return
 			}
 			vmMu.Lock()
-			vm.Add(res)
+			cumulative.Add(res)
+			window.Add(res)
 			vmMu.Unlock()
 
-		case <-ticker.C:
+		case <-tick1s.C:
 			vmMu.Lock()
-			vm.Close()
-			s.pushStats(&vm, profile)
+			s.mu.Lock()
+			cumulative.Close()
+			ApplyMetricsUpdate(&s.stats, &cumulative, profile.RPS, s.stats.StartedAt)
+			s.mu.Unlock()
+			vmMu.Unlock()
+
+		case now := <-tick5s.C:
+			vmMu.Lock()
+			s.mu.Lock()
+			window = CloseInterval(&s.stats, &window, now)
+			s.mu.Unlock()
 			vmMu.Unlock()
 
 		case <-ctx.Done():
@@ -199,21 +210,6 @@ func (s *attackSession) run(ctx context.Context, lg *LocalLoadGenerator, namespa
 			return
 		}
 	}
-}
-
-func (s *attackSession) pushStats(vm *vegeta.Metrics, profile LoadProfile) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.stats.TotalRequests = vm.Requests
-	s.stats.CurrentRPS = float64(profile.RPS)
-	// vegeta Success is 0–1; API uses percentage 0–100.
-	s.stats.SuccessRate = vm.Success * 100
-	s.stats.MeanLatency = vm.Latencies.Mean.Seconds()
-	s.stats.P99Latency = vm.Latencies.P99.Seconds()
-	if s.stats.StartedAt != nil {
-		s.stats.DurationSeconds = time.Since(*s.stats.StartedAt).Seconds()
-	}
-	s.stats.StatusCodes = copyIntMap(vm.StatusCodes)
 }
 
 func copyIntMap(m map[string]int) map[string]int {
