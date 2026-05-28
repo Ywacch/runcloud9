@@ -46,6 +46,44 @@ func TestHandleChaos_RequiresKubernetes(t *testing.T) {
 	}
 }
 
+func TestHandleChaos_RequestBodyTooLarge(t *testing.T) {
+	t.Parallel()
+	st := &fakeDeploymentStore{
+		byNS: map[string]store.DeploymentRow{
+			"ns1": {
+				Namespace: "ns1",
+				Status:    "running",
+				Design: map[string]any{
+					"nodes": []any{
+						map[string]any{"type": "app-server"},
+					},
+				},
+			},
+		},
+	}
+	h := NewHandler(nil, st, nil, nil, nil, nil, fake.NewClientset(), nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	huge := strings.Repeat("a", int(maxJSONBodyBytes))
+	tooLarge := `{"scenario":"` + huge + `","targetComponent":"app-server"}`
+	req := httptest.NewRequest(http.MethodPost, "/deployments/ns1/chaos", strings.NewReader(tooLarge))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var er struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &er)
+	if !strings.Contains(er.Error, "request body too large") {
+		t.Fatalf("error message: %q", er.Error)
+	}
+}
+
 func TestHandleChaos_PodKillOK(t *testing.T) {
 	t.Parallel()
 	ns := "ns-chaos"
