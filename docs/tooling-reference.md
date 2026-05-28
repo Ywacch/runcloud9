@@ -846,6 +846,8 @@ Invoke-RestMethod -Uri "http://localhost:8081/deployments" -Method Post `
   -ContentType "application/json" `
   -Body '{"version":"1.0","template":"url-shortener","archetype":"browse-heavy","nodes":[{"id":"n1","type":"db","name":"PostgreSQL","config":{}},{"id":"n2","type":"cache","name":"Redis","config":{"strategy":"cache-aside"}},{"id":"n3","type":"app-server","name":"API Server","config":{}}],"connections":[{"sourceId":"n3","targetId":"n1","protocol":"TCP"},{"sourceId":"n3","targetId":"n2","protocol":"TCP"}]}'
 
+# API note: JSON POST bodies are capped at 1 MiB; larger requests return 400.
+
 # 6. Watch pods come up
 kubectl get pods -n <returned-namespace> -w
 

@@ -44,9 +44,14 @@ func (h *Handler) handleChaos(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "chaos requires kubernetes (set DEPLOYER=k8s)")
 		return
 	}
+	limitJSONBody(w, r)
 
 	var req chaosRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if isBodyTooLarge(err) {
+			writeError(w, http.StatusBadRequest, "request body too large")
+			return
+		}
 		if errors.Is(err, io.EOF) {
 			writeError(w, http.StatusBadRequest, "request body required")
 			return

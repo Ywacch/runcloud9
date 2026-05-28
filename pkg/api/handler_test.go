@@ -114,6 +114,31 @@ func TestHandleCreateDeployment_UnknownTemplate(t *testing.T) {
 	}
 }
 
+func TestHandleCreateDeployment_RequestBodyTooLarge(t *testing.T) {
+	t.Parallel()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	huge := strings.Repeat("a", int(maxJSONBodyBytes))
+	tooLarge := fmt.Sprintf(`{"template":"%s","archetype":"x","nodes":[],"connections":[]}`, huge)
+	req := httptest.NewRequest(http.MethodPost, "/deployments", strings.NewReader(tooLarge))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var er struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &er)
+	if !strings.Contains(er.Error, "request body too large") {
+		t.Fatalf("error message: %q", er.Error)
+	}
+}
+
 func TestHandleCreateDeployment_SimulationRecommended_PartialTopology(t *testing.T) {
 	t.Parallel()
 	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -405,6 +430,32 @@ func TestHandleStartLoadGen_URLShortenerOK(t *testing.T) {
 		t.Fatalf("response: %+v", out)
 	}
 	_ = lg.Stop(context.Background(), "ns-ok")
+}
+
+func TestHandleStartLoadGen_RequestBodyTooLarge(t *testing.T) {
+	t.Parallel()
+	lg := loadgen.NewLoadGenerator()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, lg, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	huge := strings.Repeat("a", int(maxJSONBodyBytes))
+	tooLarge := fmt.Sprintf(`{"template":"url-shortener","rps":5,"baseUrl":"http://%s"}`, huge)
+	req := httptest.NewRequest(http.MethodPost, "/deployments/ns-big/loadgen", strings.NewReader(tooLarge))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var er struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &er)
+	if !strings.Contains(er.Error, "request body too large") {
+		t.Fatalf("error message: %q", er.Error)
+	}
 }
 
 func TestGenerateNamespace_FormatAndUniqueness(t *testing.T) {

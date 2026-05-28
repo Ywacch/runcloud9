@@ -289,9 +289,14 @@ func (h *Handler) handleGetTemplates(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request) {
 	userID := userIDFromContext(r.Context())
+	limitJSONBody(w, r)
 
 	var design deployer.DeploymentDesign
 	if err := json.NewDecoder(r.Body).Decode(&design); err != nil {
+		if isBodyTooLarge(err) {
+			writeError(w, http.StatusBadRequest, "request body too large")
+			return
+		}
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
@@ -769,10 +774,15 @@ func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "load generator unavailable")
 		return
 	}
+	limitJSONBody(w, r)
 
 	var profile loadgen.LoadProfile
 	err := json.NewDecoder(r.Body).Decode(&profile)
 	if err != nil {
+		if isBodyTooLarge(err) {
+			writeError(w, http.StatusBadRequest, "request body too large")
+			return
+		}
 		if errors.Is(err, io.EOF) {
 			// Zero profile: template comes from deployment row below; NormalizeProfile fills RPS (template-aware).
 			profile = loadgen.LoadProfile{}
