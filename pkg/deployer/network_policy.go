@@ -50,6 +50,7 @@ func defaultDenyEgressPolicy(namespace string) *networkingv1.NetworkPolicy {
 
 // allowDNSAndNamespaceEgress permits:
 // - DNS lookups via kube-dns in kube-system on TCP/UDP 53
+// - DNS to node-local cache IP (GKE NodeLocal DNSCache: 169.254.20.10)
 // - traffic to pods in the same deployment namespace
 // Everything else remains denied by default-deny-egress.
 func allowDNSAndNamespaceEgress(namespace string) *networkingv1.NetworkPolicy {
@@ -72,6 +73,11 @@ func allowDNSAndNamespaceEgress(namespace string) *networkingv1.NetworkPolicy {
 							},
 							PodSelector: &metav1.LabelSelector{
 								MatchLabels: map[string]string{"k8s-app": "kube-dns"},
+							},
+						},
+						{
+							IPBlock: &networkingv1.IPBlock{
+								CIDR: "169.254.20.10/32",
 							},
 						},
 					},
