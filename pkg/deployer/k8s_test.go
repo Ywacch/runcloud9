@@ -103,6 +103,17 @@ func TestK8sDeployer_Deploy_CreatesNamespaceAndDeployment(t *testing.T) {
 	if len(allow.Spec.Egress) < 2 {
 		t.Fatalf("allow policy egress rules: got %d, want >=2", len(allow.Spec.Egress))
 	}
+	dnsRule := allow.Spec.Egress[0]
+	foundNodeLocalDNS := false
+	for _, peer := range dnsRule.To {
+		if peer.IPBlock != nil && peer.IPBlock.CIDR == "169.254.20.10/32" {
+			foundNodeLocalDNS = true
+			break
+		}
+	}
+	if !foundNodeLocalDNS {
+		t.Fatalf("allow policy DNS rule missing NodeLocal DNS IP block 169.254.20.10/32")
+	}
 }
 
 func TestK8sDeployer_Teardown_DeletesNamespace(t *testing.T) {
