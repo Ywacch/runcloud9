@@ -8,6 +8,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -75,6 +76,32 @@ func TestK8sDeployer_Deploy_CreatesNamespaceAndDeployment(t *testing.T) {
 	}
 	if ns.Name != cfg.Namespace {
 		t.Errorf("expected namespace %s, got %s", cfg.Namespace, ns.Name)
+	}
+
+	policies, npErr := fakeClient.NetworkingV1().NetworkPolicies(cfg.Namespace).List(context.Background(), metav1.ListOptions{})
+	if npErr != nil {
+		t.Fatalf("list network policies: %v", npErr)
+	}
+	if len(policies.Items) < 2 {
+		t.Fatalf("expected at least 2 network policies, got %d", len(policies.Items))
+	}
+	deny, err := fakeClient.NetworkingV1().NetworkPolicies(cfg.Namespace).Get(context.Background(), defaultDenyEgressPolicyName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get default deny egress policy: %v", err)
+	}
+	if len(deny.Spec.PolicyTypes) != 1 || deny.Spec.PolicyTypes[0] != networkingv1.PolicyTypeEgress {
+		t.Fatalf("default deny policy types: got %+v, want [Egress]", deny.Spec.PolicyTypes)
+	}
+	if len(deny.Spec.Egress) != 0 {
+		t.Fatalf("default deny policy should have zero egress rules, got %d", len(deny.Spec.Egress))
+	}
+
+	allow, err := fakeClient.NetworkingV1().NetworkPolicies(cfg.Namespace).Get(context.Background(), allowDNSAndNamespaceEgressPolicy, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get allow policy: %v", err)
+	}
+	if len(allow.Spec.Egress) < 2 {
+		t.Fatalf("allow policy egress rules: got %d, want >=2", len(allow.Spec.Egress))
 	}
 }
 
