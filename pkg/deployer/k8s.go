@@ -69,6 +69,11 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 	if err != nil && !errors.IsAlreadyExists(err) {
 		return fmt.Errorf("create namespace: %w", err)
 	}
+	// Apply namespace egress guardrails before any workloads are created.
+	// Baseline is deny-all egress plus minimal allow rules (DNS + same-namespace traffic).
+	if err := k.ensureNamespaceNetworkPolicies(ctx, cfg.Namespace); err != nil {
+		return fmt.Errorf("ensure namespace network policies: %w", err)
+	}
 
 	// resource requests/limits are required on GKE Autopilot.
 	// Requests = guaranteed minimum. Limits = hard cap.

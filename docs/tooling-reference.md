@@ -262,6 +262,20 @@ kubectl config current-context
 
 ### Common commands
 
+#### NetworkPolicy (egress baseline)
+```bash
+# List policies in a deployment namespace
+kubectl get networkpolicy -n cloud9-url-shortener-<id>
+
+# Inspect default deny + allow policy
+kubectl describe networkpolicy default-deny-egress -n <namespace>
+kubectl describe networkpolicy allow-dns-and-namespace-egress -n <namespace>
+```
+
+Cloud9 deployer applies a namespace egress baseline:
+- `default-deny-egress` for all pods
+- `allow-dns-and-namespace-egress` for kube-dns and same-namespace traffic
+
 #### Namespaces
 ```bash
 # List all namespaces
