@@ -130,6 +130,36 @@ func TestValidateRuntimeContract_Table(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:       "app-server replicas capped at 3",
+			templateID: "url-shortener",
+			design: DeploymentDesign{
+				Template: "url-shortener",
+				Nodes: []DeploymentNode{
+					{ID: "app1", Type: "app-server", Name: "App", Config: map[string]interface{}{"replicas": 4}},
+					{ID: "db1", Type: "db", Name: "PostgreSQL"},
+				},
+				Connections: []DeploymentConn{{SourceID: "app1", TargetID: "db1"}},
+			},
+			wantErr: "replicas must be between",
+		},
+		{
+			name:       "invalid lb algorithm rejected",
+			templateID: "url-shortener",
+			design: DeploymentDesign{
+				Template: "url-shortener",
+				Nodes: []DeploymentNode{
+					{ID: "lb1", Type: "lb", Name: "LB", Config: map[string]interface{}{"lbAlgorithm": "random"}},
+					{ID: "app1", Type: "app-server", Name: "App"},
+					{ID: "db1", Type: "db", Name: "PostgreSQL"},
+				},
+				Connections: []DeploymentConn{
+					{SourceID: "lb1", TargetID: "app1"},
+					{SourceID: "app1", TargetID: "db1"},
+				},
+			},
+			wantErr: "lbAlgorithm must be",
+		},
 	}
 
 	for _, tc := range tests {

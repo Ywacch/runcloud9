@@ -182,4 +182,63 @@ func TestGenerateNginxConfig(t *testing.T) {
 	if !strings.Contains(iph, "ip_hash") {
 		t.Fatalf("ip_hash: %s", iph)
 	}
+
+	multi := generateNginxConfig([]string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}, "least_conn")
+	if !strings.Contains(multi, "server 10.0.0.1:8080") || !strings.Contains(multi, "server 10.0.0.3:8080") {
+		t.Fatalf("multi upstream: %s", multi)
+	}
+}
+
+func TestAppServerDesiredReplicas(t *testing.T) {
+	t.Parallel()
+	lb := DeploymentNode{ID: "lb1", Type: "lb", Name: "LB"}
+	app := DeploymentNode{ID: "a1", Type: "app-server", Name: "App", Config: map[string]interface{}{"replicas": 3}}
+	design := DeploymentDesign{
+		Nodes:       []DeploymentNode{lb, app},
+		Connections: []DeploymentConn{{SourceID: "lb1", TargetID: "a1"}},
+	}
+	if got := appServerDesiredReplicas(lb, design); got != 3 {
+		t.Fatalf("got %d want 3", got)
+	}
+}
+
+func TestWaitForReady_SingleReplicaFromList(t *testing.T) {
+	ns := "cloud9-test-one"
+	labels := map[string]string{"app": "app-server", "deployment": ns}
+	fakeClient := fake.NewSimpleClientset()
+	ctx := context.Background()
+	pod, err := fakeClient.CoreV1().Pods(ns).Create(ctx, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-server-0", Namespace: ns, Labels: labels},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+	if _, err := fakeClient.CoreV1().Pods(ns).UpdateStatus(ctx, pod, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("update status: %v", err)
+	}
+	d := NewK8sDeployer(fakeClient, "db")
+	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := d.waitForReady(waitCtx, ns, "app-server", 1); err != nil {
+		t.Fatalf("waitForReady(1): %v", err)
+	}
+}
+
+func TestPodConditionReady_CountsMultiple(t *testing.T) {
+	t.Parallel()
+	var ready int
+	for i := 0; i < 3; i++ {
+		pod := &corev1.Pod{
+			Status: corev1.PodStatus{
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			},
+		}
+		if podConditionReady(pod) {
+			ready++
+		}
+	}
+	if ready != 3 {
+		t.Fatalf("ready count = %d want 3", ready)
+	}
 }

@@ -306,6 +306,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
+	deployer.NormalizeDesign(&design)
 
 	if err := validateDesign(design); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -754,7 +755,7 @@ func designHasLoadBalancer(design map[string]any) bool {
 		if !ok {
 			continue
 		}
-		if t, _ := m["type"].(string); t == "lb" {
+		if t, _ := m["type"].(string); t == "lb" || t == "load_balancer" {
 			return true
 		}
 	}

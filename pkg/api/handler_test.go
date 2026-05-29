@@ -760,3 +760,25 @@ func (f *fakeDeploymentStore) SetMetricsSummary(_ context.Context, namespace str
 	f.byNS[namespace] = row
 	return nil
 }
+
+func TestDesignHasLoadBalancer(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		in   map[string]any
+		want bool
+	}{
+		{name: "canonical lb", in: map[string]any{"nodes": []any{map[string]any{"type": "lb"}}}, want: true},
+		{name: "legacy load_balancer", in: map[string]any{"nodes": []any{map[string]any{"type": "load_balancer"}}}, want: true},
+		{name: "no lb", in: map[string]any{"nodes": []any{map[string]any{"type": "app-server"}}}, want: false},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := designHasLoadBalancer(tc.in); got != tc.want {
+				t.Fatalf("designHasLoadBalancer() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

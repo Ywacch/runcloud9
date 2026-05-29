@@ -94,6 +94,11 @@ type ComponentMetrics struct {
 	LBBackends  []string `json:"lbBackends,omitempty"`
 	// PerBackendRPS is set only for the lb component: RPS per app-server pod (from Prometheus pod label).
 	PerBackendRPS map[string]float64 `json:"perBackendRps,omitempty"`
+	// Replicas is per-pod breakdown on app-server (empty when single replica or pods not listed).
+	Replicas []ReplicaMetrics `json:"replicas,omitempty"`
+	// BackendReplicas / BackendPods expose LB-facing pod rollout and per-backend metrics.
+	BackendReplicas *BackendReplicas `json:"backendReplicas,omitempty"`
+	BackendPods     []BackendPod     `json:"backendPods,omitempty"`
 	// Capacity / utilization (component-specific; omit when unknown or N/A).
 	LBConnectionLimit float64 `json:"lbConnectionLimit,omitempty"` // nginx worker_connections (see deployer k8s LB template)
 	RedisMaxClients   float64 `json:"redisMaxClients,omitempty"`   // from redis_exporter, if scraped
@@ -102,6 +107,28 @@ type ComponentMetrics struct {
 	MQSaturationRatio float64 `json:"mqSaturationRatio,omitempty"` // produce/consume; >1 means consumer falling behind
 	WorkerSaturation  float64 `json:"workerSaturation,omitempty"`  // queueDepth/100 capped at 1.0
 }
+
+// BackendReplicas tracks desired vs ready app-server pods (LB-facing view).
+type BackendReplicas struct {
+	Desired int32 `json:"desired"`
+	Ready   int32 `json:"ready"`
+}
+
+// PodMetrics holds per-pod runtime metrics shared by app-server replicas and LB backends.
+type PodMetrics struct {
+	Name        string  `json:"name"`
+	Ready       bool    `json:"ready"`
+	RequestRate float64 `json:"requestRate"`
+	P99Latency  float64 `json:"p99Latency"`
+	CPUUsage    float64 `json:"cpuUsage,omitempty"`
+	ErrorRate   float64 `json:"errorRate,omitempty"`
+}
+
+// ReplicaMetrics is the app-server component view of PodMetrics.
+type ReplicaMetrics = PodMetrics
+
+// BackendPod is the lb component view of PodMetrics.
+type BackendPod = PodMetrics
 
 func emptyPeakSummary() map[string]any {
 	return map[string]any{

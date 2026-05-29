@@ -646,6 +646,13 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmApp.CPULimit = c.kubeLimitCPU(ctx, ns, "app-server.*", "app-server")
 	cmApp.MemoryLimit = c.kubeLimitMem(ctx, ns, "app-server.*", "app-server")
 
+	rpsByPod, p99ByPod, cpuByPod, errByPod := c.appServerReplicaSeries(ctx, ns)
+	podNames, readyByPod, backendReplicas := c.listAppServerPods(ctx, ns)
+	replicaRows := mergePodMetricMaps(podNames, readyByPod, rpsByPod, p99ByPod, cpuByPod, errByPod)
+	if len(replicaRows) > 0 {
+		cmApp.Replicas = replicaRows
+	}
+
 	dm.Components["app-server"] = cmApp
 
 	// Copy cache metrics from app-server onto the cache component so the CachePanel can display them.
@@ -825,6 +832,11 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		cmLB.RequestRate = totalBackendRPS
 	} else {
 		cmLB.RequestRate = cmApp.RequestRate
+	}
+	if len(replicaRows) > 0 {
+		br := backendReplicas
+		cmLB.BackendReplicas = &br
+		cmLB.BackendPods = replicaRows
 	}
 	c.debugCompare("lb", "rps", cmLB.RequestRate, cmApp.RequestRate, "sum(perBackendRPS)", "mirrored app requestRate")
 	dm.Components["lb"] = cmLB
