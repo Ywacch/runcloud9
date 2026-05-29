@@ -44,7 +44,7 @@ switch ($Mode) {
         if ($Count -le 0) { $Count = 10 }
         $Method = "POST"
         $Path = "/deployments"
-        # Invalid but small JSON — rate limit runs before handler validation matters.
+        # Invalid but small JSON, rate limit runs before handler validation matters.
         $Body = '{"template":"url-shortener"}'
     }
 }
