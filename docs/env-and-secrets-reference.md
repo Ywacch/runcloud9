@@ -18,6 +18,14 @@ Use this doc as the source of truth for required/optional environment variables 
 | `SEED_BUCKET_NAME` | No | `cloud9-seed-data` | Bucket used by seeder for prebuilt DB dumps. |
 | `DDC_BUCKET` | No | Empty | Bucket for diagnostics collector artifact uploads. |
 | `MAX_ACTIVE_DEPLOYMENTS_PER_USER` | No | `1` | Per-user active deployment limit. |
+| `API_RATE_LIMIT_ENABLED` | No | `true` when `ENV=production`, else `false` | Enable HTTP rate limiting on the API. |
+| `API_RATE_LIMIT_BACKEND` | No | `memory` | `memory` (per-pod; use at `replicas: 1`) or `redis` (not implemented). |
+| `API_RATE_LIMIT_RPS` | No | `30` | Per-user sustained rate for standard authenticated routes. |
+| `API_RATE_LIMIT_BURST` | No | `60` | Burst for standard authenticated routes. |
+| `API_RATE_LIMIT_EXPENSIVE_RPM` | No | `6` | Per-user rate for create deploy, loadgen start, chaos (requests/minute). |
+| `API_RATE_LIMIT_EXPENSIVE_BURST` | No | `3` | Burst for expensive routes. |
+| `API_RATE_LIMIT_PUBLIC_RPS` | No | `60` | Per-IP rate for `/health` and `/templates`. |
+| `API_RATE_LIMIT_PUBLIC_BURST` | No | `120` | Burst for public routes. |
 | `TEMPLATE_IMAGE_REGISTRY` | No | Empty | Registry prefix for deployable images. |
 | `TEMPLATE_IMAGE_TAG` | No | `v1` fallback | Global fallback tag for deployable images. |
 | `IMAGE_VERSIONS_FILE` | No | `config/image-versions.json` (best-effort load) | Per-image immutable tag manifest path. |
