@@ -6,11 +6,18 @@ import (
 	"github.com/ywacch/cloud9/pkg/templates"
 )
 
+const (
+	minAppServerReplicas = 1
+	maxAppServerReplicas = 3
+)
+
 // ValidateRuntimeContract checks deploy-time runtime preconditions before orchestration starts.
 // It complements graph validation by mirroring env derivation and deployer assumptions.
 func ValidateRuntimeContract(design DeploymentDesign, tmpl *templates.TemplateSpec) error {
 	checks := []func(DeploymentDesign, *templates.TemplateSpec) error{
 		validateLBBackends,
+		validateLBAlgorithm,
+		validateAppServerReplicas,
 		validateProxyQueries,
 		validateAppServerEnv,
 		validateWorkerEnv,
@@ -19,6 +26,39 @@ func ValidateRuntimeContract(design DeploymentDesign, tmpl *templates.TemplateSp
 	for _, check := range checks {
 		if err := check(design, tmpl); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateAppServerReplicas(design DeploymentDesign, _ *templates.TemplateSpec) error {
+	for _, node := range design.Nodes {
+		if node.Type != "app-server" {
+			continue
+		}
+		if _, err := replicaCountFromConfig(node.Config, 1, minAppServerReplicas, maxAppServerReplicas); err != nil {
+			return fmt.Errorf("app server %q: %w", node.Name, err)
+		}
+	}
+	return nil
+}
+
+func validateLBAlgorithm(design DeploymentDesign, _ *templates.TemplateSpec) error {
+	allowed := map[string]struct{}{
+		"round-robin": {},
+		"least_conn":  {},
+		"ip_hash":     {},
+	}
+	for _, node := range design.Nodes {
+		if node.Type != "lb" {
+			continue
+		}
+		algo := configString(node.Config, "lbAlgorithm", "round-robin")
+		if _, ok := allowed[algo]; !ok {
+			return fmt.Errorf(
+				"load balancer %q lbAlgorithm must be round-robin, least_conn, or ip_hash (got %q)",
+				node.Name, algo,
+			)
 		}
 	}
 	return nil

@@ -18,5 +18,6 @@ func DesignFromMap(m map[string]any) (*DeploymentDesign, error) {
 	if err := json.Unmarshal(b, &d); err != nil {
 		return nil, fmt.Errorf("unmarshal design: %w", err)
 	}
+	NormalizeDesign(&d)
 	return &d, nil
 }

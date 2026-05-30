@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -80,13 +81,8 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 	// We set them equal here so Autopilot doesn't reject the pod.
 	resources := ResourceProfile(configString(cfg.Node.Config, "resourceProfile", "alpha"))
 
-	// replicas can be tuned per node type.
-	replicas := int32(1)
-	if r := configString(cfg.Node.Config, "replicas", "1"); r != "" {
-		if n, err := strconv.Atoi(r); err == nil && n > 0 {
-			replicas = int32(n)
-		}
-	}
+	// replicas can be tuned per node type (app-server bounds enforced in ValidateRuntimeContract).
+	replicas := parseReplicaCount(cfg.Node.Config, 1)
 
 	switch cfg.Node.Type {
 	case "db", "mq":
@@ -157,12 +153,38 @@ func detectWaitReadyFailure(pod *corev1.Pod, appLabel string, crashLoopSince map
 	return nil
 }
 
-func (k *K8sDeployer) waitForReady(ctx context.Context, namespace string, appLabel string) error {
-	// Watch gives us a stream of events (ADDED, MODIFIED, DELETED)
-	// for pods matching our label selector. We block on this stream until
-	// we see a pod with ConditionReady=True, or the context deadline fires.
+func podConditionReady(pod *corev1.Pod) bool {
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+func (k *K8sDeployer) waitForReady(ctx context.Context, namespace string, appLabel string, desiredReplicas int32) error {
+	if desiredReplicas <= 0 {
+		desiredReplicas = 1
+	}
+
+	labelSelector := "deployment=" + namespace + ",app=" + appLabel
+	readyPods := make(map[types.UID]struct{})
+
+	existing, err := k.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+	if err != nil {
+		return fmt.Errorf("list pods for %s: %w", appLabel, err)
+	}
+	for i := range existing.Items {
+		if podConditionReady(&existing.Items[i]) {
+			readyPods[existing.Items[i].UID] = struct{}{}
+		}
+	}
+	if int32(len(readyPods)) >= desiredReplicas {
+		return nil
+	}
+
 	watcher, err := k.clientset.CoreV1().Pods(namespace).Watch(ctx, metav1.ListOptions{
-		LabelSelector: "deployment=" + namespace + ",app=" + appLabel,
+		LabelSelector: labelSelector,
 	})
 	if err != nil {
 		return fmt.Errorf("watch pods: %w", err)
@@ -181,19 +203,24 @@ func (k *K8sDeployer) waitForReady(ctx context.Context, namespace string, appLab
 			if !ok {
 				continue
 			}
-			for _, cond := range pod.Status.Conditions {
-				if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
-					return nil // pod is ready
+			if pod.DeletionTimestamp != nil {
+				delete(readyPods, pod.UID)
+				continue
+			}
+			if podConditionReady(pod) {
+				readyPods[pod.UID] = struct{}{}
+				if int32(len(readyPods)) >= desiredReplicas {
+					return nil
 				}
+			} else {
+				delete(readyPods, pod.UID)
 			}
 			if err := detectWaitReadyFailure(pod, appLabel, crashLoopSince); err != nil {
 				return fmt.Errorf("waiting for %s ready: %w", appLabel, err)
 			}
 		case <-ctx.Done():
-			// UNDERSTAND: ctx.Done() closes when the context is cancelled or times out.
-			// We return ctx.Err() not a custom error — callers use errors.Is(err, context.DeadlineExceeded)
-			// to distinguish timeout from other failures.
-			return fmt.Errorf("timed out waiting for %s ready: %w", appLabel, ctx.Err())
+			return fmt.Errorf("timed out waiting for %d %s pod(s) ready (have %d): %w",
+				desiredReplicas, appLabel, len(readyPods), ctx.Err())
 		}
 	}
 }
@@ -268,7 +295,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 		}
 
 		// Ensure the Redis backend is ready before the proxy starts.
-		if err := k.waitForReady(ctx, cfg.Namespace, "redis-internal"); err != nil {
+		if err := k.waitForReady(ctx, cfg.Namespace, "redis-internal", 1); err != nil {
 			return err
 		}
 
@@ -359,7 +386,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 			return fmt.Errorf("create cache proxy service: %w", err)
 		}
 
-		return k.waitForReady(ctx, cfg.Namespace, "cache-proxy")
+		return k.waitForReady(ctx, cfg.Namespace, "cache-proxy", replicas)
 	}
 
 	// Cache-aside: single Redis pod/service + redis_exporter sidecar for Prometheus.
@@ -430,7 +457,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 		return fmt.Errorf("create service: %w", err)
 	}
 
-	return k.waitForReady(ctx, cfg.Namespace, "redis")
+	return k.waitForReady(ctx, cfg.Namespace, "redis", replicas)
 }
 
 func (k *K8sDeployer) deployAppServer(ctx context.Context, cfg DeployConfig, resources corev1.ResourceRequirements, replicas int32) error {
@@ -486,7 +513,7 @@ func (k *K8sDeployer) deployAppServer(ctx context.Context, cfg DeployConfig, res
 		return fmt.Errorf("create service: %w", err)
 	}
 
-	return k.waitForReady(ctx, cfg.Namespace, "app-server")
+	return k.waitForReady(ctx, cfg.Namespace, "app-server", replicas)
 }
 
 func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, resources corev1.ResourceRequirements, replicas int32) error {
@@ -532,15 +559,18 @@ func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, resour
 	if err != nil {
 		return fmt.Errorf("create worker deployment: %w", err)
 	}
-	return k.waitForReady(ctx, cfg.Namespace, "worker")
+	return k.waitForReady(ctx, cfg.Namespace, "worker", replicas)
 }
 
 func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources corev1.ResourceRequirements, replicas int32) error {
 	algo := configString(cfg.Node.Config, "lbAlgorithm", "round-robin")
-	backends := lbBackends(cfg.Node, cfg.Design)
-	if len(backends) == 0 {
+	logicalBackends := lbBackends(cfg.Node, cfg.Design)
+	if len(logicalBackends) == 0 {
 		return fmt.Errorf("lb has no app-server backends: add edges from lb to app-server")
 	}
+	upstreamHosts, endpointSnap := k.resolveAppServerUpstream(ctx, cfg.Namespace)
+	appReplicas := appServerDesiredReplicas(cfg.Node, cfg.Design)
+
 	// LB (nginx:alpine) needs far less than a full component profile.
 	resources = corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
@@ -554,20 +584,27 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 			corev1.ResourceEphemeralStorage: resource.MustParse("50Mi"),
 		},
 	}
-	nginxConf := generateNginxConfig(backends, algo)
+	nginxConf := generateNginxConfig(upstreamHosts, algo)
+
+	endpointsJSON, err := json.Marshal(endpointSnap)
+	if err != nil {
+		return fmt.Errorf("marshal lb endpoints: %w", err)
+	}
 
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "lb-config",
 			Namespace: cfg.Namespace,
 			Annotations: map[string]string{
-				"cloud9.io/lb-algorithm": algo,
-				"cloud9.io/lb-backends":  strings.Join(backends, ","),
+				"cloud9.io/lb-algorithm":   algo,
+				"cloud9.io/lb-backends":    strings.Join(logicalBackends, ","),
+				"cloud9.io/lb-endpoints":   string(endpointsJSON),
+				"cloud9.io/lb-app-replicas": strconv.FormatInt(int64(appReplicas), 10),
 			},
 		},
 		Data: map[string]string{"nginx.conf": nginxConf},
 	}
-	_, err := k.clientset.CoreV1().ConfigMaps(cfg.Namespace).Create(ctx, cm, metav1.CreateOptions{})
+	_, err = k.clientset.CoreV1().ConfigMaps(cfg.Namespace).Create(ctx, cm, metav1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("create lb configmap: %w", err)
 	}
@@ -626,7 +663,66 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 		return fmt.Errorf("create lb service: %w", err)
 	}
 
-	return k.waitForReady(ctx, cfg.Namespace, "lb")
+	return k.waitForReady(ctx, cfg.Namespace, "lb", replicas)
+}
+
+// LBEndpointSnapshot records a ready app-server pod IP at deploy time for metrics and debugging.
+type LBEndpointSnapshot struct {
+	PodName string `json:"podName"`
+	PodIP   string `json:"podIP"`
+	Ready   bool   `json:"ready"`
+}
+
+// resolveAppServerUpstream returns nginx upstream hosts (pod IPs when available, else service name).
+func (k *K8sDeployer) resolveAppServerUpstream(ctx context.Context, namespace string) (hosts []string, endpoints []LBEndpointSnapshot) {
+	ep, err := k.clientset.CoreV1().Endpoints(namespace).Get(ctx, "app-server", metav1.GetOptions{})
+	if err != nil || len(ep.Subsets) == 0 {
+		return []string{"app-server"}, nil
+	}
+	for _, subset := range ep.Subsets {
+		for _, addr := range subset.Addresses {
+			if addr.IP == "" {
+				continue
+			}
+			hosts = append(hosts, addr.IP)
+			name := ""
+			if addr.TargetRef != nil {
+				name = addr.TargetRef.Name
+			}
+			endpoints = append(endpoints, LBEndpointSnapshot{
+				PodName: name,
+				PodIP:   addr.IP,
+				Ready:   true,
+			})
+		}
+	}
+	if len(hosts) == 0 {
+		return []string{"app-server"}, nil
+	}
+	return hosts, endpoints
+}
+
+// appServerDesiredReplicas sums replicas from app-server nodes connected to the LB.
+func appServerDesiredReplicas(lbNode DeploymentNode, design DeploymentDesign) int32 {
+	nodeMap := make(map[string]DeploymentNode, len(design.Nodes))
+	for _, n := range design.Nodes {
+		nodeMap[n.ID] = n
+	}
+	var total int32
+	for _, c := range design.Connections {
+		if c.SourceID != lbNode.ID {
+			continue
+		}
+		target, ok := nodeMap[c.TargetID]
+		if !ok || target.Type != "app-server" {
+			continue
+		}
+		total += parseReplicaCount(target.Config, 1)
+	}
+	if total == 0 {
+		return 1
+	}
+	return total
 }
 
 // lbBackends extracts K8s service hostnames for app-servers reached by outbound edges from the lb node.
@@ -835,7 +931,7 @@ func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, 
 		}
 	}
 
-	return k.waitForReady(ctx, cfg.Namespace, spec.AppLabel)
+	return k.waitForReady(ctx, cfg.Namespace, spec.AppLabel, replicas)
 }
 
 func (k *K8sDeployer) Teardown(ctx context.Context, namespace string) error {
