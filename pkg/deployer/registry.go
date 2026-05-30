@@ -118,7 +118,7 @@ const (
 
 // componentRegistry maps node types to their infrastructure specs.
 // Only simple, off-the-shelf components go here. Complex types (cache, app-server,
-// worker, lb) use explicit deploy functions.
+// worker, lb) use explicit deploy functions — see lb.go for LBSpec.
 var componentRegistry = map[string]ComponentSpec{
 	"db": {
 		AppLabel:    "postgres",
