@@ -12,8 +12,8 @@ import (
 )
 
 func TestProfileToTargets_StaticAndPoolExpansion(t *testing.T) {
-	t.Parallel()
-
+	// Do not run parallel: t.Setenv is incompatible with t.Parallel(), and a developer
+	// LOADGEN_BASE_URL (e.g. local port-forward) must not override the httptest server.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/code-pool":
@@ -23,6 +23,7 @@ func TestProfileToTargets_StaticAndPoolExpansion(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
+	t.Setenv("LOADGEN_BASE_URL", srv.URL)
 
 	profile := NormalizeProfile(LoadProfile{
 		Template: "url-shortener",
