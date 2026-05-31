@@ -44,6 +44,41 @@ func TestApplyStorageProfile_UnknownEngine(t *testing.T) {
 	}
 }
 
+func TestMergeStorageIO(t *testing.T) {
+	t.Parallel()
+	stub := &StorageIO{Unit: "rows/s", Source: "postgres_exporter"}
+	live := &StorageIO{
+		Unit:      "rows/s",
+		Source:    "postgres_exporter",
+		ReadRate:  400,
+		WriteRate: 100,
+		BytesUsed: 1_000_000,
+		ErrorRate: 0.2,
+	}
+	got := mergeStorageIO(stub, live)
+	if got.ReadRate != 400 || got.WriteRate != 100 || got.Unit != "rows/s" {
+		t.Fatalf("merge: %+v", got)
+	}
+	if got.ReadLatency != 0 || got.WriteLatency != 0 {
+		t.Fatalf("latency should stay zero until wired: %+v", got)
+	}
+}
+
+func TestPostgreSQLBytesUsedQuery_ExcludesTemplates(t *testing.T) {
+	t.Parallel()
+	prov, ok := LookupStorageProvider(StorageEnginePostgreSQL)
+	if !ok {
+		t.Fatal("missing postgresql provider")
+	}
+	q := prov.BytesUsedQuery("ns-test")
+	if !strings.Contains(q, `datname!~"template0|template1"`) {
+		t.Fatalf("bytes query: %s", q)
+	}
+	if strings.Contains(q, "syscrack") {
+		t.Fatalf("should not hardcode datname: %s", q)
+	}
+}
+
 func TestMaxStoragePeaksFromComponents(t *testing.T) {
 	t.Parallel()
 	components := map[string]ComponentMetrics{
