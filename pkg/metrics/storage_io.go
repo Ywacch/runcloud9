@@ -53,16 +53,9 @@ var storageIORegistry = map[StorageEngineID]StorageIOProvider{
 				` + sum(rate(pg_stat_database_tup_updated{namespace="` + ns + `",datname!=""}[30s]))` +
 				` + sum(rate(pg_stat_database_tup_deleted{namespace="` + ns + `",datname!=""}[30s]))`
 		},
-		ReadLatencyQuery: func(_, nsSel string) string {
-			return `sum(rate(db_query_duration_seconds_sum{` + nsSel + `,operation=~"get_.*"}[30s]))` +
-				` / sum(rate(db_query_duration_seconds_count{` + nsSel + `,operation=~"get_.*"}[30s]))`
-		},
-		WriteLatencyQuery: func(_, nsSel string) string {
-			return `sum(rate(db_query_duration_seconds_sum{` + nsSel + `,operation=~"insert_.*"}[30s]))` +
-				` / sum(rate(db_query_duration_seconds_count{` + nsSel + `,operation=~"insert_.*"}[30s]))`
-		},
+		// Latency split deferred until templates use a shared operation="read"|"write" convention.
 		BytesUsedQuery: func(ns string) string {
-			return `sum(pg_database_size_bytes{namespace="` + ns + `",datname="syscrack"})`
+			return `sum(pg_database_size_bytes{namespace="` + ns + `",datname!~"template0|template1"})`
 		},
 		ErrorRateQuery: func(ns string) string {
 			return `sum(rate(pg_stat_database_xact_rollback{namespace="` + ns + `",datname!=""}[30s]))`
@@ -110,8 +103,37 @@ func LookupStorageProvider(engine StorageEngineID) (StorageIOProvider, bool) {
 	return p, ok
 }
 
+// mergeStorageIO overlays live exporter metrics onto the design-time stub (unit/source).
+func mergeStorageIO(stub, live *StorageIO) *StorageIO {
+	if stub == nil && live == nil {
+		return nil
+	}
+	out := StorageIO{}
+	if stub != nil {
+		out.Unit = stub.Unit
+		out.Source = stub.Source
+	}
+	if live == nil {
+		return &out
+	}
+	if live.Unit != "" {
+		out.Unit = live.Unit
+	}
+	if live.Source != "" {
+		out.Source = live.Source
+	}
+	out.ReadRate = live.ReadRate
+	out.WriteRate = live.WriteRate
+	out.ReadLatency = live.ReadLatency
+	out.WriteLatency = live.WriteLatency
+	out.BytesUsed = live.BytesUsed
+	out.BytesLimit = live.BytesLimit
+	out.ErrorRate = live.ErrorRate
+	return &out
+}
+
 // ApplyStorageProfile sets storageEngine, storageRole, and a storageIo stub (unit/source only).
-// Live rates are filled by collectStorageIO in phase 2+.
+// Live rates are filled by collectStorageIO after applyStorageProfiles.
 func ApplyStorageProfile(cm *ComponentMetrics, engine StorageEngineID, role string) {
 	if cm == nil {
 		return
@@ -130,7 +152,7 @@ func ApplyStorageProfile(cm *ComponentMetrics, engine StorageEngineID, role stri
 	}
 }
 
-// collectStorageIO runs registry PromQL and populates cm.StorageIO. Not called in phase 1.
+// collectStorageIO runs registry PromQL and returns engine-native storage metrics.
 func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel string, engine StorageEngineID) *StorageIO {
 	prov, ok := LookupStorageProvider(engine)
 	if !ok || c == nil || c.prometheusURL == "" {

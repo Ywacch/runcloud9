@@ -877,6 +877,23 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	dm.Components["lb"] = cmLB
 
 	applyStorageProfiles(dm, topo)
+	if topo.HasDB {
+		if cm, ok := dm.Components["db"]; ok {
+			engine := StorageEngineID(topo.DBEngine)
+			if engine == "" {
+				engine = StorageEnginePostgreSQL
+			}
+			live := c.collectStorageIO(ctx, ns, nsSel, engine)
+			cm.StorageIO = mergeStorageIO(cm.StorageIO, live)
+			if cm.StorageIO != nil {
+				c.debugCompare("db", "storage_read_rows", cm.StorageIO.ReadRate, cm.DbQueryRate,
+					"pg_stat_database_tup_returned", "app db_query_duration_count")
+				c.debugCompare("db", "storage_write_rows", cm.StorageIO.WriteRate, 0,
+					"tup_inserted+updated+deleted", "none")
+			}
+			dm.Components["db"] = cm
+		}
+	}
 
 	dm.TemplateMetrics = c.collectTemplateMetrics(ctx, nsSel, template)
 	c.augmentTemplateMetrics(dm, template)
