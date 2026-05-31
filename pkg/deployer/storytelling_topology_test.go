@@ -28,3 +28,31 @@ func TestStorytellingTopologyFromDesign(t *testing.T) {
 		t.Fatal("nil design should preserve template arg")
 	}
 }
+
+func TestStorytellingTopologyFromDesign_Storage(t *testing.T) {
+	t.Parallel()
+	d := &DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{Type: "db", Config: map[string]interface{}{"engine": "postgresql", "replicationMode": "read-replica"}},
+			{Type: "cache", Config: map[string]interface{}{"strategy": "write-through"}},
+		},
+	}
+	got := StorytellingTopologyFromDesign(d, "")
+	if !got.HasDB || got.DBEngine != "postgresql" || got.DBRole != "replica" {
+		t.Fatalf("db: %+v", got)
+	}
+	if got.CacheEngine != "redis" || got.CacheRole != "write-through" {
+		t.Fatalf("cache: engine=%q role=%q", got.CacheEngine, got.CacheRole)
+	}
+}
+
+func TestStorytellingTopologyFromDesign_RedisOnlyPrimary(t *testing.T) {
+	t.Parallel()
+	d := &DeploymentDesign{
+		Nodes: []DeploymentNode{{Type: "cache"}},
+	}
+	got := StorytellingTopologyFromDesign(d, "")
+	if got.HasDB || got.CacheRole != "primary" {
+		t.Fatalf("want redis primary: %+v", got)
+	}
+}

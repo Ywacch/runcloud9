@@ -40,6 +40,26 @@ type ComparisonMetrics struct {
 	AlignedAt   time.Time          `json:"alignedAt"`
 }
 
+// StorageIO holds engine-native persistence signals for any storage-capable component.
+// Throughput, latency, capacity, and errors share one block so the UI and A/B
+// comparators stay engine-agnostic. Phase 2+ populates rates via collectStorageIO.
+type StorageIO struct {
+	ReadRate  float64 `json:"readRate"`
+	WriteRate float64 `json:"writeRate"`
+	Unit      string  `json:"unit"` // "rows/s" | "keys/s" | "ops/s"
+
+	ReadLatency  float64 `json:"readLatency,omitempty"`  // seconds
+	WriteLatency float64 `json:"writeLatency,omitempty"` // seconds
+
+	BytesUsed  int64 `json:"bytesUsed,omitempty"`
+	BytesLimit int64 `json:"bytesLimit,omitempty"`
+
+	// ErrorRate is storage-level failures (rollbacks, rejected writes), not app HTTP 5xx.
+	ErrorRate float64 `json:"errorRate,omitempty"` // errors/sec
+
+	Source string `json:"source"` // e.g. "postgres_exporter"
+}
+
 // ComponentMetrics holds per-pod metrics for one component (db, cache, app-server).
 // JSON field names use camelCase for frontend consumers.
 type ComponentMetrics struct {
@@ -106,6 +126,10 @@ type ComponentMetrics struct {
 	MQMemoryLimit     float64 `json:"mqMemoryLimit,omitempty"`
 	MQSaturationRatio float64 `json:"mqSaturationRatio,omitempty"` // produce/consume; >1 means consumer falling behind
 	WorkerSaturation  float64 `json:"workerSaturation,omitempty"`  // queueDepth/100 capped at 1.0
+	// StorageEngine / StorageRole describe the persistence software and canvas role (primary, cache-aside).
+	StorageEngine string     `json:"storageEngine,omitempty"`
+	StorageRole   string     `json:"storageRole,omitempty"`
+	StorageIO     *StorageIO `json:"storageIo,omitempty"`
 }
 
 // BackendReplicas tracks desired vs ready app-server pods (LB-facing view).
@@ -132,16 +156,72 @@ type BackendPod = PodMetrics
 
 func emptyPeakSummary() map[string]any {
 	return map[string]any{
-		"peak_rps":           0.0,
-		"peak_p99_ms":        0.0,
-		"error_rate":         0.0,
-		"total_requests":     0.0,
-		"total_cache_hits":   0.0,
-		"total_cache_misses": 0.0,
-		"cache_hit_rate":     0.0,
-		"db_query_rate":      0.0,
-		"db_total_queries":   0.0,
+		"peak_rps":                 0.0,
+		"peak_p99_ms":              0.0,
+		"error_rate":               0.0,
+		"total_requests":           0.0,
+		"total_cache_hits":         0.0,
+		"total_cache_misses":       0.0,
+		"cache_hit_rate":           0.0,
+		"db_query_rate":            0.0,
+		"db_total_queries":         0.0,
+		"storage_read_rate":        0.0,
+		"storage_write_rate":       0.0,
+		"storage_read_latency_ms":  0.0,
+		"storage_write_latency_ms": 0.0,
+		"storage_utilization_pct":  0.0,
+		"storage_error_rate":       0.0,
 	}
+}
+
+// storagePeakFields extracts peak candidates from a component's storageIo block.
+func storagePeakFields(c ComponentMetrics) (readRate, writeRate, readLatMs, writeLatMs, utilPct, errRate float64) {
+	io := c.StorageIO
+	if io == nil {
+		return 0, 0, 0, 0, 0, 0
+	}
+	readRate = io.ReadRate
+	writeRate = io.WriteRate
+	if io.ReadLatency > 0 {
+		readLatMs = io.ReadLatency * 1000
+	}
+	if io.WriteLatency > 0 {
+		writeLatMs = io.WriteLatency * 1000
+	}
+	if io.BytesLimit > 0 && io.BytesUsed >= 0 {
+		utilPct = float64(io.BytesUsed) / float64(io.BytesLimit) * 100
+	}
+	errRate = io.ErrorRate
+	return readRate, writeRate, readLatMs, writeLatMs, utilPct, errRate
+}
+
+func maxStoragePeaksFromComponents(components map[string]ComponentMetrics) (readRate, writeRate, readLatMs, writeLatMs, utilPct, errRate float64) {
+	for _, key := range []string{"db", "cache"} {
+		c, ok := components[key]
+		if !ok {
+			continue
+		}
+		r, w, rl, wl, u, e := storagePeakFields(c)
+		if r > readRate {
+			readRate = r
+		}
+		if w > writeRate {
+			writeRate = w
+		}
+		if rl > readLatMs {
+			readLatMs = rl
+		}
+		if wl > writeLatMs {
+			writeLatMs = wl
+		}
+		if u > utilPct {
+			utilPct = u
+		}
+		if e > errRate {
+			errRate = e
+		}
+	}
+	return readRate, writeRate, readLatMs, writeLatMs, utilPct, errRate
 }
 
 // lifetimeHitRate returns hit percentage from 9m increase counters (0–100).
@@ -162,6 +242,7 @@ func PeakSummaryFromHistory(rb *RingBuffer) map[string]any {
 	all := rb.All()
 	var peakRPS, peakP99ms, peakErr, maxTotalReq, maxHits, maxMisses, minHitRate float64 = 0, 0, 0, 0, 0, 0, -1
 	var maxDbRate, maxDbTotal float64
+	var maxStorageRead, maxStorageWrite, maxStorageReadLatMs, maxStorageWriteLatMs, maxStorageUtilPct, maxStorageErr float64
 	haveHitRate := false
 	for i := range all {
 		dm := &all[i]
@@ -201,20 +282,45 @@ func PeakSummaryFromHistory(rb *RingBuffer) map[string]any {
 		if db.DbTotalQueries > maxDbTotal {
 			maxDbTotal = db.DbTotalQueries
 		}
+		sr, sw, srl, swl, su, se := maxStoragePeaksFromComponents(dm.Components)
+		if sr > maxStorageRead {
+			maxStorageRead = sr
+		}
+		if sw > maxStorageWrite {
+			maxStorageWrite = sw
+		}
+		if srl > maxStorageReadLatMs {
+			maxStorageReadLatMs = srl
+		}
+		if swl > maxStorageWriteLatMs {
+			maxStorageWriteLatMs = swl
+		}
+		if su > maxStorageUtilPct {
+			maxStorageUtilPct = su
+		}
+		if se > maxStorageErr {
+			maxStorageErr = se
+		}
 	}
 	if !haveHitRate {
 		minHitRate = 0
 	}
 	return map[string]any{
-		"peak_rps":           peakRPS,
-		"peak_p99_ms":        peakP99ms,
-		"error_rate":         peakErr,
-		"total_requests":     maxTotalReq,
-		"total_cache_hits":   maxHits,
-		"total_cache_misses": maxMisses,
-		"cache_hit_rate":     minHitRate,
-		"db_query_rate":      maxDbRate,
-		"db_total_queries":   maxDbTotal,
+		"peak_rps":                 peakRPS,
+		"peak_p99_ms":              peakP99ms,
+		"error_rate":               peakErr,
+		"total_requests":           maxTotalReq,
+		"total_cache_hits":         maxHits,
+		"total_cache_misses":       maxMisses,
+		"cache_hit_rate":           minHitRate,
+		"db_query_rate":            maxDbRate,
+		"db_total_queries":         maxDbTotal,
+		"storage_read_rate":        maxStorageRead,
+		"storage_write_rate":       maxStorageWrite,
+		"storage_read_latency_ms":  maxStorageReadLatMs,
+		"storage_write_latency_ms":   maxStorageWriteLatMs,
+		"storage_utilization_pct":  maxStorageUtilPct,
+		"storage_error_rate":       maxStorageErr,
 	}
 }
 
@@ -230,15 +336,22 @@ func PeakSummary(dm *DeploymentMetrics) map[string]any {
 	}
 	cache := dm.Components["cache"]
 	db := dm.Components["db"]
+	sr, sw, srl, swl, su, se := maxStoragePeaksFromComponents(dm.Components)
 	return map[string]any{
-		"peak_rps":           app.RequestRate,
-		"peak_p99_ms":        app.P99Latency * 1000,
-		"error_rate":         app.ErrorRate,
-		"total_requests":     app.TotalRequests,
-		"total_cache_hits":   cache.CacheHitsLast9m,
-		"total_cache_misses": cache.CacheMissesLast9m,
-		"cache_hit_rate":     lifetimeHitRate(cache),
-		"db_query_rate":      db.DbQueryRate,
-		"db_total_queries":   db.DbTotalQueries,
+		"peak_rps":                 app.RequestRate,
+		"peak_p99_ms":              app.P99Latency * 1000,
+		"error_rate":               app.ErrorRate,
+		"total_requests":           app.TotalRequests,
+		"total_cache_hits":         cache.CacheHitsLast9m,
+		"total_cache_misses":       cache.CacheMissesLast9m,
+		"cache_hit_rate":           lifetimeHitRate(cache),
+		"db_query_rate":            db.DbQueryRate,
+		"db_total_queries":         db.DbTotalQueries,
+		"storage_read_rate":        sr,
+		"storage_write_rate":       sw,
+		"storage_read_latency_ms":  srl,
+		"storage_write_latency_ms": swl,
+		"storage_utilization_pct":  su,
+		"storage_error_rate":       se,
 	}
 }

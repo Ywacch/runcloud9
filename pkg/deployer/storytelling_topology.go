@@ -13,6 +13,11 @@ type StorytellingTopology struct {
 	HasCache      bool
 	CacheStrategy string
 	Template      string
+	HasDB         bool
+	DBEngine      string
+	DBRole        string
+	CacheEngine   string
+	CacheRole     string
 }
 
 // StorytellingTopologyFromDesign walks design nodes (load_balancer, message_queue, worker, cache).
@@ -33,14 +38,41 @@ func StorytellingTopologyFromDesign(d *DeploymentDesign, template string) Storyt
 			t.HasMQ = true
 		case "worker":
 			t.HasWorker = true
+		case "db":
+			t.HasDB = true
+			if eng := configStringFromNodeConfig(n.Config, "engine"); eng != "" {
+				t.DBEngine = eng
+			}
+			if mode := configStringFromNodeConfig(n.Config, "replicationMode"); mode != "" && mode != "none" {
+				t.DBRole = "replica"
+			}
 		case "cache":
 			t.HasCache = true
+			t.CacheEngine = "redis"
 			if t.CacheStrategy == "" {
 				t.CacheStrategy = configStringFromNodeConfig(n.Config, "strategy")
 			}
 			if t.CacheStrategy == "" {
 				t.CacheStrategy = configStringFromNodeConfig(n.Config, "cacheStrategy")
 			}
+		}
+	}
+	if t.DBEngine == "" && t.HasDB {
+		t.DBEngine = "postgresql"
+	}
+	if t.DBRole == "" && t.HasDB {
+		t.DBRole = "primary"
+	}
+	if t.HasCache {
+		if t.CacheRole == "" {
+			t.CacheRole = t.CacheStrategy
+		}
+		if t.CacheRole == "" {
+			t.CacheRole = "cache-aside"
+		}
+		// No db node: treat Redis as primary persistence for metrics labeling.
+		if !t.HasDB {
+			t.CacheRole = "primary"
 		}
 	}
 	return t

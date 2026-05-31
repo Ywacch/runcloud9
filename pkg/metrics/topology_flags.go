@@ -11,4 +11,10 @@ type TopologyFlags struct {
 	HasLB         bool
 	CacheStrategy string
 	Template      string
+	// Storage topology (from deployment design, not live metrics).
+	HasDB       bool
+	DBEngine    string // e.g. "postgresql"
+	DBRole      string // e.g. "primary"
+	CacheEngine string // e.g. "redis" when HasCache
+	CacheRole   string // e.g. "cache-aside" | "primary"
 }

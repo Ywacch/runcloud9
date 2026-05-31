@@ -427,6 +427,41 @@ func redisLatencyCommandPattern(template string) string {
 	}
 }
 
+// applyStorageProfiles sets storageEngine, storageRole, and storageIo stubs from design topology.
+func applyStorageProfiles(dm *DeploymentMetrics, topo TopologyFlags) {
+	if dm == nil {
+		return
+	}
+	if topo.HasDB {
+		if cm, ok := dm.Components["db"]; ok {
+			engine := StorageEngineID(topo.DBEngine)
+			if engine == "" {
+				engine = StorageEnginePostgreSQL
+			}
+			role := topo.DBRole
+			if role == "" {
+				role = StorageRolePrimary
+			}
+			ApplyStorageProfile(&cm, engine, role)
+			dm.Components["db"] = cm
+		}
+	}
+	if topo.HasCache {
+		if cm, ok := dm.Components["cache"]; ok {
+			engine := StorageEngineID(topo.CacheEngine)
+			if engine == "" {
+				engine = StorageEngineRedis
+			}
+			role := topo.CacheRole
+			if role == "" {
+				role = StorageRoleCacheAside
+			}
+			ApplyStorageProfile(&cm, engine, role)
+			dm.Components["cache"] = cm
+		}
+	}
+}
+
 func annotateCacheForTemplate(cm *ComponentMetrics, template string) {
 	if cm == nil {
 		return
@@ -840,6 +875,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	}
 	c.debugCompare("lb", "rps", cmLB.RequestRate, cmApp.RequestRate, "sum(perBackendRPS)", "mirrored app requestRate")
 	dm.Components["lb"] = cmLB
+
+	applyStorageProfiles(dm, topo)
 
 	dm.TemplateMetrics = c.collectTemplateMetrics(ctx, nsSel, template)
 	c.augmentTemplateMetrics(dm, template)

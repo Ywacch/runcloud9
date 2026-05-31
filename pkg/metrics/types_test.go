@@ -52,6 +52,42 @@ func TestPeakSummary(t *testing.T) {
 	if s["db_query_rate"] != 11.0 {
 		t.Fatalf("db_query_rate: want 11, got %v", s["db_query_rate"])
 	}
+	if _, ok := s["storage_read_rate"]; !ok {
+		t.Fatal("expected storage_read_rate in peak summary")
+	}
+}
+
+func TestPeakSummary_StoragePeaks(t *testing.T) {
+	t.Parallel()
+	dm := &DeploymentMetrics{
+		Components: map[string]ComponentMetrics{
+			"app-server": {RequestRate: 10, P99Latency: 0.01},
+			"cache":      {},
+			"db": {
+				StorageIO: &StorageIO{
+					ReadRate:     200,
+					WriteRate:    50,
+					ReadLatency:  0.002,
+					BytesUsed:    900,
+					BytesLimit:   1000,
+					ErrorRate:    1,
+				},
+			},
+		},
+	}
+	s := PeakSummary(dm)
+	if s["storage_read_rate"] != 200.0 || s["storage_write_rate"] != 50.0 {
+		t.Fatalf("rates: %#v", s)
+	}
+	if s["storage_read_latency_ms"] != 2.0 {
+		t.Fatalf("read latency ms: %v", s["storage_read_latency_ms"])
+	}
+	if s["storage_utilization_pct"] != 90.0 {
+		t.Fatalf("util: %v", s["storage_utilization_pct"])
+	}
+	if s["storage_error_rate"] != 1.0 {
+		t.Fatalf("storage err: %v", s["storage_error_rate"])
+	}
 }
 
 func TestPeakSummaryFromHistory(t *testing.T) {
