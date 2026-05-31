@@ -887,11 +887,22 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 			cm.StorageIO = mergeStorageIO(cm.StorageIO, live)
 			if cm.StorageIO != nil {
 				c.debugCompare("db", "storage_read_rows", cm.StorageIO.ReadRate, cm.DbQueryRate,
-					"pg_stat_database_tup_returned", "app db_query_duration_count")
+					"pg_stat_user_tables seq+idx read", "app db_query_duration_count")
 				c.debugCompare("db", "storage_write_rows", cm.StorageIO.WriteRate, 0,
-					"tup_inserted+updated+deleted", "none")
+					"pg_stat_user_tables ins+upd+del", "none")
 			}
 			dm.Components["db"] = cm
+		}
+	}
+	if topo.HasCache {
+		if cm, ok := dm.Components["cache"]; ok {
+			engine := StorageEngineID(topo.CacheEngine)
+			if engine == "" {
+				engine = StorageEngineRedis
+			}
+			live := c.collectStorageIO(ctx, ns, nsSel, engine)
+			cm.StorageIO = mergeStorageIO(cm.StorageIO, live)
+			dm.Components["cache"] = cm
 		}
 	}
 

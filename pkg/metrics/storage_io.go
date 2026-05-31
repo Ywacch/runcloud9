@@ -45,13 +45,13 @@ var storageIORegistry = map[StorageEngineID]StorageIOProvider{
 		Engine: StorageEnginePostgreSQL,
 		Unit:   "rows/s",
 		Source: "postgres_exporter",
+		// User-table counters exclude postgres_exporter catalog queries (pg_stat_database.tup_returned
+		// counts every row returned to any client, including sidecar stats scrapes).
 		ReadQuery: func(ns string) string {
-			return `sum(rate(pg_stat_database_tup_returned{namespace="` + ns + `",datname!=""}[30s]))`
+			return postgresUserTableReadRateQuery(ns)
 		},
 		WriteQuery: func(ns string) string {
-			return `sum(rate(pg_stat_database_tup_inserted{namespace="` + ns + `",datname!=""}[30s]))` +
-				` + sum(rate(pg_stat_database_tup_updated{namespace="` + ns + `",datname!=""}[30s]))` +
-				` + sum(rate(pg_stat_database_tup_deleted{namespace="` + ns + `",datname!=""}[30s]))`
+			return postgresUserTableWriteRateQuery(ns)
 		},
 		// Latency split deferred until templates use a shared operation="read"|"write" convention.
 		BytesUsedQuery: func(ns string) string {
@@ -95,6 +95,21 @@ var storageIORegistry = map[StorageEngineID]StorageIOProvider{
 		Source: "cassandra_exporter",
 		// PromQL wired when cassandra deploy + exporter land (phase 3).
 	},
+}
+
+// postgresUserTableReadRateQuery sums live rows read from user tables (seq + index heap fetches).
+func postgresUserTableReadRateQuery(ns string) string {
+	filter := `namespace="` + ns + `",datname!~"template0|template1"`
+	return `sum(rate(pg_stat_user_tables_seq_tup_read{` + filter + `}[30s]))` +
+		` + sum(rate(pg_stat_user_tables_idx_tup_fetch{` + filter + `}[30s]))`
+}
+
+// postgresUserTableWriteRateQuery sums row inserts, updates, and deletes on user tables.
+func postgresUserTableWriteRateQuery(ns string) string {
+	filter := `namespace="` + ns + `",datname!~"template0|template1"`
+	return `sum(rate(pg_stat_user_tables_n_tup_ins{` + filter + `}[30s]))` +
+		` + sum(rate(pg_stat_user_tables_n_tup_upd{` + filter + `}[30s]))` +
+		` + sum(rate(pg_stat_user_tables_n_tup_del{` + filter + `}[30s]))`
 }
 
 // LookupStorageProvider returns the metrics provider for an engine id, if registered.
