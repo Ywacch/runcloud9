@@ -452,3 +452,37 @@ func TestQueryCPUPair_PromQLFilters(t *testing.T) {
 		t.Fatalf("want [30s] rate window: %s", primary)
 	}
 }
+
+func TestCollect_StorageProfileFromTopology(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(promEmptyJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	topo := TopologyFlags{
+		HasDB:       true,
+		DBEngine:    "postgresql",
+		DBRole:      "primary",
+		HasCache:    true,
+		CacheEngine: "redis",
+		CacheRole:   "cache-aside",
+	}
+	dm, err := c.Collect(context.Background(), "ns-storage", "url-shortener", topo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := dm.Components["db"]
+	if db.StorageEngine != "postgresql" || db.StorageRole != "primary" {
+		t.Fatalf("db profile: engine=%q role=%q", db.StorageEngine, db.StorageRole)
+	}
+	if db.StorageIO == nil || db.StorageIO.Unit != "rows/s" {
+		t.Fatalf("db storageIo: %+v", db.StorageIO)
+	}
+	cache := dm.Components["cache"]
+	if cache.StorageEngine != "redis" || cache.StorageRole != "cache-aside" {
+		t.Fatalf("cache profile: engine=%q role=%q", cache.StorageEngine, cache.StorageRole)
+	}
+}

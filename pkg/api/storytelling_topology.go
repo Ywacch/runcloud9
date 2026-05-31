@@ -16,5 +16,10 @@ func MetricsTopologyFromDeploymentDesign(d *deployer.DeploymentDesign, template 
 		HasCache:      st.HasCache,
 		CacheStrategy: st.CacheStrategy,
 		Template:      st.Template,
+		HasDB:         st.HasDB,
+		DBEngine:      st.DBEngine,
+		DBRole:        st.DBRole,
+		CacheEngine:   st.CacheEngine,
+		CacheRole:     st.CacheRole,
 	}
 }
