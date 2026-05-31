@@ -15,8 +15,30 @@ func TestLookupStorageProvider_PostgreSQL(t *testing.T) {
 		t.Fatalf("provider: %+v", prov)
 	}
 	q := prov.ReadQuery("ns1")
-	if !strings.Contains(q, `namespace="ns1"`) || !strings.Contains(q, "tup_returned") {
+	if !strings.Contains(q, `namespace="ns1"`) || !strings.Contains(q, "pg_stat_user_tables_seq_tup_read") {
 		t.Fatalf("read query: %s", q)
+	}
+	if !strings.Contains(q, "pg_stat_user_tables_idx_tup_fetch") {
+		t.Fatalf("read query missing idx_tup_fetch: %s", q)
+	}
+}
+
+func TestPostgreSQLUserTableWriteQuery(t *testing.T) {
+	t.Parallel()
+	prov, ok := LookupStorageProvider(StorageEnginePostgreSQL)
+	if !ok {
+		t.Fatal("missing postgresql provider")
+	}
+	q := prov.WriteQuery("ns1")
+	for _, want := range []string{
+		"pg_stat_user_tables_n_tup_ins",
+		"pg_stat_user_tables_n_tup_upd",
+		"pg_stat_user_tables_n_tup_del",
+		`datname!~"template0|template1"`,
+	} {
+		if !strings.Contains(q, want) {
+			t.Fatalf("write query missing %q: %s", want, q)
+		}
 	}
 }
 

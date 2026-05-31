@@ -15,9 +15,9 @@ func TestCollect_StorageIO_PostgresLive(t *testing.T) {
 		q := r.URL.Query().Get("query")
 		var val string
 		switch {
-		case strings.Contains(q, "tup_returned"):
+		case strings.Contains(q, "pg_stat_user_tables_seq_tup_read"):
 			val = "412.5"
-		case strings.Contains(q, "tup_updated"):
+		case strings.Contains(q, "pg_stat_user_tables_n_tup_ins"):
 			val = "105"
 		case strings.Contains(q, "pg_database_size_bytes"):
 			val = "52428800"
