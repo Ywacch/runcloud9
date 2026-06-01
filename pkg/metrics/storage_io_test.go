@@ -101,18 +101,55 @@ func TestPostgreSQLBytesUsedQuery_ExcludesTemplates(t *testing.T) {
 	}
 }
 
+func TestFinalizeStorageIO_Postgres(t *testing.T) {
+	t.Parallel()
+	io := &StorageIO{Unit: "rows/s", Source: "postgres_exporter"}
+	finalizeStorageIO(io, StorageEnginePostgreSQL, TopologyFlags{}, "url-shortener")
+	if io.ReadLabel != "Rows scanned/s" || io.WriteLabel != "Rows written/s" {
+		t.Fatalf("labels: %+v", io)
+	}
+	if io.Scope != "all-db-clients" {
+		t.Fatalf("scope: %q", io.Scope)
+	}
+	if io.Footnote != "" {
+		t.Fatalf("unexpected footnote: %q", io.Footnote)
+	}
+}
+
+func TestFinalizeStorageIO_PostgresWorkerSocialFeed(t *testing.T) {
+	t.Parallel()
+	io := &StorageIO{}
+	topo := TopologyFlags{HasWorker: true, HasDB: true}
+	finalizeStorageIO(io, StorageEnginePostgreSQL, topo, "social-feed")
+	if !strings.Contains(io.Scope, "worker") {
+		t.Fatalf("scope: %q", io.Scope)
+	}
+	if !strings.Contains(io.Footnote, "fanout-worker") {
+		t.Fatalf("footnote: %q", io.Footnote)
+	}
+}
+
+func TestFinalizeStorageIO_Redis(t *testing.T) {
+	t.Parallel()
+	io := &StorageIO{Unit: "keys/s", Source: "redis_exporter"}
+	finalizeStorageIO(io, StorageEngineRedis, TopologyFlags{HasCache: true}, "url-shortener")
+	if io.ReadLabel != "GET commands/s" || io.Scope != "engine-native" {
+		t.Fatalf("redis presentation: %+v", io)
+	}
+}
+
 func TestMaxStoragePeaksFromComponents(t *testing.T) {
 	t.Parallel()
 	components := map[string]ComponentMetrics{
 		"db": {
 			StorageIO: &StorageIO{
-				ReadRate:      100,
-				WriteRate:     20,
-				ReadLatency:   0.01,
-				WriteLatency:  0.05,
-				BytesUsed:     800,
-				BytesLimit:    1000,
-				ErrorRate:     0.5,
+				ReadRate:     100,
+				WriteRate:    20,
+				ReadLatency:  0.01,
+				WriteLatency: 0.05,
+				BytesUsed:    800,
+				BytesLimit:   1000,
+				ErrorRate:    0.5,
 			},
 		},
 		"cache": {

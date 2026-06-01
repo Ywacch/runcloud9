@@ -485,4 +485,77 @@ func TestCollect_StorageProfileFromTopology(t *testing.T) {
 	if cache.StorageEngine != "redis" || cache.StorageRole != "cache-aside" {
 		t.Fatalf("cache profile: engine=%q role=%q", cache.StorageEngine, cache.StorageRole)
 	}
+	if db.DbQuerySource != DbQuerySourceNone {
+		t.Fatalf("dbQuerySource without app metrics: %q", db.DbQuerySource)
+	}
+	if db.StorageIO.ReadLabel == "" || db.StorageIO.Scope == "" {
+		t.Fatalf("db storageIo presentation: %+v", db.StorageIO)
+	}
+	if cache.StorageIO.ReadLabel == "" {
+		t.Fatalf("cache storageIo presentation: %+v", cache.StorageIO)
+	}
+}
+
+func TestCollect_DbQuerySource_NoXactCommitBackfill(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		var val string
+		switch {
+		case strings.Contains(q, "db_query_duration_seconds_count"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+			return
+		case strings.Contains(q, "xact_commit"):
+			val = "6.5"
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(promVectorJSON(val))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	dm, err := c.Collect(context.Background(), "ns-db-src", "url-shortener", TopologyFlags{HasDB: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := dm.Components["db"]
+	if db.DbQuerySource != DbQuerySourceNone {
+		t.Fatalf("dbQuerySource: want none, got %q", db.DbQuerySource)
+	}
+	if db.DbQueryRate != 0 {
+		t.Fatalf("dbQueryRate should not backfill xact_commit, got %v", db.DbQueryRate)
+	}
+	if db.RequestRate == 0 {
+		t.Fatalf("requestRate should still reflect pg txn rate for debug paths")
+	}
+}
+
+func TestCollect_DbQuerySource_App(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		if strings.Contains(q, "db_query_duration_seconds_count") {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(promVectorJSON("42"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(promEmptyJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	dm, err := c.Collect(context.Background(), "ns-db-app", "", TopologyFlags{HasDB: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := dm.Components["db"]
+	if db.DbQuerySource != DbQuerySourceApp || db.DbQueryRate != 42 {
+		t.Fatalf("db query: source=%q rate=%v", db.DbQuerySource, db.DbQueryRate)
+	}
 }

@@ -505,11 +505,17 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmDB.CPULimit = c.kubeLimitCPU(ctx, ns, "postgres.*", "postgres")
 	cmDB.MemoryLimit = c.kubeLimitMem(ctx, ns, "postgres.*", "postgres")
 
-	dbQPS, _ := c.query(ctx, fmt.Sprintf(
+	dbQPS, dbQPSPresent, _ := c.queryScalar(ctx, fmt.Sprintf(
 		`sum(rate(db_query_duration_seconds_count{%s}[30s]))`,
 		nsSel,
 	))
-	cmDB.DbQueryRate = dbQPS
+	if dbQPSPresent {
+		cmDB.DbQueryRate = dbQPS
+		cmDB.DbQuerySource = DbQuerySourceApp
+	} else {
+		cmDB.DbQueryRate = 0
+		cmDB.DbQuerySource = DbQuerySourceNone
+	}
 	dbLatSum, _ := c.query(ctx, fmt.Sprintf(
 		`sum(rate(db_query_duration_seconds_sum{%s}[30s]))`,
 		nsSel,
@@ -556,14 +562,11 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	))
 	if pgTxnRate+pgRollbackRate > 0 {
 		cmDB.RequestRate = pgTxnRate + pgRollbackRate
-	} else {
+	} else if dbQPSPresent {
 		cmDB.RequestRate = dbQPS
 	}
-	// When app-server doesn't query DB directly (proxy mode), DbQueryRate stays 0.
-	// Fall back to postgres-exporter transaction rate so the inspector panel shows live data.
-	if cmDB.DbQueryRate == 0 && cmDB.RequestRate > 0 {
-		cmDB.DbQueryRate = cmDB.RequestRate
-	}
+	// DbQueryRate is app SQL throughput only (dbQuerySource=app). Do not backfill from
+	// xact_commit — that includes postgres_exporter sidecar traffic (~5/s at idle).
 	c.debugCompare("db", "rps", pgTxnRate+pgRollbackRate, dbQPS, "pg_stat_database_xact_commit+rollback", "app db_query_duration_count")
 	c.debugCompare("db", "cpu", 0, dbCPU, "none (no native metric)", "kube_requests/cadvisor_or_fallback")
 
@@ -885,6 +888,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 			}
 			live := c.collectStorageIO(ctx, ns, nsSel, engine)
 			cm.StorageIO = mergeStorageIO(cm.StorageIO, live)
+			finalizeStorageIO(cm.StorageIO, engine, topo, template)
 			if cm.StorageIO != nil {
 				c.debugCompare("db", "storage_read_rows", cm.StorageIO.ReadRate, cm.DbQueryRate,
 					"pg_stat_user_tables seq+idx read", "app db_query_duration_count")
@@ -902,6 +906,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 			}
 			live := c.collectStorageIO(ctx, ns, nsSel, engine)
 			cm.StorageIO = mergeStorageIO(cm.StorageIO, live)
+			finalizeStorageIO(cm.StorageIO, engine, topo, template)
 			dm.Components["cache"] = cm
 		}
 	}

@@ -1,6 +1,9 @@
 package metrics
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // StorageEngineID identifies a persistence engine for metrics collection.
 type StorageEngineID string
@@ -13,9 +16,9 @@ const (
 
 // Storage role labels describe how the canvas uses a storage component.
 const (
-	StorageRolePrimary    = "primary"
-	StorageRoleCacheAside = "cache-aside"
-	StorageRoleReplica    = "replica"
+	StorageRolePrimary      = "primary"
+	StorageRoleCacheAside   = "cache-aside"
+	StorageRoleReplica      = "replica"
 	StorageRoleWriteThrough = "write-through"
 )
 
@@ -31,13 +34,13 @@ type StorageIOProvider struct {
 	Unit   string
 	Source string
 
-	ReadQuery           PromQLBuilder
-	WriteQuery          PromQLBuilder
-	ReadLatencyQuery    AppPromQLBuilder
-	WriteLatencyQuery   AppPromQLBuilder
-	BytesUsedQuery      PromQLBuilder
-	BytesLimitQuery     PromQLBuilder
-	ErrorRateQuery      PromQLBuilder
+	ReadQuery         PromQLBuilder
+	WriteQuery        PromQLBuilder
+	ReadLatencyQuery  AppPromQLBuilder
+	WriteLatencyQuery AppPromQLBuilder
+	BytesUsedQuery    PromQLBuilder
+	BytesLimitQuery   PromQLBuilder
+	ErrorRateQuery    PromQLBuilder
 }
 
 var storageIORegistry = map[StorageEngineID]StorageIOProvider{
@@ -144,7 +147,72 @@ func mergeStorageIO(stub, live *StorageIO) *StorageIO {
 	out.BytesUsed = live.BytesUsed
 	out.BytesLimit = live.BytesLimit
 	out.ErrorRate = live.ErrorRate
+	if live.ReadLabel != "" {
+		out.ReadLabel = live.ReadLabel
+	}
+	if live.WriteLabel != "" {
+		out.WriteLabel = live.WriteLabel
+	}
+	if live.Scope != "" {
+		out.Scope = live.Scope
+	}
+	if live.Footnote != "" {
+		out.Footnote = live.Footnote
+	}
 	return &out
+}
+
+// finalizeStorageIO sets presentation fields (labels, scope, footnote) for the inspector.
+func finalizeStorageIO(io *StorageIO, engine StorageEngineID, topo TopologyFlags, template string) {
+	if io == nil {
+		return
+	}
+	switch engine {
+	case StorageEnginePostgreSQL:
+		if io.ReadLabel == "" {
+			io.ReadLabel = "Rows scanned/s"
+		}
+		if io.WriteLabel == "" {
+			io.WriteLabel = "Rows written/s"
+		}
+		if io.Scope == "" {
+			io.Scope = postgresStorageScope(topo)
+		}
+		if io.Footnote == "" {
+			io.Footnote = postgresStorageFootnote(topo, template)
+		}
+	case StorageEngineRedis:
+		if io.ReadLabel == "" {
+			io.ReadLabel = "GET commands/s"
+		}
+		if io.WriteLabel == "" {
+			io.WriteLabel = "SET/DEL commands/s"
+		}
+		if io.Scope == "" {
+			io.Scope = "engine-native"
+		}
+	default:
+		if io.Scope == "" {
+			io.Scope = "engine-native"
+		}
+	}
+}
+
+func postgresStorageScope(topo TopologyFlags) string {
+	if topo.HasWorker {
+		return "all-db-clients (app-server, worker)"
+	}
+	return "all-db-clients"
+}
+
+func postgresStorageFootnote(topo TopologyFlags, template string) string {
+	if !topo.HasWorker {
+		return ""
+	}
+	if strings.HasPrefix(template, "social-feed") {
+		return "Row scans include fanout-worker follower lookups on each new post. Feed reads use Redis when push mode is enabled."
+	}
+	return "Row scans include all database clients (e.g. workers), not only the app-server."
 }
 
 // ApplyStorageProfile sets storageEngine, storageRole, and a storageIo stub (unit/source only).
