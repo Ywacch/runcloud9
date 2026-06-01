@@ -40,6 +40,12 @@ type ComparisonMetrics struct {
 	AlignedAt   time.Time          `json:"alignedAt"`
 }
 
+// DbQuerySource tells the UI whether dbQueryRate is app-instrumented SQL throughput.
+const (
+	DbQuerySourceApp  = "app"
+	DbQuerySourceNone = "none"
+)
+
 // StorageIO holds engine-native persistence signals for any storage-capable component.
 // Throughput, latency, capacity, and errors share one block so the UI and A/B
 // comparators stay engine-agnostic. Phase 2+ populates rates via collectStorageIO.
@@ -47,6 +53,14 @@ type StorageIO struct {
 	ReadRate  float64 `json:"readRate"`
 	WriteRate float64 `json:"writeRate"`
 	Unit      string  `json:"unit"` // "rows/s" | "keys/s" | "ops/s"
+
+	// ReadLabel / WriteLabel are display titles for the inspector (e.g. "Rows scanned/s").
+	ReadLabel  string `json:"readLabel,omitempty"`
+	WriteLabel string `json:"writeLabel,omitempty"`
+	// Scope describes which clients or layer the rates include (e.g. all-db-clients).
+	Scope string `json:"scope,omitempty"`
+	// Footnote is template/topology context for the DB Load panel (optional).
+	Footnote string `json:"footnote,omitempty"`
 
 	ReadLatency  float64 `json:"readLatency,omitempty"`  // seconds
 	WriteLatency float64 `json:"writeLatency,omitempty"` // seconds
@@ -80,10 +94,11 @@ type ComponentMetrics struct {
 	CacheHitsLast9m   float64 `json:"cacheHitsLast9m"`
 	CacheMissesLast9m float64 `json:"cacheMissesLast9m"`
 	ErrorRate         float64 `json:"errorRate"` // errors/sec
-	// Db* metrics come from url-shortener's db_query_duration_seconds histogram (app /metrics), same namespace label.
-	DbQueryRate    float64 `json:"dbQueryRate"`    // queries/sec
-	DbQueryLatency float64 `json:"dbQueryLatency"` // seconds (avg)
-	DbTotalQueries float64 `json:"dbTotalQueries"` // increase(count[9m])
+	// Db* metrics come from app db_query_duration_seconds when scraped (app-server /metrics).
+	DbQueryRate    float64 `json:"dbQueryRate"`             // queries/sec; meaningful when dbQuerySource=app
+	DbQueryLatency float64 `json:"dbQueryLatency"`          // seconds (avg)
+	DbQuerySource  string  `json:"dbQuerySource,omitempty"` // "app" | "none"
+	DbTotalQueries float64 `json:"dbTotalQueries"`          // increase(count[9m])
 	// Postgres exporter (when scraped); complements DbQueryRate from app metrics.
 	DbActiveConnections float64 `json:"dbActiveConnections,omitempty"`
 	MaxConnections      float64 `json:"maxConnections,omitempty"`
@@ -318,7 +333,7 @@ func PeakSummaryFromHistory(rb *RingBuffer) map[string]any {
 		"storage_read_rate":        maxStorageRead,
 		"storage_write_rate":       maxStorageWrite,
 		"storage_read_latency_ms":  maxStorageReadLatMs,
-		"storage_write_latency_ms":   maxStorageWriteLatMs,
+		"storage_write_latency_ms": maxStorageWriteLatMs,
 		"storage_utilization_pct":  maxStorageUtilPct,
 		"storage_error_rate":       maxStorageErr,
 	}
