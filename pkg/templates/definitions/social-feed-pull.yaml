@@ -15,6 +15,77 @@ deployable: true
 loadgenDefaultRps: 25
 imageKey: social-feed
 appDatabaseMode: always
+prometheusMetrics:
+  queries:
+    - key: posts.total_sync
+      expr: sum(social_post_total{<<ns>>,mode="sync"})
+    - key: posts.total_async
+      expr: sum(social_post_total{<<ns>>,mode="async"})
+    - key: feed.pull_rate
+      expr: sum(rate(social_feed_request_total{<<ns>>,mode="pull"}[30s]))
+    - key: feed.push_rate
+      expr: sum(rate(social_feed_request_total{<<ns>>,mode=~"push.*"}[30s]))
+    - key: feed.pull_p95
+      expr: histogram_quantile(0.95, sum(rate(social_feed_latency_seconds_bucket{<<ns>>,mode="pull"}[30s])) by (le))
+    - key: feed.push_p95
+      expr: histogram_quantile(0.95, sum(rate(social_feed_latency_seconds_bucket{<<ns>>,mode=~"push.*"}[30s])) by (le))
+    - key: worker.processed
+      expr: sum(social_worker_processed_total{<<ns>>})
+    - key: worker.errors
+      expr: sum(social_worker_errors_total{<<ns>>})
+    - key: worker.errors.redis
+      expr: sum(rate(social_worker_errors_total{<<ns>>,reason=~"redis.*"}[30s]))
+    - key: worker.writes.redis
+      expr: sum(social_worker_writes_total{<<ns>>,store="redis"})
+    - key: worker.redis_write_rate
+      expr: sum(rate(social_worker_writes_total{<<ns>>,store="redis"}[30s]))
+    - key: worker.consume_rate
+      expr: sum(rate(social_worker_processed_total{<<ns>>}[30s]))
+    - key: worker.fanout_size_avg
+      expr: sum(rate(social_worker_fanout_size_sum{<<ns>>}[30s])) / sum(rate(social_worker_fanout_size_count{<<ns>>}[30s]))
+    - key: worker.fanout_size_p99
+      expr: histogram_quantile(0.99, sum(rate(social_worker_fanout_size_bucket{<<ns>>}[30s])) by (le))
+    - key: worker.latency_p99
+      expr: histogram_quantile(0.99, sum(rate(social_worker_processing_duration_seconds_bucket{<<ns>>}[30s])) by (le))
+    - key: mq.publish_total
+      expr: sum(social_mq_publish_total{<<ns>>})
+    - key: mq.produce_rate
+      expr: sum(rate(social_mq_publish_total{<<ns>>}[30s]))
+    - key: mq.publish_errors
+      expr: sum(social_mq_publish_errors_total{<<ns>>})
+  augments:
+    - key: mq.queue_depth
+      component: mq
+      path: queueDepth
+    - key: mq.consume_rate
+      component: mq
+      path: consumeRate
+    - key: mq.saturation_ratio
+      component: mq
+      path: mqSaturationRatio
+    - key: worker.backlog
+      component: mq
+      path: queueDepth
+    - key: mq.produce_rate
+      component: mq
+      path: produceRate
+      onlyIfPositive: true
+    - key: worker.consume_rate
+      component: worker
+      path: requestRate
+      onlyIfPositive: true
+    - key: redis.ops_per_sec
+      component: cache
+      path: redisOpsPerSec
+    - key: redis.connected_clients
+      component: cache
+      path: activeConnections
+    - key: redis.rejected_connections_rate
+      component: cache
+      path: redisRejectedRate
+    - key: redis.avg_latency
+      component: cache
+      path: avgLatency
 seed:
   dbType: postgres
   dumpPath: social-feed/social-feed.dump

@@ -14,6 +14,22 @@ deployable: true
 imageKey: ecommerce
 workerImageKey: ecommerce-worker
 appDatabaseMode: always
+prometheusMetrics:
+  queries:
+    - key: checkout.sync_total
+      expr: sum(ecommerce_checkout_total{<<ns>>,mode="sync"})
+    - key: checkout.async_total
+      expr: sum(ecommerce_checkout_total{<<ns>>,mode="async"})
+    - key: checkout.sync_p95
+      expr: histogram_quantile(0.95, sum(rate(ecommerce_checkout_duration_seconds_bucket{<<ns>>,mode="sync"}[30s])) by (le))
+    - key: checkout.async_p95
+      expr: histogram_quantile(0.95, sum(rate(ecommerce_checkout_duration_seconds_bucket{<<ns>>,mode="async"}[30s])) by (le))
+    - key: checkout.inventory_conflicts
+      expr: sum(ecommerce_inventory_conflicts_total{<<ns>>})
+    - key: mq.publish_total
+      expr: sum(ecommerce_mq_publish_total{<<ns>>})
+    - key: mq.publish_errors
+      expr: sum(ecommerce_mq_publish_errors_total{<<ns>>})
 seed:
   dbType: postgres
   dumpPath: ecommerce/ecommerce.dump

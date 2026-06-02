@@ -51,6 +51,8 @@ type TemplateSpec struct {
 	Storytelling *StorytellingSpec `json:"storytelling,omitempty"`
 	// Introspection configures live DB/cache browsing for the data snapshots UI.
 	Introspection introspect.Spec `json:"introspection,omitempty"`
+	// PrometheusMetrics defines template-specific PromQL for templateMetrics (from YAML profile or inline).
+	PrometheusMetrics *PrometheusMetricsSpec `json:"-"`
 }
 
 // PresetNode is a fully-configured node for canvas population.
@@ -138,9 +140,11 @@ type templateDef struct {
 	ProxyQueries        []ProxyQueryRule  `yaml:"proxyQueries"`
 	AppDatabaseMode     string            `yaml:"appDatabaseMode"`
 	WorkerTimelineStore string            `yaml:"workerTimelineStore"`
-	LoadgenDefaultRPS   int               `yaml:"loadgenDefaultRps"`
-	Storytelling        *StorytellingSpec `yaml:"storytelling"`
-	Introspection       introspect.Spec   `yaml:"introspection"`
+	LoadgenDefaultRPS     int                    `yaml:"loadgenDefaultRps"`
+	Storytelling          *StorytellingSpec      `yaml:"storytelling"`
+	Introspection         introspect.Spec        `yaml:"introspection"`
+	PrometheusMetricsRef  string                 `yaml:"prometheusMetricsRef"`
+	PrometheusMetrics     *PrometheusMetricsSpec `yaml:"prometheusMetrics"`
 }
 
 // embeddedFree is the in-repo YAML definitions (always available).
@@ -277,6 +281,9 @@ func defToSpec(def *templateDef) TemplateSpec {
 	}
 	if len(def.Introspection) > 0 {
 		spec.Introspection = def.Introspection
+	}
+	if pm := resolvePrometheusMetrics(def); pm != nil {
+		spec.PrometheusMetrics = pm
 	}
 	if def.Preset != nil {
 		preset := &TemplatePreset{
