@@ -3,7 +3,7 @@ set -euo pipefail
 
 NAMESPACE="${1:-}"
 EXPECTED_TAG="${2:-}"
-REGISTRY_PREFIX="${TEMPLATE_IMAGE_REGISTRY:-us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images}"
+REGISTRY_PREFIX="${TEMPLATE_IMAGE_REGISTRY:-us-central1-docker.pkg.dev/runcloud9/cloud9-images}"
 
 if [[ -z "${NAMESPACE}" ]]; then
   echo "Usage: ./scripts/verify-rollout.sh <namespace> [expected-tag]"

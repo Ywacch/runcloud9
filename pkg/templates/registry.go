@@ -137,14 +137,14 @@ type templateDef struct {
 		Container string `yaml:"container"`
 		PodLabel  string `yaml:"podLabel"`
 	} `yaml:"seed"`
-	ProxyQueries        []ProxyQueryRule  `yaml:"proxyQueries"`
-	AppDatabaseMode     string            `yaml:"appDatabaseMode"`
-	WorkerTimelineStore string            `yaml:"workerTimelineStore"`
-	LoadgenDefaultRPS     int                    `yaml:"loadgenDefaultRps"`
-	Storytelling          *StorytellingSpec      `yaml:"storytelling"`
-	Introspection         introspect.Spec        `yaml:"introspection"`
-	PrometheusMetricsRef  string                 `yaml:"prometheusMetricsRef"`
-	PrometheusMetrics     *PrometheusMetricsSpec `yaml:"prometheusMetrics"`
+	ProxyQueries         []ProxyQueryRule       `yaml:"proxyQueries"`
+	AppDatabaseMode      string                 `yaml:"appDatabaseMode"`
+	WorkerTimelineStore  string                 `yaml:"workerTimelineStore"`
+	LoadgenDefaultRPS    int                    `yaml:"loadgenDefaultRps"`
+	Storytelling         *StorytellingSpec      `yaml:"storytelling"`
+	Introspection        introspect.Spec        `yaml:"introspection"`
+	PrometheusMetricsRef string                 `yaml:"prometheusMetricsRef"`
+	PrometheusMetrics    *PrometheusMetricsSpec `yaml:"prometheusMetrics"`
 }
 
 // embeddedFree is the in-repo YAML definitions (always available).
@@ -315,7 +315,7 @@ func defToSpec(def *templateDef) TemplateSpec {
 func imageFor(name string) string {
 	registry := os.Getenv("TEMPLATE_IMAGE_REGISTRY")
 	if registry == "" {
-		registry = "us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images"
+		registry = "us-central1-docker.pkg.dev/runcloud9/cloud9-images"
 	}
 	tag := ImageTag(name)
 	return registry + "/" + name + ":" + tag

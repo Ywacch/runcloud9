@@ -86,7 +86,7 @@ func DeployLoadgen(ctx context.Context, clientset kubernetes.Interface, namespac
 func loadgenImage() string {
 	registry := os.Getenv("TEMPLATE_IMAGE_REGISTRY")
 	if registry == "" {
-		registry = "us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images"
+		registry = "us-central1-docker.pkg.dev/runcloud9/cloud9-images"
 	}
 	return registry + "/loadgen:" + templates.ImageTag("loadgen")
 }

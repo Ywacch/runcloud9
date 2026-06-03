@@ -13,7 +13,7 @@ if (-not $RegistryPrefix) {
     $RegistryPrefix = $env:TEMPLATE_IMAGE_REGISTRY
 }
 if (-not $RegistryPrefix) {
-    $RegistryPrefix = "us-central1-docker.pkg.dev/ganymede-cloud/cloud9-images"
+    $RegistryPrefix = "us-central1-docker.pkg.dev/runcloud9/cloud9-images"
 }
 
 if (-not (Get-Command kubectl -ErrorAction SilentlyContinue)) {
