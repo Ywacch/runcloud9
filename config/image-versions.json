@@ -4,6 +4,6 @@
     "social-feed":  "git-5603560",
     "ecommerce-worker":  "git-5603560",
     "fanout-worker":  "git-5603560",
-    "caching-proxy":  "git-5603560",
-    "loadgen":  "git-5603560"
+    "caching-proxy":  "git-94e61d7",
+    "loadgen":  "git-94e61d7 "
 }
