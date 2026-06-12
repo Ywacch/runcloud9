@@ -22,9 +22,18 @@ func normalizeNodeConfig(n *DeploymentNode) {
 	if n == nil || n.Config == nil {
 		return
 	}
+
+	// Map canvas instanceSize to deployer resourceProfile. Makes sure app server cpu and memory requests/limits are set.
+	if _, has := n.Config["resourceProfile"]; !has {
+		if size, ok := n.Config["instanceSize"]; ok && size != nil {
+			n.Config["resourceProfile"] = size
+		}
+	}
+
 	if n.Type != "lb" {
 		return
 	}
+
 	if algo, ok := n.Config["algorithm"]; ok && algo != nil {
 		if _, has := n.Config["lbAlgorithm"]; !has {
 			n.Config["lbAlgorithm"] = algo
