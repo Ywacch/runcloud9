@@ -3,6 +3,8 @@ package metrics
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -204,7 +206,7 @@ func runStreamMetricsWSCount(t *testing.T, collect snapshotCollector, cfg stream
 		_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		_, data, err := conn.ReadMessage()
 		if err != nil {
-			if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "deadline") {
+			if isTransientWSReadErr(err) {
 				continue
 			}
 			break
@@ -216,6 +218,14 @@ func runStreamMetricsWSCount(t *testing.T, collect snapshotCollector, cfg stream
 		count++
 	}
 	return count
+}
+
+// isTransientWSReadErr reports whether a WS read error is a read deadline timeout
+// where the connection may still be usable. Do not match "deadline" as a substring:
+// "context deadline exceeded" marks the conn failed and the next read panics.
+func isTransientWSReadErr(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func newMetricsWSServer(t *testing.T, handler func(*websocket.Conn)) (*httptest.Server, string) {
