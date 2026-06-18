@@ -474,6 +474,55 @@ kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80
 - **Status → Configuration**: shows full scrape config including `additionalScrapeConfigs`
 - **Query**: run PromQL queries directly
 
+### Verify 5s scrape interval (metrics streaming)
+
+The metrics WebSocket emits every **2s**; the frontend playback buffer uses a **5s** display lag. Prometheus must scrape session pods every **5s** so new sample values arrive often enough for smooth chart interpolation. The repo source of truth is `k8s/helm/prometheus-values.yaml` (`scrapeInterval: "5s"`, `evaluationInterval: "5s"`).
+
+Run this checklist after cluster install, Helm upgrade, or if live metrics look flat for several seconds then jump.
+
+**1. Confirm Helm values match the repo**
+
+```powershell
+helm get values kube-prometheus-stack -n monitoring -o yaml | Select-String scrapeInterval
+```
+
+Expected: `scrapeInterval: 5s` (and `evaluationInterval: 5s`).
+
+**2. Confirm the Prometheus CR spec (Prometheus Operator)**
+
+```powershell
+kubectl get prometheus -n monitoring -o jsonpath='{range .items[*]}{.metadata.name}{" scrapeInterval="}{.spec.scrapeInterval}{" evaluationInterval="}{.spec.evaluationInterval}{"\n"}{end}'
+```
+
+Expected: `scrapeInterval=5s` for the kube-prometheus-stack instance.
+
+**3. Spot-check a live session target**
+
+Port-forward Prometheus (see above), then open **Status → Targets** and select a `kubernetes-pods` target in a `cloud9-*` namespace. The **Interval** column should show **5s** and **State** should be **UP**.
+
+Alternatively via API (with port-forward running):
+
+```powershell
+curl -s "http://localhost:9090/api/v1/targets?state=active" | jq '.data.activeTargets[] | select(.labels.namespace | test("cloud9")) | {namespace: .labels.namespace, pod: .labels.pod, scrapeInterval: .scrapeInterval, health: .health}'
+```
+
+**4. Remediation if not 5s**
+
+```powershell
+helm upgrade --install kube-prometheus-stack `
+  prometheus-community/kube-prometheus-stack `
+  --namespace monitoring `
+  --values k8s/helm/prometheus-values.yaml
+```
+
+Wait for the Prometheus pod to roll, then re-run steps 2–3.
+
+**Notes**
+
+- Session pods use **annotation-based** discovery (`prometheus.io/scrape: "true"`) via `additionalScrapeConfigs`; there is no per-namespace PodMonitor. They inherit the global `scrapeInterval` from `prometheusSpec`.
+- PromQL rate windows in the collector use `[30s]` — correct for 5s scrape (six samples per window). Do not shorten the window without changing scrape interval.
+- 5s scrape increases Prometheus CPU/memory vs 15s defaults; resource requests in `prometheus-values.yaml` already account for this.
+
 ### Key PromQL queries
 ```promql
 # HTTP request rate for a specific deployment
