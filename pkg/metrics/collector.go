@@ -427,6 +427,12 @@ func redisLatencyCommandPattern(template string) string {
 	}
 }
 
+// appServerPromSelector scopes app-instrumented Prometheus series to app-server pods.
+// Worker and fanout-worker deployments live in the same namespace but are not app SQL.
+func appServerPromSelector(ns string) string {
+	return fmt.Sprintf(`namespace=%q,pod=~"app-server.*"`, ns)
+}
+
 // applyStorageProfiles sets storageEngine, storageRole, and storageIo stubs from design topology.
 func applyStorageProfiles(dm *DeploymentMetrics, topo TopologyFlags) {
 	if dm == nil {
@@ -493,6 +499,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	ns := namespace
 	// Application metrics from url-shortener /metrics use this label selector (K8s scrape adds namespace).
 	nsSel := fmt.Sprintf(`namespace=%q`, ns)
+	// App-server SQL histogram only — excludes worker/fanout-worker pods when they export db_query_duration_seconds.
+	appServerSel := appServerPromSelector(ns)
 
 	// DB (postgres) — CPU/memory: cAdvisor or kube requests; connections: postgres_exporter when scraped.
 	cmDB := ComponentMetrics{Component: "db"}
@@ -507,7 +515,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 
 	dbQPS, dbQPSPresent, _ := c.queryScalar(ctx, fmt.Sprintf(
 		`sum(rate(db_query_duration_seconds_count{%s}[30s]))`,
-		nsSel,
+		appServerSel,
 	))
 	if dbQPSPresent {
 		cmDB.DbQueryRate = dbQPS
@@ -518,11 +526,11 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	}
 	dbLatSum, _ := c.query(ctx, fmt.Sprintf(
 		`sum(rate(db_query_duration_seconds_sum{%s}[30s]))`,
-		nsSel,
+		appServerSel,
 	))
 	dbLatCount, _ := c.query(ctx, fmt.Sprintf(
 		`sum(rate(db_query_duration_seconds_count{%s}[30s]))`,
-		nsSel,
+		appServerSel,
 	))
 	if dbLatCount > 0 {
 		cmDB.DbQueryLatency = dbLatSum / dbLatCount
@@ -530,7 +538,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmDB.AvgLatency = cmDB.DbQueryLatency
 	dbTotal, _ := c.query(ctx, fmt.Sprintf(
 		`sum(increase(db_query_duration_seconds_count{%s}[9m]))`,
-		nsSel,
+		appServerSel,
 	))
 	cmDB.DbTotalQueries = dbTotal
 

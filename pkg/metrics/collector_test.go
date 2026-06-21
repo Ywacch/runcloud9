@@ -540,6 +540,9 @@ func TestCollect_DbQuerySource_App(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
 		if strings.Contains(q, "db_query_duration_seconds_count") {
+			if !strings.Contains(q, `pod=~"app-server.*"`) {
+				t.Errorf("db_query_duration query missing app-server pod filter: %s", q)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(promVectorJSON("42"))
 			return
