@@ -3,5 +3,8 @@ kind: Service
 metadata:
   name: cloud9-api
   namespace: cloud9-system
+  annotations:
+    cloud.google.com/backend-config: '{"default": "cloud9-api-backendconfig"}'
+    cloud.google.com/app-protocols: '{"http":"HTTP"}'
 spec:
   type: LoadBalancer
