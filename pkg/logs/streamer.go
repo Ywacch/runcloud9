@@ -10,15 +10,13 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/ywacch/cloud9/pkg/wskeepalive"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
 const (
-	logWriteWait  = 10 * time.Second
-	logPongWait   = 60 * time.Second
-	logPingPeriod = (logPongWait * 9) / 10
 	logBufferSize = 256
 	logTailLines  = int64(100) // send last 100 lines on connect, then follow
 )
@@ -59,20 +57,20 @@ func StreamLogs(ctx context.Context, conn *websocket.Conn, clientset kubernetes.
 
 	// Writer goroutine — sole owner of conn.WriteJSON.
 	go func() {
-		ticker := time.NewTicker(logPingPeriod)
+		ticker := time.NewTicker(wskeepalive.PingPeriod)
 		defer ticker.Stop()
 		defer conn.Close()
 
 		for {
 			select {
 			case line := <-writeCh:
-				_ = conn.SetWriteDeadline(time.Now().Add(logWriteWait))
+				_ = conn.SetWriteDeadline(time.Now().Add(wskeepalive.WriteWait))
 				if err := conn.WriteJSON(line); err != nil {
 					slog.Warn("log ws write failed", "namespace", namespace, "error", err)
 					return
 				}
 			case <-ticker.C:
-				_ = conn.SetWriteDeadline(time.Now().Add(logWriteWait))
+				_ = conn.SetWriteDeadline(time.Now().Add(wskeepalive.WriteWait))
 				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 					return
 				}
@@ -87,9 +85,9 @@ func StreamLogs(ctx context.Context, conn *websocket.Conn, clientset kubernetes.
 	// Reader goroutine — handles pong, detects disconnect.
 	go func() {
 		conn.SetReadLimit(512 * 1024)
-		_ = conn.SetReadDeadline(time.Now().Add(logPongWait))
+		_ = conn.SetReadDeadline(time.Now().Add(wskeepalive.PongWait))
 		conn.SetPongHandler(func(string) error {
-			_ = conn.SetReadDeadline(time.Now().Add(logPongWait))
+			_ = conn.SetReadDeadline(time.Now().Add(wskeepalive.PongWait))
 			return nil
 		})
 		for {

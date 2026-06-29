@@ -3,6 +3,7 @@ kind: Kustomization
 resources:
   - ../../base
   - cloud9-api-managed-cert.yaml
+  - cloud9-api-backendconfig.yaml
 patches:
   - path: patch-serviceaccount.yaml
   - path: patch-deployment.yaml

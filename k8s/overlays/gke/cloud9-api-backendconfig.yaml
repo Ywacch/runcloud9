@@ -1,0 +1,11 @@
+# GCE ingress backend tuning for long-lived metrics/log WebSockets.
+# Without this, the default backend timeout is 30s and WS sessions die mid-session.
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: cloud9-api-backendconfig
+  namespace: cloud9-system
+spec:
+  timeoutSec: 3600
+  connectionDraining:
+    drainingTimeoutSec: 60

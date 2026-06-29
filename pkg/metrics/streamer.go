@@ -7,13 +7,11 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/ywacch/cloud9/pkg/wskeepalive"
 )
 
 const (
 	collectInterval = 2 * time.Second
-	writeWait       = 10 * time.Second
-	pongWait        = 60 * time.Second
-	pingPeriod      = (pongWait * 9) / 10
 	maxMessageSize  = 512 * 1024 // 512KB
 )
 
@@ -64,14 +62,14 @@ func streamMetrics(ctx context.Context, conn *websocket.Conn, namespace string, 
 	var latestSnapshot atomic.Pointer[DeploymentMetrics]
 
 	go func() {
-		ticker := time.NewTicker(pingPeriod)
+		ticker := time.NewTicker(wskeepalive.PingPeriod)
 		defer ticker.Stop()
 		defer conn.Close()
 
 		for {
 			select {
 			case <-ctx.Done():
-				_ = conn.SetWriteDeadline(time.Now().Add(writeWait))
+				_ = conn.SetWriteDeadline(time.Now().Add(wskeepalive.WriteWait))
 				_ = conn.WriteMessage(websocket.CloseMessage,
 					websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 				return
@@ -82,13 +80,13 @@ func streamMetrics(ctx context.Context, conn *websocket.Conn, namespace string, 
 				if metrics == nil {
 					continue
 				}
-				_ = conn.SetWriteDeadline(time.Now().Add(writeWait))
+				_ = conn.SetWriteDeadline(time.Now().Add(wskeepalive.WriteWait))
 				if err := conn.WriteJSON(metrics); err != nil {
 					slog.Warn("metrics ws write failed", "namespace", namespace, "error", err)
 					return
 				}
 			case <-ticker.C:
-				_ = conn.SetWriteDeadline(time.Now().Add(writeWait))
+				_ = conn.SetWriteDeadline(time.Now().Add(wskeepalive.WriteWait))
 				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 					return
 				}
@@ -98,9 +96,9 @@ func streamMetrics(ctx context.Context, conn *websocket.Conn, namespace string, 
 
 	go func() {
 		conn.SetReadLimit(maxMessageSize)
-		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+		_ = conn.SetReadDeadline(time.Now().Add(wskeepalive.PongWait))
 		conn.SetPongHandler(func(string) error {
-			_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+			_ = conn.SetReadDeadline(time.Now().Add(wskeepalive.PongWait))
 			return nil
 		})
 		for {
