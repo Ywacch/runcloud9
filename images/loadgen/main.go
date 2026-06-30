@@ -47,6 +47,7 @@ type loadStats struct {
 	IntervalP99Ms     float64             `json:"intervalP99Ms"`
 	IntervalActualRPS float64             `json:"intervalActualRps"`
 	RecentIntervals   []loadIntervalStats `json:"recentIntervals,omitempty"`
+	RecentLatenciesMs []float64           `json:"recentLatenciesMs,omitempty"`
 	DurationSeconds   float64             `json:"durationSeconds"`
 	StatusCodes       map[string]int      `json:"statusCodes"`
 	Distribution      map[string]int      `json:"distribution"`
@@ -64,6 +65,7 @@ type server struct {
 
 	statsMu sync.RWMutex
 	stats   loadStats
+	recent  latencyRing
 }
 
 func main() {
@@ -153,6 +155,7 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		Distribution: copyIntMap(req.Distribution),
 		StartedAt:    &now,
 	}
+	s.recent = latencyRing{}
 	s.statsMu.Unlock()
 	s.mu.Unlock()
 
@@ -223,6 +226,7 @@ func (s *server) runAttack(ctx context.Context, req startRequest) {
 				s.statsMu.Lock()
 				window = closeInterval(&s.stats, &window, time.Now())
 				cumulative.Close()
+				s.stats.RecentLatenciesMs = s.recent.Snapshot()
 				applyMetricsUpdate(&s.stats, &cumulative, req.RPS, s.startedAt)
 				if len(s.distribution) > 0 {
 					s.stats.Distribution = copyIntMap(s.distribution)
@@ -234,12 +238,14 @@ func (s *server) runAttack(ctx context.Context, req startRequest) {
 			vmMu.Lock()
 			cumulative.Add(res)
 			window.Add(res)
+			s.recent.Push(res.Latency.Seconds() * 1000)
 			vmMu.Unlock()
 
 		case <-tick1s.C:
 			vmMu.Lock()
 			s.statsMu.Lock()
 			cumulative.Close()
+			s.stats.RecentLatenciesMs = s.recent.Snapshot()
 			applyMetricsUpdate(&s.stats, &cumulative, req.RPS, s.startedAt)
 			if len(s.distribution) > 0 {
 				s.stats.Distribution = copyIntMap(s.distribution)
