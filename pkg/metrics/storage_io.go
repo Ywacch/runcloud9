@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"fmt"
 	"strings"
 )
 
@@ -182,11 +183,24 @@ func finalizeStorageIO(io *StorageIO, engine StorageEngineID, topo TopologyFlags
 			io.Footnote = postgresStorageFootnote(topo, template)
 		}
 	case StorageEngineRedis:
-		if io.ReadLabel == "" {
-			io.ReadLabel = "GET commands/s"
-		}
-		if io.WriteLabel == "" {
-			io.WriteLabel = "SET/DEL commands/s"
+		switch template {
+		case "social-feed":
+			if io.ReadLabel == "" {
+				io.ReadLabel = "ZREVRANGE commands/s"
+			}
+			if io.WriteLabel == "" {
+				io.WriteLabel = "ZADD/ZREMRANGE commands/s"
+			}
+			if io.Footnote == "" {
+				io.Footnote = "Feed timelines use sorted-set commands (ZREVRANGE/ZADD), not keyspace GET/SET."
+			}
+		default:
+			if io.ReadLabel == "" {
+				io.ReadLabel = "GET commands/s"
+			}
+			if io.WriteLabel == "" {
+				io.WriteLabel = "SET/DEL commands/s"
+			}
 		}
 		if io.Scope == "" {
 			io.Scope = "engine-native"
@@ -235,24 +249,59 @@ func ApplyStorageProfile(cm *ComponentMetrics, engine StorageEngineID, role stri
 	}
 }
 
+func redisStorageReadRateQuery(ns, template string) string {
+	cmd := redisStorageReadCmdPattern(template)
+	return fmt.Sprintf(`sum(rate(redis_commands_total{namespace=%q,cmd=~%q}[30s]))`, ns, cmd)
+}
+
+func redisStorageWriteRateQuery(ns, template string) string {
+	cmd := redisStorageWriteCmdPattern(template)
+	return fmt.Sprintf(`sum(rate(redis_commands_total{namespace=%q,cmd=~%q}[30s]))`, ns, cmd)
+}
+
+func redisStorageReadLatencyQuery(ns, template string) string {
+	cmd := redisStorageReadLatencyCmdPattern(template)
+	return fmt.Sprintf(
+		`histogram_quantile(0.99, sum(rate(redis_commands_latencies_usec_bucket{namespace=%q,cmd=~%q}[30s])) by (le)) / 1e6`,
+		ns, cmd,
+	)
+}
+
+func redisStorageWriteLatencyQuery(ns, template string) string {
+	cmd := redisStorageWriteLatencyCmdPattern(template)
+	return fmt.Sprintf(
+		`histogram_quantile(0.99, sum(rate(redis_commands_latencies_usec_bucket{namespace=%q,cmd=~%q}[30s])) by (le)) / 1e6`,
+		ns, cmd,
+	)
+}
+
 // collectStorageIO runs registry PromQL and returns engine-native storage metrics.
-func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel string, engine StorageEngineID) *StorageIO {
+// template adjusts Redis read/write command filters (e.g. social-feed sorted-set ops).
+func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel string, engine StorageEngineID, template string) *StorageIO {
 	prov, ok := LookupStorageProvider(engine)
 	if !ok || c == nil || c.prometheusURL == "" {
 		return nil
 	}
 	io := &StorageIO{Unit: prov.Unit, Source: prov.Source}
-	if prov.ReadQuery != nil {
-		io.ReadRate, _ = c.query(ctx, prov.ReadQuery(ns))
-	}
-	if prov.WriteQuery != nil {
-		io.WriteRate, _ = c.query(ctx, prov.WriteQuery(ns))
-	}
-	if prov.ReadLatencyQuery != nil {
-		io.ReadLatency, _ = c.query(ctx, prov.ReadLatencyQuery(ns, nsSel))
-	}
-	if prov.WriteLatencyQuery != nil {
-		io.WriteLatency, _ = c.query(ctx, prov.WriteLatencyQuery(ns, nsSel))
+	switch engine {
+	case StorageEngineRedis:
+		io.ReadRate, _ = c.query(ctx, redisStorageReadRateQuery(ns, template))
+		io.WriteRate, _ = c.query(ctx, redisStorageWriteRateQuery(ns, template))
+		io.ReadLatency, _ = c.query(ctx, redisStorageReadLatencyQuery(ns, template))
+		io.WriteLatency, _ = c.query(ctx, redisStorageWriteLatencyQuery(ns, template))
+	default:
+		if prov.ReadQuery != nil {
+			io.ReadRate, _ = c.query(ctx, prov.ReadQuery(ns))
+		}
+		if prov.WriteQuery != nil {
+			io.WriteRate, _ = c.query(ctx, prov.WriteQuery(ns))
+		}
+		if prov.ReadLatencyQuery != nil {
+			io.ReadLatency, _ = c.query(ctx, prov.ReadLatencyQuery(ns, nsSel))
+		}
+		if prov.WriteLatencyQuery != nil {
+			io.WriteLatency, _ = c.query(ctx, prov.WriteLatencyQuery(ns, nsSel))
+		}
 	}
 	if prov.BytesUsedQuery != nil {
 		if v, _ := c.query(ctx, prov.BytesUsedQuery(ns)); v > 0 {

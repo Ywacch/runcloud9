@@ -427,6 +427,44 @@ func redisLatencyCommandPattern(template string) string {
 	}
 }
 
+// redisStorageReadCmdPattern selects read-side redis_exporter cmd labels for storageIo.readRate.
+func redisStorageReadCmdPattern(template string) string {
+	switch template {
+	case "social-feed":
+		return "zrevrange"
+	default:
+		return "get|mget|hget|hmget"
+	}
+}
+
+// redisStorageWriteCmdPattern selects write-side redis_exporter cmd labels for storageIo.writeRate.
+func redisStorageWriteCmdPattern(template string) string {
+	switch template {
+	case "social-feed":
+		return "zadd|zremrangebyrank"
+	default:
+		return "set|del|mset|hset|hdel"
+	}
+}
+
+func redisStorageReadLatencyCmdPattern(template string) string {
+	switch template {
+	case "social-feed":
+		return "zrevrange"
+	default:
+		return "get|mget"
+	}
+}
+
+func redisStorageWriteLatencyCmdPattern(template string) string {
+	switch template {
+	case "social-feed":
+		return "zadd|zremrangebyrank"
+	default:
+		return "set|del"
+	}
+}
+
 // appServerPromSelector scopes app-instrumented Prometheus series to app-server pods.
 // Worker and fanout-worker deployments live in the same namespace but are not app SQL.
 func appServerPromSelector(ns string) string {
@@ -894,7 +932,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 			if engine == "" {
 				engine = StorageEnginePostgreSQL
 			}
-			live := c.collectStorageIO(ctx, ns, nsSel, engine)
+			live := c.collectStorageIO(ctx, ns, nsSel, engine, template)
 			cm.StorageIO = mergeStorageIO(cm.StorageIO, live)
 			finalizeStorageIO(cm.StorageIO, engine, topo, template)
 			if cm.StorageIO != nil {
@@ -912,7 +950,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 			if engine == "" {
 				engine = StorageEngineRedis
 			}
-			live := c.collectStorageIO(ctx, ns, nsSel, engine)
+			live := c.collectStorageIO(ctx, ns, nsSel, engine, template)
 			cm.StorageIO = mergeStorageIO(cm.StorageIO, live)
 			finalizeStorageIO(cm.StorageIO, engine, topo, template)
 			dm.Components["cache"] = cm

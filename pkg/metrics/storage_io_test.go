@@ -138,6 +138,51 @@ func TestFinalizeStorageIO_Redis(t *testing.T) {
 	}
 }
 
+func TestFinalizeStorageIO_RedisSocialFeed(t *testing.T) {
+	t.Parallel()
+	io := &StorageIO{Unit: "keys/s", Source: "redis_exporter"}
+	finalizeStorageIO(io, StorageEngineRedis, TopologyFlags{HasCache: true}, "social-feed")
+	if io.ReadLabel != "ZREVRANGE commands/s" {
+		t.Fatalf("readLabel: %q", io.ReadLabel)
+	}
+	if io.WriteLabel != "ZADD/ZREMRANGE commands/s" {
+		t.Fatalf("writeLabel: %q", io.WriteLabel)
+	}
+	if !strings.Contains(io.Footnote, "sorted-set") {
+		t.Fatalf("footnote: %q", io.Footnote)
+	}
+}
+
+func TestRedisStorageReadRateQuery_SocialFeed(t *testing.T) {
+	t.Parallel()
+	q := redisStorageReadRateQuery("ns-feed", "social-feed")
+	if !strings.Contains(q, `namespace="ns-feed"`) {
+		t.Fatalf("namespace: %s", q)
+	}
+	if !strings.Contains(q, "zrevrange") {
+		t.Fatalf("want zrevrange: %s", q)
+	}
+	if strings.Contains(q, "get|mget") {
+		t.Fatalf("should not use GET pattern: %s", q)
+	}
+}
+
+func TestRedisStorageWriteRateQuery_SocialFeed(t *testing.T) {
+	t.Parallel()
+	q := redisStorageWriteRateQuery("ns-feed", "social-feed")
+	if !strings.Contains(q, "zadd|zremrangebyrank") {
+		t.Fatalf("want zadd|zremrangebyrank: %s", q)
+	}
+}
+
+func TestRedisStorageReadRateQuery_UrlShortener(t *testing.T) {
+	t.Parallel()
+	q := redisStorageReadRateQuery("ns-us", "url-shortener")
+	if !strings.Contains(q, "get|mget|hget|hmget") {
+		t.Fatalf("want GET pattern: %s", q)
+	}
+}
+
 func TestMaxStoragePeaksFromComponents(t *testing.T) {
 	t.Parallel()
 	components := map[string]ComponentMetrics{
