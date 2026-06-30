@@ -17,13 +17,15 @@ func podReadyStatus(pod corev1.Pod) bool {
 	return false
 }
 
-func (c *MetricsCollector) appServerReplicaSeries(ctx context.Context, ns string) (rps, p99, cpu, errRate map[string]float64) {
+func (c *MetricsCollector) appServerReplicaSeries(ctx context.Context, ns string) (rps, p99, cpu, errRate, totalReqs9m map[string]float64) {
 	nsSel := fmt.Sprintf(`namespace=%q`, ns)
+	podSel := fmt.Sprintf(`namespace=%q,pod=~"app-server.*"`, ns)
 	podRe := "app-server.*"
 	return c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (rate(http_requests_total{%s}[30s]))`, nsSel), "pod"),
 		c.queryMultiResult(ctx, fmt.Sprintf(`histogram_quantile(0.99, sum by (pod, le) (rate(http_request_duration_seconds_bucket{%s}[30s])))`, nsSel), "pod"),
 		c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (rate(process_cpu_seconds_total{namespace=%q,pod=~%q}[30s]))`, ns, podRe), "pod"),
-		c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (rate(http_requests_total{%s,status=~"5.."}[30s]))`, nsSel), "pod")
+		c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (rate(http_requests_total{%s,status=~"5.."}[30s]))`, nsSel), "pod"),
+		c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (increase(http_requests_total{%s}[9m]))`, podSel), "pod")
 }
 
 func (c *MetricsCollector) listAppServerPods(ctx context.Context, ns string) (names []string, ready map[string]bool, counts BackendReplicas) {
@@ -52,7 +54,11 @@ func (c *MetricsCollector) listAppServerPods(ctx context.Context, ns string) (na
 	return names, ready, counts
 }
 
-func mergePodMetricMaps(names []string, ready map[string]bool, rps, p99, cpu, errRate map[string]float64) []PodMetrics {
+func mergePodMetricMaps(
+	names []string,
+	ready map[string]bool,
+	rps, p99, cpu, errRate, totalReqs9m map[string]float64,
+) []PodMetrics {
 	seen := make(map[string]struct{})
 	var out []PodMetrics
 	add := func(name string) {
@@ -64,12 +70,13 @@ func mergePodMetricMaps(names []string, ready map[string]bool, rps, p99, cpu, er
 		}
 		seen[name] = struct{}{}
 		out = append(out, PodMetrics{
-			Name:        name,
-			Ready:       ready[name],
-			RequestRate: rps[name],
-			P99Latency:  p99[name],
-			CPUUsage:    cpu[name],
-			ErrorRate:   errRate[name],
+			Name:          name,
+			Ready:         ready[name],
+			RequestRate:   rps[name],
+			TotalRequests: totalReqs9m[name],
+			P99Latency:    p99[name],
+			CPUUsage:      cpu[name],
+			ErrorRate:     errRate[name],
 		})
 	}
 	for _, n := range names {
@@ -79,6 +86,9 @@ func mergePodMetricMaps(names []string, ready map[string]bool, rps, p99, cpu, er
 		add(name)
 	}
 	for name := range p99 {
+		add(name)
+	}
+	for name := range totalReqs9m {
 		add(name)
 	}
 	return out

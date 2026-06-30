@@ -727,12 +727,22 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	))
 	cmApp.TotalRequests = totalReqs
 
+	totalErrs9m, _ := c.query(ctx, fmt.Sprintf(
+		`sum(increase(http_requests_total{%s,status=~"5.."}[9m]))`,
+		nsSel,
+	))
+	cmApp.TotalErrors9m = totalErrs9m
+
+	latBucketRate9m := fmt.Sprintf(`sum(rate(http_request_duration_seconds_bucket{%s}[9m])) by (le)`, nsSel)
+	p99_9m, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.99, %s)`, latBucketRate9m))
+	cmApp.P99Latency9m = p99_9m
+
 	cmApp.CPULimit = c.kubeLimitCPU(ctx, ns, "app-server.*", "app-server")
 	cmApp.MemoryLimit = c.kubeLimitMem(ctx, ns, "app-server.*", "app-server")
 
-	rpsByPod, p99ByPod, cpuByPod, errByPod := c.appServerReplicaSeries(ctx, ns)
+	rpsByPod, p99ByPod, cpuByPod, errByPod, totalReqsByPod := c.appServerReplicaSeries(ctx, ns)
 	podNames, readyByPod, backendReplicas := c.listAppServerPods(ctx, ns)
-	replicaRows := mergePodMetricMaps(podNames, readyByPod, rpsByPod, p99ByPod, cpuByPod, errByPod)
+	replicaRows := mergePodMetricMaps(podNames, readyByPod, rpsByPod, p99ByPod, cpuByPod, errByPod, totalReqsByPod)
 	if len(replicaRows) > 0 {
 		cmApp.Replicas = replicaRows
 	}
@@ -922,6 +932,9 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		cmLB.BackendReplicas = &br
 		cmLB.BackendPods = replicaRows
 	}
+	cmLB.TotalRequests = cmApp.TotalRequests
+	cmLB.TotalErrors9m = cmApp.TotalErrors9m
+	cmLB.P99Latency9m = cmApp.P99Latency9m
 	c.debugCompare("lb", "rps", cmLB.RequestRate, cmApp.RequestRate, "sum(perBackendRPS)", "mirrored app requestRate")
 	dm.Components["lb"] = cmLB
 

@@ -11,7 +11,10 @@ func TestMergePodMetricMaps(t *testing.T) {
 	cpu := map[string]float64{"app-server-def": 0.1}
 	errRate := map[string]float64{"app-server-abc": 0.1}
 
-	got := mergePodMetricMaps(names, ready, rps, p99, cpu, errRate)
+	got := mergePodMetricMaps(names, ready, rps, p99, cpu, errRate, map[string]float64{
+		"app-server-abc": 16240,
+		"app-server-def": 16105,
+	})
 	if len(got) != 2 {
 		t.Fatalf("len = %d want 2", len(got))
 	}
@@ -22,7 +25,13 @@ func TestMergePodMetricMaps(t *testing.T) {
 	if byName["app-server-abc"].RequestRate != 10 || !byName["app-server-abc"].Ready {
 		t.Fatalf("abc: %+v", byName["app-server-abc"])
 	}
+	if byName["app-server-abc"].TotalRequests != 16240 {
+		t.Fatalf("abc totalRequests: want 16240, got %v", byName["app-server-abc"].TotalRequests)
+	}
 	if byName["app-server-def"].CPUUsage != 0.1 || byName["app-server-def"].Ready {
 		t.Fatalf("def: %+v", byName["app-server-def"])
+	}
+	if byName["app-server-def"].TotalRequests != 16105 {
+		t.Fatalf("def totalRequests: want 16105, got %v", byName["app-server-def"].TotalRequests)
 	}
 }
