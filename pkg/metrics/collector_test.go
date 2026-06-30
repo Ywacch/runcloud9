@@ -25,6 +25,23 @@ func promVectorJSON(value string) map[string]any {
 	}
 }
 
+func promMultiVectorJSON(labelKey string, series map[string]string) map[string]any {
+	result := make([]map[string]any, 0, len(series))
+	for name, value := range series {
+		result = append(result, map[string]any{
+			"metric": map[string]string{labelKey: name},
+			"value":  []any{float64(1), value},
+		})
+	}
+	return map[string]any{
+		"status": "success",
+		"data": map[string]any{
+			"resultType": "vector",
+			"result":     result,
+		},
+	}
+}
+
 func promEmptyJSON() map[string]any {
 	return map[string]any{
 		"status": "success",
@@ -67,6 +84,76 @@ func TestCollect_CacheIncreaseQueries(t *testing.T) {
 	}
 	if app.CacheMissesLast9m != 30 {
 		t.Fatalf("CacheMissesLast9m: want 30, got %v", app.CacheMissesLast9m)
+	}
+}
+
+func TestCollect_Session9mAggregates(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, `increase(http_requests_total{namespace="ns-test",status=~"5.."}[9m])`):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("12"))
+		case strings.Contains(q, "sum by (pod)") &&
+			strings.Contains(q, `increase(http_requests_total`) &&
+			strings.Contains(q, `pod=~"app-server.*"`) &&
+			strings.Contains(q, "[9m]"):
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				"app-server-abc": "16240",
+				"app-server-def": "16105",
+			}))
+		case strings.Contains(q, `sum(increase(http_requests_total{namespace="ns-test"}[9m]))`):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("32345"))
+		case strings.Contains(q, `histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{namespace="ns-test"}[9m])) by (le))`):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.042"))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	dm, err := c.Collect(context.Background(), "ns-test", "", TopologyFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	app := dm.Components["app-server"]
+	if app.TotalRequests != 32345 {
+		t.Fatalf("app TotalRequests: want 32345, got %v", app.TotalRequests)
+	}
+	if app.TotalErrors9m != 12 {
+		t.Fatalf("app TotalErrors9m: want 12, got %v", app.TotalErrors9m)
+	}
+	if app.P99Latency9m != 0.042 {
+		t.Fatalf("app P99Latency9m: want 0.042, got %v", app.P99Latency9m)
+	}
+
+	lb := dm.Components["lb"]
+	if lb.TotalRequests != 32345 {
+		t.Fatalf("lb TotalRequests: want 32345, got %v", lb.TotalRequests)
+	}
+	if lb.TotalErrors9m != 12 {
+		t.Fatalf("lb TotalErrors9m: want 12, got %v", lb.TotalErrors9m)
+	}
+	if lb.P99Latency9m != 0.042 {
+		t.Fatalf("lb P99Latency9m: want 0.042, got %v", lb.P99Latency9m)
+	}
+
+	if len(lb.BackendPods) != 2 {
+		t.Fatalf("BackendPods len: want 2, got %d", len(lb.BackendPods))
+	}
+	byPod := make(map[string]BackendPod)
+	for _, p := range lb.BackendPods {
+		byPod[p.Name] = p
+	}
+	if byPod["app-server-abc"].TotalRequests != 16240 {
+		t.Fatalf("pod abc totalRequests: want 16240, got %v", byPod["app-server-abc"].TotalRequests)
+	}
+	if byPod["app-server-def"].TotalRequests != 16105 {
+		t.Fatalf("pod def totalRequests: want 16105, got %v", byPod["app-server-def"].TotalRequests)
 	}
 }
 
@@ -285,6 +372,9 @@ func TestCollect_HistogramQuantilesUse30sBucketRate(t *testing.T) {
 	defer mu.Unlock()
 	for _, q := range seen {
 		if strings.Contains(q, "http_request_duration_seconds_bucket") && strings.Contains(q, "histogram_quantile") {
+			if strings.Contains(q, "[9m]") {
+				continue // session p99 (P99Latency9m)
+			}
 			if !strings.Contains(q, "[30s]") {
 				t.Fatalf("histogram quantile query missing [30s] in bucket rate: %s", q)
 			}

@@ -93,12 +93,17 @@ type ComponentMetrics struct {
 	// CacheHitsLast9m / CacheMissesLast9m are Prometheus increase(...[9m]) sums (estimated counts in window).
 	CacheHitsLast9m   float64 `json:"cacheHitsLast9m"`
 	CacheMissesLast9m float64 `json:"cacheMissesLast9m"`
-	ErrorRate         float64 `json:"errorRate"` // errors/sec
+	ErrorRate float64 `json:"errorRate"` // errors/sec (rate over 30s)
+	// TotalErrors9m is sum(increase(http_requests_total{status=~"5.."}[9m])) — rolling ~9m window.
+	TotalErrors9m float64 `json:"totalErrors9m,omitempty"`
+	// P99Latency9m is histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[9m])) in seconds.
+	P99Latency9m float64 `json:"p99Latency9m,omitempty"`
 	// Db* metrics come from app db_query_duration_seconds when scraped (app-server /metrics).
 	DbQueryRate    float64 `json:"dbQueryRate"`             // queries/sec; meaningful when dbQuerySource=app
 	DbQueryLatency float64 `json:"dbQueryLatency"`          // seconds (avg)
 	DbQuerySource  string  `json:"dbQuerySource,omitempty"` // "app" | "none"
-	DbTotalQueries float64 `json:"dbTotalQueries"`          // increase(count[9m])
+	// DbTotalQueries is sum(increase(db_query_duration_seconds_count[9m])) — rolling ~9m window, not since deploy.
+	DbTotalQueries float64 `json:"dbTotalQueries"`
 	// Postgres exporter (when scraped); complements DbQueryRate from app metrics.
 	DbActiveConnections float64 `json:"dbActiveConnections,omitempty"`
 	MaxConnections      float64 `json:"maxConnections,omitempty"`
@@ -158,9 +163,11 @@ type PodMetrics struct {
 	Name        string  `json:"name"`
 	Ready       bool    `json:"ready"`
 	RequestRate float64 `json:"requestRate"`
-	P99Latency  float64 `json:"p99Latency"`
-	CPUUsage    float64 `json:"cpuUsage,omitempty"`
-	ErrorRate   float64 `json:"errorRate,omitempty"`
+	// TotalRequests is increase(http_requests_total[9m]) for this pod — rolling ~9m window.
+	TotalRequests float64 `json:"totalRequests,omitempty"`
+	P99Latency    float64 `json:"p99Latency"`
+	CPUUsage      float64 `json:"cpuUsage,omitempty"`
+	ErrorRate     float64 `json:"errorRate,omitempty"`
 }
 
 // ReplicaMetrics is the app-server component view of PodMetrics.
