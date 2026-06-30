@@ -62,6 +62,8 @@ type LoadStats struct {
 	IntervalP99Ms   float64        `json:"intervalP99Ms"`   // p99 ms in last closed 5s window (client-side)
 	IntervalActualRPS float64      `json:"intervalActualRps"` // RPS in last closed 5s window
 	RecentIntervals []LoadIntervalStats `json:"recentIntervals,omitempty"` // last N closed 5s buckets
+	// RecentLatenciesMs is a snapshot of the last RecentLatenciesCap request latencies (ms, client-observed).
+	RecentLatenciesMs []float64 `json:"recentLatenciesMs,omitempty"`
 	DurationSeconds float64        `json:"durationSeconds"` // elapsed run time in seconds
 	StatusCodes     map[string]int `json:"statusCodes"`     // "200" → count, "500" → count
 	Distribution    map[string]int `json:"distribution"`    // effective weights per DistributionKey

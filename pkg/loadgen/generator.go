@@ -44,6 +44,7 @@ type attackSession struct {
 	targets []ResolvedTarget
 	stats   LoadStats
 	mu      sync.RWMutex // protects stats reads
+	recent  latencyRing
 }
 
 // NewLocalLoadGenerator returns an in-process vegeta load generator.
@@ -177,6 +178,7 @@ func (s *attackSession) run(ctx context.Context, lg *LocalLoadGenerator, namespa
 				s.mu.Lock()
 				window = CloseInterval(&s.stats, &window, time.Now())
 				cumulative.Close()
+				s.stats.RecentLatenciesMs = s.recent.Snapshot()
 				ApplyMetricsUpdate(&s.stats, &cumulative, profile.RPS, s.stats.StartedAt)
 				s.mu.Unlock()
 				vmMu.Unlock()
@@ -187,12 +189,14 @@ func (s *attackSession) run(ctx context.Context, lg *LocalLoadGenerator, namespa
 			vmMu.Lock()
 			cumulative.Add(res)
 			window.Add(res)
+			s.recent.Push(res.Latency.Seconds() * 1000)
 			vmMu.Unlock()
 
 		case <-tick1s.C:
 			vmMu.Lock()
 			s.mu.Lock()
 			cumulative.Close()
+			s.stats.RecentLatenciesMs = s.recent.Snapshot()
 			ApplyMetricsUpdate(&s.stats, &cumulative, profile.RPS, s.stats.StartedAt)
 			s.mu.Unlock()
 			vmMu.Unlock()
