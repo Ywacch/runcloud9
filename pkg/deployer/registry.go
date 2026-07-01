@@ -93,6 +93,12 @@ func ResourceProfile(profile string) corev1.ResourceRequirements {
 	}
 }
 
+// DBResources returns default Postgres workload sizing for session templates.
+// Kept separate from DefaultResources (medium app-server profile).
+func DBResources() corev1.ResourceRequirements {
+	return ResourceProfile("small")
+}
+
 // ExporterResources returns minimal resources for metrics sidecars (GKE Autopilot floors ~50m/52Mi).
 func ExporterResources() corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{
@@ -138,7 +144,7 @@ var componentRegistry = map[string]ComponentSpec{
 			"POSTGRES_PASSWORD": "syscrack",
 		},
 		NeedsService: true,
-		Resources:    DefaultResources(),
+		Resources:    DBResources(),
 		Exporter: &ExporterSpec{
 			Name:        "postgres-exporter",
 			Image:       "quay.io/prometheuscommunity/postgres-exporter:v0.16.0",
