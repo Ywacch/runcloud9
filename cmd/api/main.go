@@ -254,6 +254,9 @@ func main() {
 					summary["session_history"] = hist
 					summary["events_summary"] = metrics.BuildEventsSummary(hist, 10)
 				}
+				if clh := metricsCollector.ClientLatencyHistoryFor(namespace); len(clh) > 0 {
+					summary["client_latency_history"] = clh
+				}
 				summary["terminated_at"] = time.Now().Format(time.RFC3339)
 				if rowErr == nil {
 					summary["actual_duration_seconds"] = int(time.Since(row.CreatedAt).Seconds())

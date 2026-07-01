@@ -38,19 +38,21 @@ could be scraped in future; not wired here yet.
 // The API is simple: GET /api/v1/query?query=<promql>&time=<unix>
 // Response is JSON that we unmarshal into a typed struct.
 type MetricsCollector struct {
-	prometheusURL string
-	httpClient    *http.Client
-	scrapeClient  *http.Client // short timeout for in-cluster LB / RabbitMQ HTTP scrapes
-	loadgen       loadgen.LoadGenerator
-	clientset     kubernetes.Interface // optional: LB metadata from ConfigMap
-	debugMetrics  bool
-	eventBus      *EventBus
-	thresholds    *ThresholdDetector
-	cascade       *CascadeDetector
-	historyMu     sync.RWMutex
-	history       map[string]*RingBuffer // namespace → last 300 snapshots
-	mqRateMu      sync.Mutex
-	mqRates       map[string]rabbitCounterSnapshot
+	prometheusURL   string
+	httpClient      *http.Client
+	scrapeClient    *http.Client // short timeout for in-cluster LB / RabbitMQ HTTP scrapes
+	loadgen         loadgen.LoadGenerator
+	clientset       kubernetes.Interface // optional: LB metadata from ConfigMap
+	debugMetrics    bool
+	eventBus        *EventBus
+	thresholds      *ThresholdDetector
+	cascade         *CascadeDetector
+	historyMu       sync.RWMutex
+	history         map[string]*RingBuffer // namespace → last 300 snapshots
+	clientLatencyMu sync.Mutex
+	clientLatency   map[string]*clientLatencyAccumulator
+	mqRateMu        sync.Mutex
+	mqRates         map[string]rabbitCounterSnapshot
 }
 
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
@@ -108,6 +110,11 @@ func (c *MetricsCollector) Cleanup(namespace string) {
 		delete(c.history, namespace)
 	}
 	c.historyMu.Unlock()
+	c.clientLatencyMu.Lock()
+	if c.clientLatency != nil {
+		delete(c.clientLatency, namespace)
+	}
+	c.clientLatencyMu.Unlock()
 	c.mqRateMu.Lock()
 	delete(c.mqRates, namespace)
 	c.mqRateMu.Unlock()
@@ -979,6 +986,9 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	if c.loadgen != nil {
 		stats := c.loadgen.GetStats(namespace)
 		dm.LoadGen = &stats
+		if stats.Active && len(stats.RecentIntervals) > 0 {
+			c.mergeClientLatencyHistory(namespace, stats.RecentIntervals)
+		}
 	}
 
 	var ev []Event
