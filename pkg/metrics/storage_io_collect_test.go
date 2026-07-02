@@ -33,7 +33,7 @@ func TestCollect_StorageIO_PostgresLive(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	topo := TopologyFlags{HasDB: true, DBEngine: "postgresql", DBRole: "primary"}
 	dm, err := c.Collect(context.Background(), "ns-pg-io", "", topo)
 	if err != nil {

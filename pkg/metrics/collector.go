@@ -26,11 +26,10 @@ because Autopilot does not expose the kubelet metrics endpoint to non-system wor
 
 Fallback chain per component:
   - App-server: process_cpu_seconds_total / process_resident_memory_bytes from app /metrics.
-  - DB/Cache/MQ/Worker: kube_pod_container_resource_requests (static requests, not live usage).
-    ComponentMetrics sets CPUIsEstimated / MemIsEstimated when that path is used.
-
-For real-time DB/Cache CPU on Autopilot, postgres_exporter/redis_exporter process_cpu
-could be scraped in future; not wired here yet.
+  - DB/MQ/LB (sidecar or non-Go workloads): container cAdvisor → Metrics API (metrics.k8s.io)
+    → kube_pod_container_resource_requests (static requests). Never use process_* for postgres
+    pods — that measures the exporter sidecar, not the database container.
+  - Cache: redis_exporter redis_cpu_* when present; cache-proxy process_* for Go sidecar.
 */
 
 // MetricsCollector queries the Prometheus HTTP API for a specific deployment namespace.
@@ -43,6 +42,7 @@ type MetricsCollector struct {
 	scrapeClient    *http.Client // short timeout for in-cluster LB / RabbitMQ HTTP scrapes
 	loadgen         loadgen.LoadGenerator
 	clientset       kubernetes.Interface // optional: LB metadata from ConfigMap
+	metricsClient   PodMetricsProvider // optional: metrics.k8s.io for container CPU/mem on Autopilot
 	debugMetrics    bool
 	eventBus        *EventBus
 	thresholds      *ThresholdDetector
@@ -56,13 +56,15 @@ type MetricsCollector struct {
 }
 
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
-func NewMetricsCollector(prometheusURL string, lg loadgen.LoadGenerator, clientset kubernetes.Interface, eventBus *EventBus) *MetricsCollector {
+// metricsClient may be nil; DB/MQ/LB container usage then falls back to kube requests when cAdvisor is empty.
+func NewMetricsCollector(prometheusURL string, lg loadgen.LoadGenerator, clientset kubernetes.Interface, metricsClient PodMetricsProvider, eventBus *EventBus) *MetricsCollector {
 	return &MetricsCollector{
 		prometheusURL: prometheusURL,
 		httpClient:    &http.Client{Timeout: 5 * time.Second},
 		scrapeClient:  &http.Client{Timeout: 2 * time.Second},
 		loadgen:       lg,
 		clientset:     clientset,
+		metricsClient: metricsClient,
 		eventBus:      eventBus,
 		thresholds:    NewThresholdDetector(),
 		cascade:       NewCascadeDetector(),
@@ -547,14 +549,16 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	// App-server SQL histogram only — excludes worker/fanout-worker pods when they export db_query_duration_seconds.
 	appServerSel := appServerPromSelector(ns)
 
-	// DB (postgres) — CPU/memory: cAdvisor or kube requests; connections: postgres_exporter when scraped.
+	// DB (postgres) — CPU/memory: container cAdvisor → Metrics API → kube requests.
 	cmDB := ComponentMetrics{Component: "db"}
-	dbCPU, dbCPUEst := c.queryProcessCPU(ctx, ns, "postgres.*", "postgres")
-	dbMem, dbMemEst := c.queryProcessMemory(ctx, ns, "postgres.*", "postgres")
-	cmDB.CPUUsage = dbCPU
-	cmDB.CPUIsEstimated = dbCPUEst
-	cmDB.MemoryBytes = int64(dbMem)
-	cmDB.MemIsEstimated = dbMemEst
+	dbCPURes := c.queryContainerResourceCPU(ctx, ns, "postgres.*", "postgres")
+	dbMemRes := c.queryContainerResourceMemory(ctx, ns, "postgres.*", "postgres")
+	cmDB.CPUUsage = dbCPURes.Usage
+	cmDB.CPUIsEstimated = dbCPURes.Estimated
+	cmDB.CPUSource = dbCPURes.Source
+	cmDB.MemoryBytes = int64(dbMemRes.Usage)
+	cmDB.MemIsEstimated = dbMemRes.Estimated
+	cmDB.MemSource = dbMemRes.Source
 	cmDB.CPULimit = c.kubeLimitCPU(ctx, ns, "postgres.*", "postgres")
 	cmDB.MemoryLimit = c.kubeLimitMem(ctx, ns, "postgres.*", "postgres")
 
@@ -621,7 +625,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	// DbQueryRate is app SQL throughput only (dbQuerySource=app). Do not backfill from
 	// xact_commit — that includes postgres_exporter sidecar traffic (~5/s at idle).
 	c.debugCompare("db", "rps", pgTxnRate+pgRollbackRate, dbQPS, "pg_stat_database_xact_commit+rollback", "app db_query_duration_count")
-	c.debugCompare("db", "cpu", 0, dbCPU, "none (no native metric)", "kube_requests/cadvisor_or_fallback")
+	c.debugCompare("db", "cpu", dbCPURes.Usage, 0, dbCPURes.Source, "")
 
 	dm.Components["db"] = cmDB
 
@@ -839,12 +843,14 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	dm.Components["cache"] = cmCache
 
 	cmMQ := ComponentMetrics{Component: "mq"}
-	mqCPU, mqCPUEst := c.queryCPUPair(ctx, ns, "rabbitmq.*", "rabbitmq")
-	mqMem, mqMemEst := c.queryMemPair(ctx, ns, "rabbitmq.*", "rabbitmq")
-	cmMQ.CPUUsage = mqCPU
-	cmMQ.CPUIsEstimated = mqCPUEst
-	cmMQ.MemoryBytes = int64(mqMem)
-	cmMQ.MemIsEstimated = mqMemEst
+	mqCPURes := c.queryContainerResourceCPU(ctx, ns, "rabbitmq.*", "rabbitmq")
+	mqMemRes := c.queryContainerResourceMemory(ctx, ns, "rabbitmq.*", "rabbitmq")
+	cmMQ.CPUUsage = mqCPURes.Usage
+	cmMQ.CPUIsEstimated = mqCPURes.Estimated
+	cmMQ.CPUSource = mqCPURes.Source
+	cmMQ.MemoryBytes = int64(mqMemRes.Usage)
+	cmMQ.MemIsEstimated = mqMemRes.Estimated
+	cmMQ.MemSource = mqMemRes.Source
 	cmMQ.CPULimit = c.kubeLimitCPU(ctx, ns, "rabbitmq.*", "rabbitmq")
 	cmMQ.MemoryLimit = c.kubeLimitMem(ctx, ns, "rabbitmq.*", "rabbitmq")
 	cmMQ.QueueDepth, cmMQ.ProduceRate, cmMQ.ConsumeRate, cmMQ.MessagesReady, cmMQ.MessagesUnacked, cmMQ.MQMemoryUsed, cmMQ.MQMemoryLimit =
@@ -906,12 +912,14 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	dm.Components["mq"] = cmMQ
 
 	cmLB := ComponentMetrics{Component: "lb"}
-	lbCPU, lbCPUEst := c.queryCPUPair(ctx, ns, "lb.*", "nginx")
-	lbMem, lbMemEst := c.queryMemPair(ctx, ns, "lb.*", "nginx")
-	cmLB.CPUUsage = lbCPU
-	cmLB.CPUIsEstimated = lbCPUEst
-	cmLB.MemoryBytes = int64(lbMem)
-	cmLB.MemIsEstimated = lbMemEst
+	lbCPURes := c.queryContainerResourceCPU(ctx, ns, "lb.*", "nginx")
+	lbMemRes := c.queryContainerResourceMemory(ctx, ns, "lb.*", "nginx")
+	cmLB.CPUUsage = lbCPURes.Usage
+	cmLB.CPUIsEstimated = lbCPURes.Estimated
+	cmLB.CPUSource = lbCPURes.Source
+	cmLB.MemoryBytes = int64(lbMemRes.Usage)
+	cmLB.MemIsEstimated = lbMemRes.Estimated
+	cmLB.MemSource = lbMemRes.Source
 	cmLB.CPULimit = c.kubeLimitCPU(ctx, ns, "lb.*", "nginx")
 	cmLB.MemoryLimit = c.kubeLimitMem(ctx, ns, "lb.*", "nginx")
 	cmLB.ActiveConnections = c.scrapeNginxStubActiveConnections(ctx, ns)
