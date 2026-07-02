@@ -39,7 +39,7 @@ type streamConfig struct {
 func StreamMetrics(ctx context.Context, conn *websocket.Conn, collector *MetricsCollector, namespace, template string, topo TopologyFlags) {
 	col := collector
 	if col == nil {
-		col = NewMetricsCollector("", nil, nil, nil)
+		col = NewMetricsCollector("", nil, nil, nil, nil)
 	}
 	collect := func(ctx context.Context) (*DeploymentMetrics, error) {
 		return col.Collect(ctx, namespace, template, topo)

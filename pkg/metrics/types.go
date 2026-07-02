@@ -122,6 +122,9 @@ type ComponentMetrics struct {
 	// True when usage came from kube resource requests (no real-time series).
 	CPUIsEstimated bool `json:"cpuIsEstimated,omitempty"`
 	MemIsEstimated bool `json:"memIsEstimated,omitempty"`
+	// cpuSource/memSource: cadvisor | metrics_api | requests (empty when unknown).
+	CPUSource string `json:"cpuSource,omitempty"`
+	MemSource string `json:"memSource,omitempty"`
 	// LB (nginx stub_status) + mirrored app RPS; MQ management API; worker mirrors MQ consume rate.
 	ActiveConnections float64 `json:"activeConnections"`
 	QueueDepth        float64 `json:"queueDepth"`

@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
+	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
 // version is set at link time (Dockerfile / CI) for Sentry release tagging.
@@ -58,10 +59,10 @@ func withCORS(next http.Handler) http.Handler {
 	})
 }
 
-// buildDeployers returns the deployer map and k8s clientset.
+// buildDeployers returns the deployer map, k8s clientset, and optional metrics clientset.
 // os.Getenv returns empty string if var not set.
 // Default to local so tests and local dev without minikube still work.
-func buildDeployers() (map[string]deployer.ComponentDeployer, kubernetes.Interface) {
+func buildDeployers() (map[string]deployer.ComponentDeployer, kubernetes.Interface, metrics.PodMetricsProvider) {
 	if os.Getenv("DEPLOYER") != "k8s" {
 		log.Println("Using LocalDeployer (set DEPLOYER=k8s for real K8s)")
 		return map[string]deployer.ComponentDeployer{
@@ -71,7 +72,7 @@ func buildDeployers() (map[string]deployer.ComponentDeployer, kubernetes.Interfa
 			"lb":         &deployer.LocalDeployer{NodeType: "lb"},
 			"mq":         &deployer.LocalDeployer{NodeType: "mq"},
 			"worker":     &deployer.LocalDeployer{NodeType: "worker"},
-		}, nil
+		}, nil, nil
 	}
 
 	// KUBECONFIG env var lets you point at a specific config file.
@@ -109,6 +110,12 @@ func buildDeployers() (map[string]deployer.ComponentDeployer, kubernetes.Interfa
 	if err != nil {
 		log.Fatalf("build clientset: %v", err)
 	}
+	var metricsClient metrics.PodMetricsProvider
+	if mc, err := metricsclient.NewForConfig(config); err != nil {
+		log.Printf("metrics client unavailable (container usage Metrics API fallback disabled): %v", err)
+	} else {
+		metricsClient = &metrics.MetricsClientAdapter{Client: mc}
+	}
 
 	log.Println("Using K8sDeployer (minikube/GKE)")
 	return map[string]deployer.ComponentDeployer{
@@ -118,7 +125,7 @@ func buildDeployers() (map[string]deployer.ComponentDeployer, kubernetes.Interfa
 		"lb":         deployer.NewK8sDeployer(clientset, "lb"),
 		"mq":         deployer.NewK8sDeployer(clientset, "mq"),
 		"worker":     deployer.NewK8sDeployer(clientset, "worker"),
-	}, clientset
+	}, clientset, metricsClient
 }
 
 // recoverDeployments re-registers teardown timers for active deployments on startup.
@@ -196,7 +203,7 @@ func main() {
 		}
 	}
 
-	deployers, clientset := buildDeployers()
+	deployers, clientset, metricsClient := buildDeployers()
 
 	seedBucketName := os.Getenv("SEED_BUCKET_NAME")
 	if seedBucketName == "" {
@@ -343,7 +350,7 @@ func main() {
 	}
 	debugMetrics := os.Getenv("CLOUD9_DEBUG_METRICS") == "true"
 	eventBus := metrics.NewEventBus()
-	metricsCollector = metrics.NewMetricsCollector(prometheusURL, lg, clientset, eventBus)
+	metricsCollector = metrics.NewMetricsCollector(prometheusURL, lg, clientset, metricsClient, eventBus)
 	metricsCollector.SetDebugMetrics(debugMetrics)
 	if clientset != nil {
 		ddcBucket := os.Getenv("DDC_BUCKET")

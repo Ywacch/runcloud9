@@ -73,7 +73,7 @@ func TestCollect_CacheIncreaseQueries(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	dm, err := c.Collect(context.Background(), "ns-test", "", TopologyFlags{})
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +114,7 @@ func TestCollect_Session9mAggregates(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	dm, err := c.Collect(context.Background(), "ns-test", "", TopologyFlags{})
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +176,7 @@ func TestQueryWithFallback_PrimaryNonZeroSkipsFallback(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	got := c.queryWithFallback(context.Background(), `sum(__PRIMARY__)`, `sum(__FALLBACK__)`)
 	if got != 2.5 {
 		t.Fatalf("want primary 2.5, got %v", got)
@@ -205,7 +205,7 @@ func TestQueryWithFallback_UsesFallbackWhenPrimaryZero(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	got := c.queryWithFallback(context.Background(), `sum(__PRIMARY__)`, `sum(__FALLBACK__)`)
 	if got != 0.25 {
 		t.Fatalf("want fallback 0.25, got %v", got)
@@ -223,7 +223,7 @@ func TestQueryWithFallback_BothZero(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	got := c.queryWithFallback(context.Background(), `sum(__PRIMARY__)`, `sum(__FALLBACK__)`)
 	if got != 0 {
 		t.Fatalf("want 0, got %v", got)
@@ -250,7 +250,7 @@ func TestQueryWithFallback_PrimaryPresentZeroSkipsFallback(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	got := c.queryWithFallback(context.Background(), `sum(__PRIMARY__)`, `sum(__FALLBACK__)`)
 	if got != 0 {
 		t.Fatalf("want primary 0, got %v (must not substitute kube requests)", got)
@@ -279,7 +279,7 @@ func TestQueryWithFallbackEstimated_PrimaryPresentZeroNotEstimated(t *testing.T)
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	got, est := c.queryWithFallbackEstimated(context.Background(), `sum(__PRIMARY__)`, `sum(__FALLBACK__)`)
 	if got != 0 || est {
 		t.Fatalf("want (0, estimated=false), got (%v, %v)", got, est)
@@ -291,7 +291,7 @@ func TestQueryWithFallbackEstimated_PrimaryPresentZeroNotEstimated(t *testing.T)
 
 func TestQuery_EmptyPrometheusURL(t *testing.T) {
 	t.Parallel()
-	c := NewMetricsCollector("", nil, nil, nil)
+	c := NewMetricsCollector("", nil, nil, nil, nil)
 	v, err := c.query(context.Background(), "anything")
 	if err != nil {
 		t.Fatal(err)
@@ -315,7 +315,7 @@ func TestCollect_NoDeprecatedRateWindows(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	_, err := c.Collect(context.Background(), "ns-prod", "", TopologyFlags{})
 	if err != nil {
 		t.Fatal(err)
@@ -359,7 +359,7 @@ func TestCollect_HistogramQuantilesUse30sBucketRate(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	dm, err := c.Collect(context.Background(), "ns-x", "", TopologyFlags{})
 	if err != nil {
 		t.Fatal(err)
@@ -382,39 +382,80 @@ func TestCollect_HistogramQuantilesUse30sBucketRate(t *testing.T) {
 	}
 }
 
-func TestCollect_DBCPUUsesProcessMetricWhenNonZero(t *testing.T) {
+func TestCollect_DBCPUUsesContainerMetricWhenPresent(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case strings.Contains(q, "container_cpu_usage_seconds_total") && strings.Contains(q, `container="postgres"`):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.062"))
 		case strings.Contains(q, "process_cpu_seconds_total") && strings.Contains(q, `pod=~"postgres.*"`):
+			t.Error("db CPU must not use process_cpu_seconds_total for postgres pods")
 			_ = json.NewEncoder(w).Encode(promVectorJSON("0.07"))
-		case strings.Contains(q, "kube_pod_container_resource_requests") && strings.Contains(q, `resource="cpu"`) && strings.Contains(q, `container="postgres"`):
-			_ = json.NewEncoder(w).Encode(promVectorJSON("0.25"))
 		default:
 			_ = json.NewEncoder(w).Encode(promEmptyJSON())
 		}
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	dm, err := c.Collect(context.Background(), "ns1", "", TopologyFlags{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dm.Components["db"].CPUUsage != 0.07 {
-		t.Fatalf("db CPU: want 0.07 (process metric), got %v", dm.Components["db"].CPUUsage)
+	db := dm.Components["db"]
+	if db.CPUUsage != 0.062 {
+		t.Fatalf("db CPU: want 0.062 (container metric), got %v", db.CPUUsage)
+	}
+	if db.CPUIsEstimated {
+		t.Fatal("db CPUIsEstimated: want false for cAdvisor container metric")
+	}
+	if db.CPUSource != ResourceSourceCadvisor {
+		t.Fatalf("db CPUSource: want %q, got %q", ResourceSourceCadvisor, db.CPUSource)
 	}
 }
 
-func TestCollect_DBCPUFallbackToKubeWhenProcessMetricEmpty(t *testing.T) {
+func TestCollect_DBCPUUsesMetricsAPIWhenCadvisorEmpty(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(promEmptyJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	provider := &fakePodMetricsProvider{list: podMetricsFixture(68, 216*1024*1024)}
+
+	c := NewMetricsCollector(srv.URL, nil, nil, provider, nil)
+	dm, err := c.Collect(context.Background(), "ns1", "", TopologyFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := dm.Components["db"]
+	if db.CPUUsage != 0.068 {
+		t.Fatalf("db CPU: want 0.068 from Metrics API, got %v", db.CPUUsage)
+	}
+	if db.CPUIsEstimated {
+		t.Fatal("db CPUIsEstimated: want false for Metrics API usage")
+	}
+	if db.CPUSource != ResourceSourceMetricsAPI {
+		t.Fatalf("db CPUSource: want %q, got %q", ResourceSourceMetricsAPI, db.CPUSource)
+	}
+	if db.MemoryBytes != 216*1024*1024 {
+		t.Fatalf("db memory: want %d, got %d", 216*1024*1024, db.MemoryBytes)
+	}
+	if db.MemSource != ResourceSourceMetricsAPI {
+		t.Fatalf("db MemSource: want %q, got %q", ResourceSourceMetricsAPI, db.MemSource)
+	}
+}
+
+func TestCollect_DBCPUFallbackToKubeWhenContainerAndMetricsAPIEmpty(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case strings.Contains(q, "process_cpu_seconds_total") && strings.Contains(q, `pod=~"postgres.*"`):
+		case strings.Contains(q, "container_cpu_usage_seconds_total") && strings.Contains(q, `container="postgres"`):
 			_ = json.NewEncoder(w).Encode(promEmptyJSON())
 		case strings.Contains(q, "kube_pod_container_resource_requests") && strings.Contains(q, `resource="cpu"`) && strings.Contains(q, `container="postgres"`):
 			_ = json.NewEncoder(w).Encode(promVectorJSON("0.25"))
@@ -424,7 +465,7 @@ func TestCollect_DBCPUFallbackToKubeWhenProcessMetricEmpty(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	dm, err := c.Collect(context.Background(), "ns1", "", TopologyFlags{})
 	if err != nil {
 		t.Fatal(err)
@@ -436,6 +477,9 @@ func TestCollect_DBCPUFallbackToKubeWhenProcessMetricEmpty(t *testing.T) {
 	if !db.CPUIsEstimated {
 		t.Fatal("db CPUIsEstimated: want true when kube fallback used")
 	}
+	if db.CPUSource != ResourceSourceRequests {
+		t.Fatalf("db CPUSource: want %q, got %q", ResourceSourceRequests, db.CPUSource)
+	}
 }
 
 func TestCollect_SetsLBConnectionLimit(t *testing.T) {
@@ -446,7 +490,7 @@ func TestCollect_SetsLBConnectionLimit(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	dm, err := c.Collect(context.Background(), "ns-cap", "", TopologyFlags{})
 	if err != nil {
 		t.Fatal(err)
@@ -476,7 +520,7 @@ func TestCollect_SocialFeedUsesSortedSetRedisMetrics(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	dm, err := c.Collect(context.Background(), "ns-social", "social-feed", TopologyFlags{})
 	if err != nil {
 		t.Fatal(err)
@@ -515,7 +559,7 @@ func TestQueryCPUPair_PromQLFilters(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	_, _ = c.queryCPUPair(context.Background(), "my-ns", "app-server.*", "app-server")
 	mu.Lock()
 	defer mu.Unlock()
@@ -551,7 +595,7 @@ func TestCollect_StorageProfileFromTopology(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	topo := TopologyFlags{
 		HasDB:       true,
 		DBEngine:    "postgresql",
@@ -608,7 +652,7 @@ func TestCollect_DbQuerySource_NoXactCommitBackfill(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	dm, err := c.Collect(context.Background(), "ns-db-src", "url-shortener", TopologyFlags{HasDB: true})
 	if err != nil {
 		t.Fatal(err)
@@ -642,7 +686,7 @@ func TestCollect_DbQuerySource_App(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewMetricsCollector(srv.URL, nil, nil, nil)
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	dm, err := c.Collect(context.Background(), "ns-db-app", "", TopologyFlags{HasDB: true})
 	if err != nil {
 		t.Fatal(err)

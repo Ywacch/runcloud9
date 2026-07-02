@@ -556,7 +556,8 @@ prometheus.io/path: "/metrics"
 These are set by `K8sDeployer` in `pkg/deployer/k8s.go`.
 
 ### Known limitations on GKE Autopilot
-- `container_cpu_usage_seconds_total` may return empty — Autopilot manages nodes differently and doesn't expose standard node-level container metrics via the community stack. Use GKE Managed Prometheus for full metrics coverage (future improvement).
+- `container_cpu_usage_seconds_total` may return empty — Autopilot does not expose kubelet/cAdvisor series to self-managed Prometheus for user workloads. **Mitigation (implemented):** `cloud9-api` falls back to the Kubernetes Metrics API (`metrics.k8s.io`) for DB/MQ/LB container CPU/memory — same data as `kubectl top`. Requires ClusterRole `get`/`list` on `pods.metrics.k8s.io` (see `k8s/base/cloud9-api.yaml`). GKE Managed Prometheus remains an optional future path for historical PromQL dashboards.
+- Do **not** use `process_cpu_seconds_total` on postgres pods for DB utilization — Prometheus scrapes `postgres-exporter`; that metric reflects the sidecar, not the `postgres` container. See `ganymede_appendix.md` (2026-07-02 entry).
 - `node-exporter` cannot run on Autopilot — hostPath mounts to `/proc`, `/sys` are blocked.
 
 ### Troubleshooting
@@ -565,7 +566,8 @@ These are set by `K8sDeployer` in `pkg/deployer/k8s.go`.
 |---------|-------|-----|
 | App-server not in Targets | Status → Targets → kubernetes-pods | Verify pod has scrape annotations; check `additionalScrapeConfigs` in values |
 | Metrics return no data | Run `up{namespace=~"cloud9.*"}` | If empty, scraping not working — check annotations and Prometheus config |
-| `container_cpu_usage_seconds_total` empty | GKE Autopilot limitation | Expected — use application-level metrics instead |
+| `container_cpu_usage_seconds_total` empty | GKE Autopilot limitation | Expected for user workloads — collector uses Metrics API fallback for DB/MQ/LB; app-server still uses `process_*` from `/metrics` |
+| Inspector DB CPU low but `kubectl top` high | `process_*` measured exporter sidecar | Fixed in collector — uses `container="postgres"` via Metrics API; redeploy `cloud9-api` + apply RBAC |
 | Grafana login fails | Wrong password | Default is `cloud9-dev` set in values file |
 
 ---

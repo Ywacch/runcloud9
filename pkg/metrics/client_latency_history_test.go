@@ -54,7 +54,7 @@ func TestClientLatencyAccumulator_skipsInvalid(t *testing.T) {
 func TestMetricsCollector_ClientLatencyHistoryFor(t *testing.T) {
 	t.Parallel()
 
-	c := NewMetricsCollector("", nil, nil, nil)
+	c := NewMetricsCollector("", nil, nil, nil, nil)
 	ns := "cloud9-test"
 	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
