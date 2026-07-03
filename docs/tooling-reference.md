@@ -556,6 +556,7 @@ prometheus.io/path: "/metrics"
 These are set by `K8sDeployer` in `pkg/deployer/k8s.go`.
 
 ### Known limitations on GKE Autopilot
+- **Live metrics freshness tiers:** See **Live metrics freshness (2026-07)** in `ganymede_extensions.md`. Tier B (PromQL rates) is tunable; Tier C (DB/LB/MQ container CPU via Metrics API) is ~15–60s and not fixable by polling faster on Autopilot.
 - `container_cpu_usage_seconds_total` may return empty — Autopilot does not expose kubelet/cAdvisor series to self-managed Prometheus for user workloads. **Mitigation (implemented):** `cloud9-api` falls back to the Kubernetes Metrics API (`metrics.k8s.io`) for DB/MQ/LB container CPU/memory — same data as `kubectl top`. Requires ClusterRole `get`/`list` on `pods.metrics.k8s.io` (see `k8s/base/cloud9-api.yaml`). GKE Managed Prometheus remains an optional future path for historical PromQL dashboards.
 - Do **not** use `process_cpu_seconds_total` on postgres pods for DB utilization — Prometheus scrapes `postgres-exporter`; that metric reflects the sidecar, not the `postgres` container. See `ganymede_appendix.md` (2026-07-02 entry).
 - `node-exporter` cannot run on Autopilot — hostPath mounts to `/proc`, `/sys` are blocked.

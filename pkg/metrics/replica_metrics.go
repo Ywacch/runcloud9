@@ -21,10 +21,10 @@ func (c *MetricsCollector) appServerReplicaSeries(ctx context.Context, ns string
 	nsSel := fmt.Sprintf(`namespace=%q`, ns)
 	podSel := fmt.Sprintf(`namespace=%q,pod=~"app-server.*"`, ns)
 	podRe := "app-server.*"
-	return c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (rate(http_requests_total{%s}[30s]))`, nsSel), "pod"),
-		c.queryMultiResult(ctx, fmt.Sprintf(`histogram_quantile(0.99, sum by (pod, le) (rate(http_request_duration_seconds_bucket{%s}[30s])))`, nsSel), "pod"),
-		c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (rate(process_cpu_seconds_total{namespace=%q,pod=~%q}[30s]))`, ns, podRe), "pod"),
-		c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (rate(http_requests_total{%s,status=~"5.."}[30s]))`, nsSel), "pod"),
+	return c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (rate(http_requests_total{%s}%s))`, nsSel, promRateRange()), "pod"),
+		c.queryMultiResult(ctx, fmt.Sprintf(`histogram_quantile(0.99, sum by (pod, le) (rate(http_request_duration_seconds_bucket{%s}%s)))`, nsSel, promRateRange()), "pod"),
+		c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (rate(process_cpu_seconds_total{namespace=%q,pod=~%q}%s))`, ns, podRe, promRateRange()), "pod"),
+		c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (rate(http_requests_total{%s,status=~"5.."}%s))`, nsSel, promRateRange()), "pod"),
 		c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (increase(http_requests_total{%s}[9m]))`, podSel), "pod")
 }
 

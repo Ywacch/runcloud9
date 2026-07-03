@@ -308,8 +308,8 @@ func (c *MetricsCollector) queryWithFallbackEstimated(ctx context.Context, prima
 // queryCPUPair returns CPU cores for the main workload container only (excludes exporter sidecars).
 func (c *MetricsCollector) queryCPUPair(ctx context.Context, ns, podRe, mainContainer string) (float64, bool) {
 	primary := fmt.Sprintf(
-		`sum(rate(container_cpu_usage_seconds_total{namespace=%q,pod=~%q,container="%s"}[30s]))`,
-		ns, podRe, mainContainer,
+		`sum(rate(container_cpu_usage_seconds_total{namespace=%q,pod=~%q,container="%s"}%s))`,
+		ns, podRe, mainContainer, promRateRange(),
 	)
 	fallback := fmt.Sprintf(
 		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~%q,container="%s",resource="cpu"})`,
@@ -351,8 +351,8 @@ func (c *MetricsCollector) kubeLimitMem(ctx context.Context, ns, podRe, containe
 // where cAdvisor series are often unavailable to self-managed Prometheus).
 func (c *MetricsCollector) queryProcessCPU(ctx context.Context, ns, podRe, fallbackContainer string) (float64, bool) {
 	primary := fmt.Sprintf(
-		`sum(rate(process_cpu_seconds_total{namespace=%q,pod=~%q}[30s]))`,
-		ns, podRe,
+		`sum(rate(process_cpu_seconds_total{namespace=%q,pod=~%q}%s))`,
+		ns, podRe, promRateRange(),
 	)
 	fallback := fmt.Sprintf(
 		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~%q,container="%s",resource="cpu"})`,
@@ -376,8 +376,8 @@ func (c *MetricsCollector) queryProcessMemory(ctx context.Context, ns, podRe, fa
 
 func (c *MetricsCollector) queryContainerCPUPrimaryOnly(ctx context.Context, ns, podRe, container string) (float64, bool) {
 	primary := fmt.Sprintf(
-		`sum(rate(container_cpu_usage_seconds_total{namespace=%q,pod=~%q,container="%s"}[30s]))`,
-		ns, podRe, container,
+		`sum(rate(container_cpu_usage_seconds_total{namespace=%q,pod=~%q,container="%s"}%s))`,
+		ns, podRe, container, promRateRange(),
 	)
 	v, present, _ := c.queryScalar(ctx, primary)
 	return v, present
@@ -563,8 +563,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmDB.MemoryLimit = c.kubeLimitMem(ctx, ns, "postgres.*", "postgres")
 
 	dbQPS, dbQPSPresent, _ := c.queryScalar(ctx, fmt.Sprintf(
-		`sum(rate(db_query_duration_seconds_count{%s}[30s]))`,
-		appServerSel,
+		`sum(rate(db_query_duration_seconds_count{%s}%s))`,
+		appServerSel, promRateRange(),
 	))
 	if dbQPSPresent {
 		cmDB.DbQueryRate = dbQPS
@@ -574,12 +574,12 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		cmDB.DbQuerySource = DbQuerySourceNone
 	}
 	dbLatSum, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(db_query_duration_seconds_sum{%s}[30s]))`,
-		appServerSel,
+		`sum(rate(db_query_duration_seconds_sum{%s}%s))`,
+		appServerSel, promRateRange(),
 	))
 	dbLatCount, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(db_query_duration_seconds_count{%s}[30s]))`,
-		appServerSel,
+		`sum(rate(db_query_duration_seconds_count{%s}%s))`,
+		appServerSel, promRateRange(),
 	))
 	if dbLatCount > 0 {
 		cmDB.DbQueryLatency = dbLatSum / dbLatCount
@@ -610,12 +610,12 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmDB.MaxConnections = maxConn
 	// PostgreSQL-native throughput from postgres_exporter; fallback to app-side DB query rate.
 	pgTxnRate, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(pg_stat_database_xact_commit{namespace=%q,datname!=""}[30s]))`,
-		ns,
+		`sum(rate(pg_stat_database_xact_commit{namespace=%q,datname!=""}%s))`,
+		ns, promRateRange(),
 	))
 	pgRollbackRate, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(pg_stat_database_xact_rollback{namespace=%q,datname!=""}[30s]))`,
-		ns,
+		`sum(rate(pg_stat_database_xact_rollback{namespace=%q,datname!=""}%s))`,
+		ns, promRateRange(),
 	))
 	if pgTxnRate+pgRollbackRate > 0 {
 		cmDB.RequestRate = pgTxnRate + pgRollbackRate
@@ -632,12 +632,12 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	// Cache tier: redis + cache-proxy (separate queries so exporter sidecars are not summed).
 	cmCache := ComponentMetrics{Component: "cache"}
 	redisCPUUser, redisUserPresent, _ := c.queryScalar(ctx, fmt.Sprintf(
-		`sum(rate(redis_cpu_user_seconds_total{namespace=%q}[30s]))`,
-		ns,
+		`sum(rate(redis_cpu_user_seconds_total{namespace=%q}%s))`,
+		ns, promRateRange(),
 	))
 	redisCPUSys, redisSysPresent, _ := c.queryScalar(ctx, fmt.Sprintf(
-		`sum(rate(redis_cpu_sys_seconds_total{namespace=%q}[30s]))`,
-		ns,
+		`sum(rate(redis_cpu_sys_seconds_total{namespace=%q}%s))`,
+		ns, promRateRange(),
 	))
 	redisExporterPresent := redisUserPresent || redisSysPresent
 	redisCPUFromExporter := redisCPUUser + redisCPUSys
@@ -656,8 +656,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	}
 	// Cache-proxy is a Go process; use scrape-side process_* series (works on Autopilot without cAdvisor).
 	cacheCPU2, cacheProxyPresent, _ := c.queryScalar(ctx, fmt.Sprintf(
-		`sum(rate(process_cpu_seconds_total{namespace=%q,pod=~%q}[30s]))`,
-		ns, "cache-proxy.*",
+		`sum(rate(process_cpu_seconds_total{namespace=%q,pod=~%q}%s))`,
+		ns, "cache-proxy.*", promRateRange(),
 	))
 	cacheCPU2Est := !cacheProxyPresent
 	cmCache.CPUUsage = cacheCPU1 + cacheCPU2
@@ -688,13 +688,13 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmApp.MemIsEstimated = appMemEst
 
 	rps, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(http_requests_total{%s}[30s]))`,
-		nsSel,
+		`sum(rate(http_requests_total{%s}%s))`,
+		nsSel, promRateRange(),
 	))
 	cmApp.RequestRate = rps
 
 	// UNDERSTAND: histogram_quantile needs the _bucket metric, not _total.
-	latBucketRate := fmt.Sprintf(`sum(rate(http_request_duration_seconds_bucket{%s}[30s])) by (le)`, nsSel)
+	latBucketRate := fmt.Sprintf(`sum(rate(http_request_duration_seconds_bucket{%s}%s)) by (le)`, nsSel, promRateRange())
 	p50, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.50, %s)`, latBucketRate))
 	p95, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.95, %s)`, latBucketRate))
 	p99, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.99, %s)`, latBucketRate))
@@ -703,14 +703,14 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmApp.P99Latency = p99
 
 	hits, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(cache_hits_total{%s}[30s]))`,
-		nsSel,
+		`sum(rate(cache_hits_total{%s}%s))`,
+		nsSel, promRateRange(),
 	))
 	cmApp.CacheHits = hits
 
 	misses, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(cache_misses_total{%s}[30s]))`,
-		nsSel,
+		`sum(rate(cache_misses_total{%s}%s))`,
+		nsSel, promRateRange(),
 	))
 	cmApp.CacheMisses = misses
 
@@ -727,8 +727,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmApp.CacheMissesLast9m = misses9m
 
 	errRate, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(http_requests_total{%s,status=~"5.."}[30s]))`,
-		nsSel,
+		`sum(rate(http_requests_total{%s,status=~"5.."}%s))`,
+		nsSel, promRateRange(),
 	))
 	cmApp.ErrorRate = errRate
 
@@ -769,8 +769,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmCache.CacheMissesLast9m = cmApp.CacheMissesLast9m
 	redisCmdPattern := redisCommandPattern(template)
 	redisOps, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(redis_commands_total{namespace=%q,cmd=~%q}[30s]))`,
-		ns, redisCmdPattern,
+		`sum(rate(redis_commands_total{namespace=%q,cmd=~%q}%s))`,
+		ns, redisCmdPattern, promRateRange(),
 	))
 	cmCache.RedisOpsPerSec = redisOps
 	if redisOps > 0 {
@@ -793,17 +793,17 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	if v, _ := c.query(ctx, fmt.Sprintf(`sum(redis_connected_clients{namespace=%q})`, ns)); v > 0 {
 		cmCache.ActiveConnections = v
 	}
-	rh, _ := c.query(ctx, fmt.Sprintf(`sum(rate(redis_keyspace_hits_total{namespace=%q}[30s]))`, ns))
-	rm, _ := c.query(ctx, fmt.Sprintf(`sum(rate(redis_keyspace_misses_total{namespace=%q}[30s]))`, ns))
+	rh, _ := c.query(ctx, fmt.Sprintf(`sum(rate(redis_keyspace_hits_total{namespace=%q}%s))`, ns, promRateRange()))
+	rm, _ := c.query(ctx, fmt.Sprintf(`sum(rate(redis_keyspace_misses_total{namespace=%q}%s))`, ns, promRateRange()))
 	cmCache.RedisKeyspaceHits = rh
 	cmCache.RedisKeyspaceMisses = rm
-	rejected, _ := c.query(ctx, fmt.Sprintf(`sum(rate(redis_rejected_connections_total{namespace=%q}[30s]))`, ns))
+	rejected, _ := c.query(ctx, fmt.Sprintf(`sum(rate(redis_rejected_connections_total{namespace=%q}%s))`, ns, promRateRange()))
 	cmCache.RedisRejectedRate = rejected
 	// Redis latency percentiles from histogram buckets (microseconds -> seconds).
 	redisLatCmdPattern := redisLatencyCommandPattern(template)
 	redisLatBucket := fmt.Sprintf(
-		`sum(rate(redis_commands_latencies_usec_bucket{namespace=%q,cmd=~%q}[30s])) by (le)`,
-		ns, redisLatCmdPattern,
+		`sum(rate(redis_commands_latencies_usec_bucket{namespace=%q,cmd=~%q}%s)) by (le)`,
+		ns, redisLatCmdPattern, promRateRange(),
 	)
 	redisP50usec, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.50, %s)`, redisLatBucket))
 	redisP95usec, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.95, %s)`, redisLatBucket))
@@ -816,12 +816,12 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 
 	// Average latency fallback from duration/count.
 	redisCmdDur, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(redis_commands_duration_seconds_total{namespace=%q,cmd=~%q}[30s]))`,
-		ns, redisLatCmdPattern,
+		`sum(rate(redis_commands_duration_seconds_total{namespace=%q,cmd=~%q}%s))`,
+		ns, redisLatCmdPattern, promRateRange(),
 	))
 	redisCmdCount, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(redis_commands_total{namespace=%q,cmd=~%q}[30s]))`,
-		ns, redisLatCmdPattern,
+		`sum(rate(redis_commands_total{namespace=%q,cmd=~%q}%s))`,
+		ns, redisLatCmdPattern, promRateRange(),
 	))
 	if redisCmdCount > 0 {
 		cmCache.AvgLatency = redisCmdDur / redisCmdCount
@@ -863,7 +863,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 			cmMQ.MemoryLimit = int64(cmMQ.MQMemoryLimit)
 		}
 	}
-	mqPubRate, _ := c.query(ctx, fmt.Sprintf(`sum(rate({__name__=~".*_mq_publish_total",namespace=%q}[30s]))`, ns))
+	mqPubRate, _ := c.query(ctx, fmt.Sprintf(`sum(rate({__name__=~".*_mq_publish_total",namespace=%q}%s))`, ns, promRateRange()))
 	if mqPubRate > 0 {
 		cmMQ.ProduceRate = mqPubRate
 	}
@@ -877,20 +877,20 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmWorker.MemIsEstimated = wMemEst
 	cmWorker.CPULimit = c.kubeLimitCPU(ctx, ns, "worker.*", "worker")
 	cmWorker.MemoryLimit = c.kubeLimitMem(ctx, ns, "worker.*", "worker")
-	workerRPS, _ := c.query(ctx, fmt.Sprintf(`sum(rate({__name__=~".*_worker_processed_total",namespace=%q}[30s]))`, ns))
+	workerRPS, _ := c.query(ctx, fmt.Sprintf(`sum(rate({__name__=~".*_worker_processed_total",namespace=%q}%s))`, ns, promRateRange()))
 	if workerRPS > 0 {
 		cmWorker.RequestRate = workerRPS
 	} else {
 		cmWorker.RequestRate = cmMQ.ConsumeRate
 	}
 	workerP99, _ := c.query(ctx, fmt.Sprintf(
-		`histogram_quantile(0.99, sum(rate({__name__=~".*_worker_processing_duration_seconds_bucket",namespace=%q}[30s])) by (le))`,
-		ns,
+		`histogram_quantile(0.99, sum(rate({__name__=~".*_worker_processing_duration_seconds_bucket",namespace=%q}%s)) by (le))`,
+		ns, promRateRange(),
 	))
 	if workerP99 > 0 && !math.IsNaN(workerP99) && !math.IsInf(workerP99, 0) {
 		cmWorker.P99Latency = workerP99
 	}
-	workerErrors, _ := c.query(ctx, fmt.Sprintf(`sum(rate({__name__=~".*_worker_errors_total",namespace=%q}[30s]))`, ns))
+	workerErrors, _ := c.query(ctx, fmt.Sprintf(`sum(rate({__name__=~".*_worker_errors_total",namespace=%q}%s))`, ns, promRateRange()))
 	cmWorker.ErrorRate = workerErrors
 	cmWorker.QueueDepth = cmMQ.QueueDepth
 	if cmMQ.QueueDepth > 0 {
@@ -929,7 +929,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmLB.LBBackends = backends
 	if c.prometheusURL != "" {
 		cmLB.PerBackendRPS = c.queryMultiResult(ctx,
-			fmt.Sprintf(`sum by (pod) (rate(http_requests_total{namespace=%q,pod=~"app-server.*"}[30s]))`, ns),
+			fmt.Sprintf(`sum by (pod) (rate(http_requests_total{namespace=%q,pod=~"app-server.*"}%s))`, ns, promRateRange()),
 			"pod",
 		)
 	}

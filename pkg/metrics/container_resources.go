@@ -22,8 +22,8 @@ type containerResource struct {
 // queryContainerResourceCPU returns live CPU for a named container: cAdvisor → Metrics API → kube requests.
 func (c *MetricsCollector) queryContainerResourceCPU(ctx context.Context, ns, podRe, container string) containerResource {
 	primary := fmt.Sprintf(
-		`sum(rate(container_cpu_usage_seconds_total{namespace=%q,pod=~%q,container="%s"}[30s]))`,
-		ns, podRe, container,
+		`sum(rate(container_cpu_usage_seconds_total{namespace=%q,pod=~%q,container="%s"}%s))`,
+		ns, podRe, container, promRateRange(),
 	)
 	val, present, err := c.queryScalar(ctx, primary)
 	if err == nil && present {
