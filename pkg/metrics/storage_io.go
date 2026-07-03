@@ -62,8 +62,7 @@ var storageIORegistry = map[StorageEngineID]StorageIOProvider{
 			return `sum(pg_database_size_bytes{namespace="` + ns + `",datname!~"template0|template1"})`
 		},
 		ErrorRateQuery: func(ns string) string {
-			return `sum(rate(pg_stat_database_xact_rollback{namespace="` + ns + `",datname!=""}`
-				+ promRateRange() + `))`
+			return fmt.Sprintf(`sum(rate(pg_stat_database_xact_rollback{namespace=%q,datname!=""}%s))`, ns, promRateRange())
 		},
 	},
 	StorageEngineRedis: {
@@ -71,22 +70,22 @@ var storageIORegistry = map[StorageEngineID]StorageIOProvider{
 		Unit:   "keys/s",
 		Source: "redis_exporter",
 		ReadQuery: func(ns string) string {
-			return `sum(rate(redis_commands_total{namespace="` + ns + `",cmd=~"get|mget|hget|hmget"}`
-				+ promRateRange() + `))`
+			return fmt.Sprintf(`sum(rate(redis_commands_total{namespace=%q,cmd=~"get|mget|hget|hmget"}%s))`, ns, promRateRange())
 		},
 		WriteQuery: func(ns string) string {
-			return `sum(rate(redis_commands_total{namespace="` + ns + `",cmd=~"set|del|mset|hset|hdel"}`
-				+ promRateRange() + `))`
+			return fmt.Sprintf(`sum(rate(redis_commands_total{namespace=%q,cmd=~"set|del|mset|hset|hdel"}%s))`, ns, promRateRange())
 		},
 		ReadLatencyQuery: func(ns, _ string) string {
-			return `histogram_quantile(0.99, sum(rate(redis_commands_latencies_usec_bucket{namespace="` + ns +
-				`",cmd=~"get|mget"}`
-				+ promRateRange() + `)) by (le)) / 1e6`
+			return fmt.Sprintf(
+				`histogram_quantile(0.99, sum(rate(redis_commands_latencies_usec_bucket{namespace=%q,cmd=~"get|mget"}%s)) by (le)) / 1e6`,
+				ns, promRateRange(),
+			)
 		},
 		WriteLatencyQuery: func(ns, _ string) string {
-			return `histogram_quantile(0.99, sum(rate(redis_commands_latencies_usec_bucket{namespace="` + ns +
-				`",cmd=~"set|del"}`
-				+ promRateRange() + `)) by (le)) / 1e6`
+			return fmt.Sprintf(
+				`histogram_quantile(0.99, sum(rate(redis_commands_latencies_usec_bucket{namespace=%q,cmd=~"set|del"}%s)) by (le)) / 1e6`,
+				ns, promRateRange(),
+			)
 		},
 		BytesUsedQuery: func(ns string) string {
 			return `sum(redis_memory_used_bytes{namespace="` + ns + `"})`
@@ -95,8 +94,7 @@ var storageIORegistry = map[StorageEngineID]StorageIOProvider{
 			return `max(redis_memory_max_bytes{namespace="` + ns + `"})`
 		},
 		ErrorRateQuery: func(ns string) string {
-			return `sum(rate(redis_rejected_connections_total{namespace="` + ns + `"}`
-				+ promRateRange() + `))`
+			return fmt.Sprintf(`sum(rate(redis_rejected_connections_total{namespace=%q}%s))`, ns, promRateRange())
 		},
 	},
 	StorageEngineCassandra: {
