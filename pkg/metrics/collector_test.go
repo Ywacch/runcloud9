@@ -323,7 +323,7 @@ func TestCollect_NoDeprecatedRateWindows(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	for _, q := range queries {
-		// Rate windows were widened to [30s] for reliable samples vs 10s scrape intervals.
+		// Live rate window is PromRateWindow (10s); requires scrapeInterval <= 5s.
 		if strings.Contains(q, "[15s]") {
 			t.Fatalf("query must not use deprecated [15s] rate window: %s", q)
 		}
@@ -333,7 +333,7 @@ func TestCollect_NoDeprecatedRateWindows(t *testing.T) {
 	}
 }
 
-func TestCollect_HistogramQuantilesUse30sBucketRate(t *testing.T) {
+func TestCollect_HistogramQuantilesUsePromRateWindowBucketRate(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex
 	var seen []string
@@ -375,8 +375,8 @@ func TestCollect_HistogramQuantilesUse30sBucketRate(t *testing.T) {
 			if strings.Contains(q, "[9m]") {
 				continue // session p99 (P99Latency9m)
 			}
-			if !strings.Contains(q, "[30s]") {
-				t.Fatalf("histogram quantile query missing [30s] in bucket rate: %s", q)
+			if !strings.Contains(q, promRateRange()) {
+				t.Fatalf("histogram quantile query missing %s in bucket rate: %s", promRateRange(), q)
 			}
 		}
 	}
@@ -582,8 +582,8 @@ func TestQueryCPUPair_PromQLFilters(t *testing.T) {
 	if !strings.Contains(primary, `container="app-server"`) {
 		t.Fatalf("want main container filter: %s", primary)
 	}
-	if !strings.Contains(primary, "[30s]") {
-		t.Fatalf("want [30s] rate window: %s", primary)
+	if !strings.Contains(primary, promRateRange()) {
+		t.Fatalf("want %s rate window: %s", promRateRange(), primary)
 	}
 }
 

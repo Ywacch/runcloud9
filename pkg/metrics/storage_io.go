@@ -62,7 +62,7 @@ var storageIORegistry = map[StorageEngineID]StorageIOProvider{
 			return `sum(pg_database_size_bytes{namespace="` + ns + `",datname!~"template0|template1"})`
 		},
 		ErrorRateQuery: func(ns string) string {
-			return `sum(rate(pg_stat_database_xact_rollback{namespace="` + ns + `",datname!=""}[30s]))`
+			return fmt.Sprintf(`sum(rate(pg_stat_database_xact_rollback{namespace=%q,datname!=""}%s))`, ns, promRateRange())
 		},
 	},
 	StorageEngineRedis: {
@@ -70,18 +70,22 @@ var storageIORegistry = map[StorageEngineID]StorageIOProvider{
 		Unit:   "keys/s",
 		Source: "redis_exporter",
 		ReadQuery: func(ns string) string {
-			return `sum(rate(redis_commands_total{namespace="` + ns + `",cmd=~"get|mget|hget|hmget"}[30s]))`
+			return fmt.Sprintf(`sum(rate(redis_commands_total{namespace=%q,cmd=~"get|mget|hget|hmget"}%s))`, ns, promRateRange())
 		},
 		WriteQuery: func(ns string) string {
-			return `sum(rate(redis_commands_total{namespace="` + ns + `",cmd=~"set|del|mset|hset|hdel"}[30s]))`
+			return fmt.Sprintf(`sum(rate(redis_commands_total{namespace=%q,cmd=~"set|del|mset|hset|hdel"}%s))`, ns, promRateRange())
 		},
 		ReadLatencyQuery: func(ns, _ string) string {
-			return `histogram_quantile(0.99, sum(rate(redis_commands_latencies_usec_bucket{namespace="` + ns +
-				`",cmd=~"get|mget"}[30s])) by (le)) / 1e6`
+			return fmt.Sprintf(
+				`histogram_quantile(0.99, sum(rate(redis_commands_latencies_usec_bucket{namespace=%q,cmd=~"get|mget"}%s)) by (le)) / 1e6`,
+				ns, promRateRange(),
+			)
 		},
 		WriteLatencyQuery: func(ns, _ string) string {
-			return `histogram_quantile(0.99, sum(rate(redis_commands_latencies_usec_bucket{namespace="` + ns +
-				`",cmd=~"set|del"}[30s])) by (le)) / 1e6`
+			return fmt.Sprintf(
+				`histogram_quantile(0.99, sum(rate(redis_commands_latencies_usec_bucket{namespace=%q,cmd=~"set|del"}%s)) by (le)) / 1e6`,
+				ns, promRateRange(),
+			)
 		},
 		BytesUsedQuery: func(ns string) string {
 			return `sum(redis_memory_used_bytes{namespace="` + ns + `"})`
@@ -90,7 +94,7 @@ var storageIORegistry = map[StorageEngineID]StorageIOProvider{
 			return `max(redis_memory_max_bytes{namespace="` + ns + `"})`
 		},
 		ErrorRateQuery: func(ns string) string {
-			return `sum(rate(redis_rejected_connections_total{namespace="` + ns + `"}[30s]))`
+			return fmt.Sprintf(`sum(rate(redis_rejected_connections_total{namespace=%q}%s))`, ns, promRateRange())
 		},
 	},
 	StorageEngineCassandra: {
@@ -104,16 +108,18 @@ var storageIORegistry = map[StorageEngineID]StorageIOProvider{
 // postgresUserTableReadRateQuery sums live rows read from user tables (seq + index heap fetches).
 func postgresUserTableReadRateQuery(ns string) string {
 	filter := `namespace="` + ns + `",datname!~"template0|template1"`
-	return `sum(rate(pg_stat_user_tables_seq_tup_read{` + filter + `}[30s]))` +
-		` + sum(rate(pg_stat_user_tables_idx_tup_fetch{` + filter + `}[30s]))`
+	rw := promRateRange()
+	return `sum(rate(pg_stat_user_tables_seq_tup_read{` + filter + `}` + rw + `))` +
+		` + sum(rate(pg_stat_user_tables_idx_tup_fetch{` + filter + `}` + rw + `))`
 }
 
 // postgresUserTableWriteRateQuery sums row inserts, updates, and deletes on user tables.
 func postgresUserTableWriteRateQuery(ns string) string {
 	filter := `namespace="` + ns + `",datname!~"template0|template1"`
-	return `sum(rate(pg_stat_user_tables_n_tup_ins{` + filter + `}[30s]))` +
-		` + sum(rate(pg_stat_user_tables_n_tup_upd{` + filter + `}[30s]))` +
-		` + sum(rate(pg_stat_user_tables_n_tup_del{` + filter + `}[30s]))`
+	rw := promRateRange()
+	return `sum(rate(pg_stat_user_tables_n_tup_ins{` + filter + `}` + rw + `))` +
+		` + sum(rate(pg_stat_user_tables_n_tup_upd{` + filter + `}` + rw + `))` +
+		` + sum(rate(pg_stat_user_tables_n_tup_del{` + filter + `}` + rw + `))`
 }
 
 // LookupStorageProvider returns the metrics provider for an engine id, if registered.
@@ -251,27 +257,27 @@ func ApplyStorageProfile(cm *ComponentMetrics, engine StorageEngineID, role stri
 
 func redisStorageReadRateQuery(ns, template string) string {
 	cmd := redisStorageReadCmdPattern(template)
-	return fmt.Sprintf(`sum(rate(redis_commands_total{namespace=%q,cmd=~%q}[30s]))`, ns, cmd)
+	return fmt.Sprintf(`sum(rate(redis_commands_total{namespace=%q,cmd=~%q}%s))`, ns, cmd, promRateRange())
 }
 
 func redisStorageWriteRateQuery(ns, template string) string {
 	cmd := redisStorageWriteCmdPattern(template)
-	return fmt.Sprintf(`sum(rate(redis_commands_total{namespace=%q,cmd=~%q}[30s]))`, ns, cmd)
+	return fmt.Sprintf(`sum(rate(redis_commands_total{namespace=%q,cmd=~%q}%s))`, ns, cmd, promRateRange())
 }
 
 func redisStorageReadLatencyQuery(ns, template string) string {
 	cmd := redisStorageReadLatencyCmdPattern(template)
 	return fmt.Sprintf(
-		`histogram_quantile(0.99, sum(rate(redis_commands_latencies_usec_bucket{namespace=%q,cmd=~%q}[30s])) by (le)) / 1e6`,
-		ns, cmd,
+		`histogram_quantile(0.99, sum(rate(redis_commands_latencies_usec_bucket{namespace=%q,cmd=~%q}%s)) by (le)) / 1e6`,
+		ns, cmd, promRateRange(),
 	)
 }
 
 func redisStorageWriteLatencyQuery(ns, template string) string {
 	cmd := redisStorageWriteLatencyCmdPattern(template)
 	return fmt.Sprintf(
-		`histogram_quantile(0.99, sum(rate(redis_commands_latencies_usec_bucket{namespace=%q,cmd=~%q}[30s])) by (le)) / 1e6`,
-		ns, cmd,
+		`histogram_quantile(0.99, sum(rate(redis_commands_latencies_usec_bucket{namespace=%q,cmd=~%q}%s)) by (le)) / 1e6`,
+		ns, cmd, promRateRange(),
 	)
 }
 
