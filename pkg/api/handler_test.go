@@ -110,6 +110,67 @@ func TestHandleGetResourceProfiles(t *testing.T) {
 	}
 }
 
+func TestHandleCreateDeployment_ResourceBudgetExceeded(t *testing.T) {
+	t.Parallel()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "url-shortener",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "lb-1", Type: "lb", Name: "Load Balancer"},
+			{
+				ID:   "app-1",
+				Type: "app-server",
+				Name: "App Server",
+				Config: map[string]interface{}{
+					"replicas":     1,
+					"instanceSize": "small",
+				},
+			},
+			{
+				ID:   "cache-1",
+				Type: "cache",
+				Name: "Redis",
+				Config: map[string]interface{}{
+					"strategy": "cache-aside",
+				},
+			},
+			{ID: "db-1", Type: "db", Name: "PostgreSQL"},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "lb-1", TargetID: "app-1"},
+			{SourceID: "app-1", TargetID: "cache-1"},
+			{SourceID: "app-1", TargetID: "db-1"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status: want 422, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var out deployer.ResourceBudgetErrorJSON
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Tier != "explorer" {
+		t.Fatalf("tier: got %q want explorer", out.Tier)
+	}
+	if out.Requested["cpu"] != "875m" {
+		t.Fatalf("requested cpu: got %q want 875m", out.Requested["cpu"])
+	}
+	if len(out.Breakdown) == 0 {
+		t.Fatal("expected breakdown entries")
+	}
+}
+
 func TestHandleCreateDeployment_UnknownTemplate(t *testing.T) {
 	t.Parallel()
 	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
