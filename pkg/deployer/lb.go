@@ -10,7 +10,6 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
@@ -30,21 +29,10 @@ type LBSpec struct {
 // DefaultLBSpec returns demo nginx sizing tuned for ~200 RPS through the LB.
 func DefaultLBSpec() LBSpec {
 	return LBSpec{
-		AppLabel: "lb",
-		Image:    imageNginx,
-		Port:     80,
-		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:              resource.MustParse("250m"),
-				corev1.ResourceMemory:           resource.MustParse("128Mi"),
-				corev1.ResourceEphemeralStorage: resource.MustParse("50Mi"),
-			},
-			Limits: corev1.ResourceList{
-				corev1.ResourceCPU:              resource.MustParse("250m"),
-				corev1.ResourceMemory:           resource.MustParse("128Mi"),
-				corev1.ResourceEphemeralStorage: resource.MustParse("50Mi"),
-			},
-		},
+		AppLabel:           "lb",
+		Image:              imageNginx,
+		Port:               80,
+		Resources:          ComponentDefaultResources("lb"),
 		WorkerConnections:  4096,
 		UpstreamKeepalive:  32,
 		UpstreamRetryWait:  30 * time.Second,
@@ -59,8 +47,9 @@ type LBEndpointSnapshot struct {
 	Ready   bool   `json:"ready"`
 }
 
-func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, _ corev1.ResourceRequirements, replicas int32) error {
+func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources corev1.ResourceRequirements, replicas int32) error {
 	spec := DefaultLBSpec()
+	spec.Resources = resources
 	algo := configString(cfg.Node.Config, "lbAlgorithm", "round-robin")
 	logicalBackends := lbBackends(cfg.Node, cfg.Design)
 	if len(logicalBackends) == 0 {

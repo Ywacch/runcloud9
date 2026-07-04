@@ -78,6 +78,38 @@ func TestHandleGetTemplates(t *testing.T) {
 	}
 }
 
+func TestHandleGetResourceProfiles(t *testing.T) {
+	t.Parallel()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/meta/resource-profiles", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("Content-Type: want application/json, got %q", ct)
+	}
+
+	var resp deployer.ResourceCatalogResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Profiles["small"].CPU != "125m" {
+		t.Fatalf("small cpu: %+v", resp.Profiles["small"])
+	}
+	if resp.Components["mq"].CPU != "200m" {
+		t.Fatalf("mq cpu: %+v", resp.Components["mq"])
+	}
+	if resp.Components["lb"].Memory != "128Mi" {
+		t.Fatalf("lb memory: %+v", resp.Components["lb"])
+	}
+}
+
 func TestHandleCreateDeployment_UnknownTemplate(t *testing.T) {
 	t.Parallel()
 	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)

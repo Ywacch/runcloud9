@@ -2,7 +2,6 @@ package deployer
 
 import (
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // ExporterSpec defines a Prometheus metrics sidecar injected next to the main container.
@@ -28,91 +27,6 @@ type ComponentSpec struct {
 	Annotations  map[string]string
 	Exporter     *ExporterSpec
 	Command      []string // optional: overrides container entrypoint+cmd
-}
-
-// DefaultResources returns the standard 250m/512Mi resource spec.
-func DefaultResources() corev1.ResourceRequirements {
-	return corev1.ResourceRequirements{
-		Requests: corev1.ResourceList{
-			corev1.ResourceCPU:              resource.MustParse("250m"),
-			corev1.ResourceMemory:           resource.MustParse("512Mi"),
-			corev1.ResourceEphemeralStorage: resource.MustParse("100Mi"),
-		},
-		Limits: corev1.ResourceList{
-			corev1.ResourceCPU:              resource.MustParse("250m"),
-			corev1.ResourceMemory:           resource.MustParse("512Mi"),
-			corev1.ResourceEphemeralStorage: resource.MustParse("100Mi"),
-		},
-	}
-}
-
-// ResourceProfile returns resources for a named profile.
-func ResourceProfile(profile string) corev1.ResourceRequirements {
-	switch profile {
-	case "large":
-		return corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:              resource.MustParse("500m"),
-				corev1.ResourceMemory:           resource.MustParse("1Gi"),
-				corev1.ResourceEphemeralStorage: resource.MustParse("200Mi"),
-			},
-			Limits: corev1.ResourceList{
-				corev1.ResourceCPU:              resource.MustParse("500m"),
-				corev1.ResourceMemory:           resource.MustParse("1Gi"),
-				corev1.ResourceEphemeralStorage: resource.MustParse("200Mi"),
-			},
-		}
-	case "alpha":
-		return corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:              resource.MustParse("125m"),
-				corev1.ResourceMemory:           resource.MustParse("256Mi"),
-				corev1.ResourceEphemeralStorage: resource.MustParse("100Mi"),
-			},
-			Limits: corev1.ResourceList{
-				corev1.ResourceCPU:              resource.MustParse("125m"),
-				corev1.ResourceMemory:           resource.MustParse("256Mi"),
-				corev1.ResourceEphemeralStorage: resource.MustParse("100Mi"),
-			},
-		}
-	case "small":
-		return corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:              resource.MustParse("125m"),
-				corev1.ResourceMemory:           resource.MustParse("256Mi"),
-				corev1.ResourceEphemeralStorage: resource.MustParse("100Mi"),
-			},
-			Limits: corev1.ResourceList{
-				corev1.ResourceCPU:              resource.MustParse("125m"),
-				corev1.ResourceMemory:           resource.MustParse("256Mi"),
-				corev1.ResourceEphemeralStorage: resource.MustParse("100Mi"),
-			},
-		}
-	default: // "medium"
-		return DefaultResources()
-	}
-}
-
-// DBResources returns default Postgres workload sizing for session templates.
-// Kept separate from DefaultResources (medium app-server profile).
-func DBResources() corev1.ResourceRequirements {
-	return ResourceProfile("small")
-}
-
-// ExporterResources returns minimal resources for metrics sidecars (GKE Autopilot floors ~50m/52Mi).
-func ExporterResources() corev1.ResourceRequirements {
-	return corev1.ResourceRequirements{
-		Requests: corev1.ResourceList{
-			corev1.ResourceCPU:              resource.MustParse("25m"),
-			corev1.ResourceMemory:           resource.MustParse("32Mi"),
-			corev1.ResourceEphemeralStorage: resource.MustParse("50Mi"),
-		},
-		Limits: corev1.ResourceList{
-			corev1.ResourceCPU:              resource.MustParse("25m"),
-			corev1.ResourceMemory:           resource.MustParse("32Mi"),
-			corev1.ResourceEphemeralStorage: resource.MustParse("50Mi"),
-		},
-	}
 }
 
 const (
@@ -144,7 +58,6 @@ var componentRegistry = map[string]ComponentSpec{
 			"POSTGRES_PASSWORD": "syscrack",
 		},
 		NeedsService: true,
-		Resources:    DBResources(),
 		Exporter: &ExporterSpec{
 			Name:        "postgres-exporter",
 			Image:       "quay.io/prometheuscommunity/postgres-exporter:v0.16.0",
@@ -170,17 +83,5 @@ var componentRegistry = map[string]ComponentSpec{
 			"RABBITMQ_DEFAULT_PASS": "cloud9",
 		},
 		NeedsService: true,
-		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:              resource.MustParse("200m"),
-				corev1.ResourceMemory:           resource.MustParse("256Mi"),
-				corev1.ResourceEphemeralStorage: resource.MustParse("100Mi"),
-			},
-			Limits: corev1.ResourceList{
-				corev1.ResourceCPU:              resource.MustParse("200m"),
-				corev1.ResourceMemory:           resource.MustParse("256Mi"),
-				corev1.ResourceEphemeralStorage: resource.MustParse("100Mi"),
-			},
-		},
 	},
 }

@@ -77,7 +77,7 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 	// resource requests/limits are required on GKE Autopilot.
 	// Requests = guaranteed minimum. Limits = hard cap.
 	// We set them equal here so Autopilot doesn't reject the pod.
-	resources := ResourceProfile(configString(cfg.Node.Config, "resourceProfile", "alpha"))
+	resources := ResolveNodeResources(cfg.Node.Type, cfg.Node.Config)
 
 	// replicas can be tuned per node type (app-server bounds enforced in ValidateRuntimeContract).
 	replicas := parseReplicaCount(cfg.Node.Config, 1)
@@ -568,9 +568,6 @@ func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, 
 	}
 	if len(spec.Ports) == 0 {
 		return fmt.Errorf("registry spec for %q must define at least one port", cfg.Node.Type)
-	}
-	if !spec.Resources.Requests.Cpu().IsZero() || !spec.Resources.Requests.Memory().IsZero() || !spec.Resources.Limits.Cpu().IsZero() || !spec.Resources.Limits.Memory().IsZero() {
-		resources = spec.Resources
 	}
 
 	envVars := DeriveEnvVars(cfg.Node, cfg.Design)

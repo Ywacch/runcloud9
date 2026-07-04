@@ -143,6 +143,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /deployments/{id}/chaos", routeAuthExpensive(auth, rl, http.HandlerFunc(h.handleChaos)))
 	mux.Handle("GET /health", routePublic(rl, http.HandlerFunc(h.handleHealth)))
 	mux.Handle("GET /templates", routePublic(rl, http.HandlerFunc(h.handleGetTemplates)))
+	mux.Handle("GET /meta/resource-profiles", routePublic(rl, http.HandlerFunc(h.handleGetResourceProfiles)))
 }
 
 // handleMetricsStream upgrades the HTTP connection to WebSocket and streams
@@ -291,6 +292,11 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleGetTemplates(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(templates.Registry())
+}
+
+func (h *Handler) handleGetResourceProfiles(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(deployer.NewResourceCatalogResponse())
 }
 
 func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request) {
