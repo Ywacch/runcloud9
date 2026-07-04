@@ -365,6 +365,16 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if err := deployer.ValidateResourceBudget(design, defaultUserTier()); err != nil {
+		var budgetErr *deployer.ResourceBudgetError
+		if errors.As(err, &budgetErr) {
+			writeResourceBudgetError(w, budgetErr)
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	namespace := generateNamespace(design.Template, userID)
 	expiresAt := time.Now().Add(9 * time.Minute)
 
@@ -529,6 +539,12 @@ func (h *Handler) orchestrate(
 
 	var deployed []deployer.DeploymentNode
 
+	if h.clientset != nil {
+		if err := deployer.EnsureNamespaceResourceQuota(ctx, h.clientset, namespace, design, defaultUserTier()); err != nil {
+			return nil, fmt.Errorf("resource quota: %w", err)
+		}
+	}
+
 	layers, err := deployer.DeploymentLayers(design)
 	if err != nil {
 		return nil, fmt.Errorf("topology: %w", err)
@@ -644,7 +660,7 @@ func (h *Handler) orchestrate(
 	}
 
 	if h.clientset != nil {
-		tier := "explorer"
+		tier := defaultUserTier()
 		if err := deployer.DeployLoadgen(ctx, h.clientset, namespace, tier); err != nil {
 			log.Printf("loadgen pod deploy failed for namespace=%s (load testing unavailable): %v", namespace, err)
 		}
@@ -742,6 +758,10 @@ func validateDesign(d deployer.DeploymentDesign) error {
 		}
 	}
 	return nil
+}
+
+func defaultUserTier() string {
+	return "explorer"
 }
 
 func designHasLoadBalancer(design map[string]any) bool {
@@ -1018,6 +1038,12 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+func writeResourceBudgetError(w http.ResponseWriter, err *deployer.ResourceBudgetError) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnprocessableEntity)
+	_ = json.NewEncoder(w).Encode(err.JSON())
 }
 
 func maxActiveDeploymentsPerUser() int {
