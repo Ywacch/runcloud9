@@ -81,7 +81,7 @@ func TierResourceCaps(tier string) (cpu, memory resource.Quantity) {
 	case "architect":
 		return resource.MustParse("4"), resource.MustParse("8Gi")
 	default: // explorer
-		return resource.MustParse("500m"), resource.MustParse("1Gi")
+		return resource.MustParse("625m"), resource.MustParse("1280Mi")
 	}
 }
 

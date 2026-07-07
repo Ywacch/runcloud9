@@ -12,11 +12,13 @@ func TestValidateTierTopology(t *testing.T) {
 		MaxAppServerReplicas: 1,
 		AllowLoadBalancer:    false,
 		AllowMQWorker:        false,
+		AllowProxyCache:      false,
 	}
 	engineer := TierTopologyLimits{
 		MaxAppServerReplicas: 3,
 		AllowLoadBalancer:    true,
 		AllowMQWorker:        true,
+		AllowProxyCache:      true,
 	}
 
 	tests := []struct {
@@ -46,6 +48,25 @@ func TestValidateTierTopology(t *testing.T) {
 			limits:  free,
 			design:  ecommerceAsyncOnlyDesign(),
 			wantErr: "message queues and workers",
+		},
+		{
+			name:    "proxy cache blocked on free tier",
+			limits:  free,
+			design: func() DeploymentDesign {
+				d := urlShortenerLiteDesign()
+				d.Nodes[1].Config["strategy"] = "write-through"
+				return d
+			}(),
+			wantErr: "proxy cache strategies require",
+		},
+		{
+			name:   "proxy cache allowed on engineer tier",
+			limits: engineer,
+			design: func() DeploymentDesign {
+				d := urlShortenerLiteDesign()
+				d.Nodes[1].Config["strategy"] = "write-through"
+				return d
+			}(),
 		},
 		{
 			name:   "scaled replicas blocked on free tier",

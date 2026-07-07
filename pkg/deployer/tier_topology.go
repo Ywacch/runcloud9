@@ -7,6 +7,7 @@ type TierTopologyLimits struct {
 	MaxAppServerReplicas int32
 	AllowLoadBalancer    bool
 	AllowMQWorker        bool
+	AllowProxyCache      bool
 }
 
 // ValidateTierTopology rejects designs that exceed subscription topology caps.
@@ -35,6 +36,12 @@ func ValidateTierTopology(design DeploymentDesign, limits TierTopologyLimits) er
 				return fmt.Errorf(
 					"app server %q: replicas %d exceed your plan limit of %d — reduce replicas or upgrade",
 					node.Name, replicas, limits.MaxAppServerReplicas,
+				)
+			}
+		case "cache":
+			if !limits.AllowProxyCache && RequiresProxy(node) {
+				return fmt.Errorf(
+					"proxy cache strategies require an active subscription — use cache-aside or timeline-store, or upgrade",
 				)
 			}
 		}

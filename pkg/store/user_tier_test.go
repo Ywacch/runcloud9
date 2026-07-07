@@ -60,18 +60,19 @@ func TestGetTierLimits(t *testing.T) {
 		wantMaxAppReplicas   int32
 		wantAllowLB          bool
 		wantAllowMQWorker    bool
+		wantAllowProxyCache  bool
 	}{
 		{
 			tier: TierFree, wantConcurrent: 1, wantSessionCap: 9, wantAllTemplates: false,
-			wantMaxAppReplicas: 1, wantAllowLB: false, wantAllowMQWorker: false,
+			wantMaxAppReplicas: 1, wantAllowLB: false, wantAllowMQWorker: false, wantAllowProxyCache: false,
 		},
 		{
 			tier: TierEngineer, wantConcurrent: 1, wantSessionCap: 15, wantAllTemplates: true,
-			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true,
+			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
 		},
 		{
 			tier: TierInternal, wantConcurrent: 10, wantSessionCap: 30, wantAllTemplates: true,
-			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true,
+			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
 		},
 	}
 	for _, tt := range tests {
@@ -96,6 +97,13 @@ func TestGetTierLimits(t *testing.T) {
 			}
 			if got.AllowMQWorker != tt.wantAllowMQWorker {
 				t.Fatalf("AllowMQWorker = %v, want %v", got.AllowMQWorker, tt.wantAllowMQWorker)
+			}
+			if got.AllowProxyCache != tt.wantAllowProxyCache {
+				t.Fatalf("AllowProxyCache = %v, want %v", got.AllowProxyCache, tt.wantAllowProxyCache)
+			}
+			topo := got.TopologyLimits()
+			if topo.AllowProxyCache != tt.wantAllowProxyCache {
+				t.Fatalf("TopologyLimits().AllowProxyCache = %v, want %v", topo.AllowProxyCache, tt.wantAllowProxyCache)
 			}
 		})
 	}
