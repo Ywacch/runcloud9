@@ -44,6 +44,14 @@ func TestGetTemplate(t *testing.T) {
 	if u.Preset == nil || len(u.Preset.Nodes) == 0 || len(u.Preset.Edges) == 0 {
 		t.Fatalf("url-shortener preset missing/empty: %+v", u.Preset)
 	}
+	if u.PresetLite == nil || len(u.PresetLite.Nodes) != 3 {
+		t.Fatalf("url-shortener presetLite: %+v", u.PresetLite)
+	}
+	for _, n := range u.PresetLite.Nodes {
+		if n.Type == "load_balancer" || n.Type == "message_queue" || n.Type == "worker" {
+			t.Fatalf("presetLite must not include lb/mq/worker: %+v", n)
+		}
+	}
 	if u.SeedConfig == nil || u.SeedConfig.DumpPath != "url-shortener/urls.dump" {
 		t.Fatalf("url-shortener seed config: %+v", u.SeedConfig)
 	}
@@ -187,6 +195,9 @@ func TestRegistryJSON_IncludesSimulatableDeployable(t *testing.T) {
 	if !strings.Contains(s, `"preset"`) {
 		t.Fatal("preset should be included in API JSON")
 	}
+	if !strings.Contains(s, `"presetLite"`) {
+		t.Fatal("presetLite should be included in API JSON")
+	}
 	if strings.Contains(s, `"proxyQueries"`) || strings.Contains(s, "proxy_queries") {
 		t.Fatal("ProxyQueries must be json:\"-\" omitted from Registry JSON")
 	}
@@ -261,6 +272,9 @@ func TestSocialFeedPull_NoRedisInTopologyOrPreset(t *testing.T) {
 	for _, n := range sfp.Preset.Nodes {
 		if n.Type == "cache" {
 			t.Fatalf("social-feed-pull preset must not include cache node, got %+v", n)
+		}
+		if n.Type == "load_balancer" {
+			t.Fatalf("social-feed-pull preset must not include load balancer, got %+v", n)
 		}
 	}
 	for _, e := range sfp.Preset.Edges {

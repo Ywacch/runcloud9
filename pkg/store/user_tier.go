@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/ywacch/cloud9/pkg/deployer"
 )
 
 const (
@@ -26,10 +28,13 @@ type UserRecord struct {
 
 // TierLimits are deployment policy caps for an effective tier.
 type TierLimits struct {
-	MaxConcurrent      int
-	SessionDefaultMins int
-	SessionCapMins     int
-	AllTemplates       bool
+	MaxConcurrent        int
+	SessionDefaultMins   int
+	SessionCapMins       int
+	AllTemplates         bool
+	MaxAppServerReplicas int32
+	AllowLoadBalancer    bool
+	AllowMQWorker        bool
 }
 
 // ResolveEffectiveTier maps a user record to free, engineer, or internal.
@@ -48,24 +53,33 @@ func GetTierLimits(tier string) TierLimits {
 	switch strings.ToLower(strings.TrimSpace(tier)) {
 	case TierInternal:
 		return TierLimits{
-			MaxConcurrent:      10,
-			SessionDefaultMins: 9,
-			SessionCapMins:     30,
-			AllTemplates:       true,
+			MaxConcurrent:        10,
+			SessionDefaultMins:   9,
+			SessionCapMins:       30,
+			AllTemplates:         true,
+			MaxAppServerReplicas: 3,
+			AllowLoadBalancer:    true,
+			AllowMQWorker:        true,
 		}
 	case TierEngineer:
 		return TierLimits{
-			MaxConcurrent:      1,
-			SessionDefaultMins: 9,
-			SessionCapMins:     15,
-			AllTemplates:       true,
+			MaxConcurrent:        1,
+			SessionDefaultMins:   9,
+			SessionCapMins:       15,
+			AllTemplates:         true,
+			MaxAppServerReplicas: 3,
+			AllowLoadBalancer:    true,
+			AllowMQWorker:        true,
 		}
 	default:
 		return TierLimits{
-			MaxConcurrent:      1,
-			SessionDefaultMins: 9,
-			SessionCapMins:     9,
-			AllTemplates:       false,
+			MaxConcurrent:        1,
+			SessionDefaultMins:   9,
+			SessionCapMins:       9,
+			AllTemplates:         false,
+			MaxAppServerReplicas: 1,
+			AllowLoadBalancer:    false,
+			AllowMQWorker:        false,
 		}
 	}
 }
@@ -87,6 +101,15 @@ func ResolveSessionMinutes(tier string, requested *int) int {
 		minutes = limits.SessionCapMins
 	}
 	return minutes
+}
+
+// TopologyLimits maps store tier limits to deployer topology validation input.
+func (l TierLimits) TopologyLimits() deployer.TierTopologyLimits {
+	return deployer.TierTopologyLimits{
+		MaxAppServerReplicas: l.MaxAppServerReplicas,
+		AllowLoadBalancer:    l.AllowLoadBalancer,
+		AllowMQWorker:        l.AllowMQWorker,
+	}
 }
 
 // ResourceQuotaTier maps effective tier to deployer quota tier names.

@@ -37,6 +37,7 @@ type TemplateSpec struct {
 	Tags                []string         `json:"tags"`
 	Topology            []TopologyHint   `json:"topology"`
 	Preset              *TemplatePreset  `json:"preset,omitempty"`
+	PresetLite          *TemplatePreset  `json:"presetLite,omitempty"`
 	AppServerImage      string           `json:"-"`
 	WorkerImage         string           `json:"-"`
 	Simulatable         bool             `json:"simulatable"`
@@ -116,21 +117,8 @@ type templateDef struct {
 		Type     string     `yaml:"type"`
 		Position [2]float64 `yaml:"position"`
 	} `yaml:"topology"`
-	Preset *struct {
-		Nodes []struct {
-			ID       string         `yaml:"id"`
-			Type     string         `yaml:"type"`
-			Position [3]float64     `yaml:"position"`
-			Label    string         `yaml:"label"`
-			Config   map[string]any `yaml:"config"`
-		} `yaml:"nodes"`
-		Edges []struct {
-			ID       string `yaml:"id"`
-			SourceID string `yaml:"sourceId"`
-			TargetID string `yaml:"targetId"`
-			Protocol string `yaml:"protocol"`
-		} `yaml:"edges"`
-	} `yaml:"preset"`
+	Preset *presetYAML `yaml:"preset"`
+	PresetLite *presetYAML `yaml:"presetLite"`
 	Seed *struct {
 		DBType    string `yaml:"dbType"`
 		DumpPath  string `yaml:"dumpPath"`
@@ -145,6 +133,22 @@ type templateDef struct {
 	Introspection        introspect.Spec        `yaml:"introspection"`
 	PrometheusMetricsRef string                 `yaml:"prometheusMetricsRef"`
 	PrometheusMetrics    *PrometheusMetricsSpec `yaml:"prometheusMetrics"`
+}
+
+type presetYAML struct {
+	Nodes []struct {
+		ID       string         `yaml:"id"`
+		Type     string         `yaml:"type"`
+		Position [3]float64     `yaml:"position"`
+		Label    string         `yaml:"label"`
+		Config   map[string]any `yaml:"config"`
+	} `yaml:"nodes"`
+	Edges []struct {
+		ID       string `yaml:"id"`
+		SourceID string `yaml:"sourceId"`
+		TargetID string `yaml:"targetId"`
+		Protocol string `yaml:"protocol"`
+	} `yaml:"edges"`
 }
 
 // embeddedFree is the in-repo YAML definitions (always available).
@@ -286,30 +290,40 @@ func defToSpec(def *templateDef) TemplateSpec {
 		spec.PrometheusMetrics = pm
 	}
 	if def.Preset != nil {
-		preset := &TemplatePreset{
-			Nodes: make([]PresetNode, 0, len(def.Preset.Nodes)),
-			Edges: make([]PresetEdge, 0, len(def.Preset.Edges)),
-		}
-		for _, n := range def.Preset.Nodes {
-			preset.Nodes = append(preset.Nodes, PresetNode{
-				ID:       n.ID,
-				Type:     n.Type,
-				Position: n.Position,
-				Label:    n.Label,
-				Config:   n.Config,
-			})
-		}
-		for _, e := range def.Preset.Edges {
-			preset.Edges = append(preset.Edges, PresetEdge{
-				ID:       e.ID,
-				SourceID: e.SourceID,
-				TargetID: e.TargetID,
-				Protocol: e.Protocol,
-			})
-		}
-		spec.Preset = preset
+		spec.Preset = presetFromYAML(def.Preset)
+	}
+	if def.PresetLite != nil {
+		spec.PresetLite = presetFromYAML(def.PresetLite)
 	}
 	return spec
+}
+
+func presetFromYAML(src *presetYAML) *TemplatePreset {
+	if src == nil {
+		return nil
+	}
+	preset := &TemplatePreset{
+		Nodes: make([]PresetNode, 0, len(src.Nodes)),
+		Edges: make([]PresetEdge, 0, len(src.Edges)),
+	}
+	for _, n := range src.Nodes {
+		preset.Nodes = append(preset.Nodes, PresetNode{
+			ID:       n.ID,
+			Type:     n.Type,
+			Position: n.Position,
+			Label:    n.Label,
+			Config:   n.Config,
+		})
+	}
+	for _, e := range src.Edges {
+		preset.Edges = append(preset.Edges, PresetEdge{
+			ID:       e.ID,
+			SourceID: e.SourceID,
+			TargetID: e.TargetID,
+			Protocol: e.Protocol,
+		})
+	}
+	return preset
 }
 
 func imageFor(name string) string {

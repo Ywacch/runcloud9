@@ -53,14 +53,26 @@ func TestGetTierLimits(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		tier             string
-		wantConcurrent   int
-		wantSessionCap   int
-		wantAllTemplates bool
+		tier                 string
+		wantConcurrent       int
+		wantSessionCap       int
+		wantAllTemplates     bool
+		wantMaxAppReplicas   int32
+		wantAllowLB          bool
+		wantAllowMQWorker    bool
 	}{
-		{tier: TierFree, wantConcurrent: 1, wantSessionCap: 9, wantAllTemplates: false},
-		{tier: TierEngineer, wantConcurrent: 1, wantSessionCap: 15, wantAllTemplates: true},
-		{tier: TierInternal, wantConcurrent: 10, wantSessionCap: 30, wantAllTemplates: true},
+		{
+			tier: TierFree, wantConcurrent: 1, wantSessionCap: 9, wantAllTemplates: false,
+			wantMaxAppReplicas: 1, wantAllowLB: false, wantAllowMQWorker: false,
+		},
+		{
+			tier: TierEngineer, wantConcurrent: 1, wantSessionCap: 15, wantAllTemplates: true,
+			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true,
+		},
+		{
+			tier: TierInternal, wantConcurrent: 10, wantSessionCap: 30, wantAllTemplates: true,
+			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true,
+		},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -75,6 +87,15 @@ func TestGetTierLimits(t *testing.T) {
 			}
 			if got.AllTemplates != tt.wantAllTemplates {
 				t.Fatalf("AllTemplates = %v, want %v", got.AllTemplates, tt.wantAllTemplates)
+			}
+			if got.MaxAppServerReplicas != tt.wantMaxAppReplicas {
+				t.Fatalf("MaxAppServerReplicas = %d, want %d", got.MaxAppServerReplicas, tt.wantMaxAppReplicas)
+			}
+			if got.AllowLoadBalancer != tt.wantAllowLB {
+				t.Fatalf("AllowLoadBalancer = %v, want %v", got.AllowLoadBalancer, tt.wantAllowLB)
+			}
+			if got.AllowMQWorker != tt.wantAllowMQWorker {
+				t.Fatalf("AllowMQWorker = %v, want %v", got.AllowMQWorker, tt.wantAllowMQWorker)
 			}
 		})
 	}

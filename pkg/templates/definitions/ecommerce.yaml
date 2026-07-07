@@ -115,6 +115,39 @@ preset:
       sourceId: app-1
       targetId: db-1
       protocol: tcp
+presetLite:
+  nodes:
+    - id: app-1
+      type: compute
+      position: [-1, 0.3, 0]
+      label: App Server
+      config:
+        replicas: 1
+        instanceSize: small
+    - id: cache-1
+      type: cache
+      position: [2, 0.3, 1.4]
+      label: Redis
+      config:
+        strategy: cache-aside
+        evictionPolicy: allkeys-lru
+    - id: db-1
+      type: database
+      position: [5, 0.3, 1.4]
+      label: PostgreSQL
+      config:
+        engine: postgresql
+        storageGB: 10
+        maxConnections: 100
+  edges:
+    - id: e-app-cache
+      sourceId: app-1
+      targetId: cache-1
+      protocol: tcp
+    - id: e-app-db
+      sourceId: app-1
+      targetId: db-1
+      protocol: tcp
 
 # Products table: id, name, price, stock (see images/ecommerce/db.go).
 proxyQueries:

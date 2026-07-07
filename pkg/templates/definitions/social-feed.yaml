@@ -180,6 +180,40 @@ preset:
       sourceId: app-1
       targetId: db-1
       protocol: tcp
+presetLite:
+  nodes:
+    - id: app-1
+      type: compute
+      position: [-1, 0.3, 0]
+      label: App server
+      config:
+        replicas: 1
+        instanceSize: small
+    - id: cache-1
+      type: cache
+      position: [2, 0.3, 1.4]
+      label: Redis
+      config:
+        strategy: timeline-store
+        cacheStrategy: timeline-store
+        evictionPolicy: allkeys-lru
+    - id: db-1
+      type: database
+      position: [5, 0.3, 1.4]
+      label: PostgreSQL
+      config:
+        engine: postgresql
+        storageGB: 10
+        maxConnections: 100
+  edges:
+    - id: e-app-cache
+      sourceId: app-1
+      targetId: cache-1
+      protocol: tcp
+    - id: e-app-db
+      sourceId: app-1
+      targetId: db-1
+      protocol: tcp
 
 # Storytelling targets timeline-store on Redis (fan-out / sorted sets), not caching-proxy strategy matrix.
 introspection:
