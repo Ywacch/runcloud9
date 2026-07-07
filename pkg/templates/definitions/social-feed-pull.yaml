@@ -100,12 +100,6 @@ topology:
     position: [4, 0]
 preset:
   nodes:
-    - id: lb-1
-      type: load_balancer
-      position: [-3, 0.3, 0]
-      label: Load Balancer
-      config:
-        algorithm: round-robin
     - id: app-1
       type: compute
       position: [0, 0.3, 0]
@@ -122,10 +116,6 @@ preset:
         storageGB: 10
         maxConnections: 100
   edges:
-    - id: e-lb-app
-      sourceId: lb-1
-      targetId: app-1
-      protocol: http
     - id: e-app-db
       sourceId: app-1
       targetId: db-1

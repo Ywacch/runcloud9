@@ -70,6 +70,39 @@ preset:
       sourceId: app-1
       targetId: db-1
       protocol: tcp
+presetLite:
+  nodes:
+    - id: app-1
+      type: compute
+      position: [0, 0.3, 0]
+      label: App Server
+      config:
+        replicas: 1
+        instanceSize: small
+    - id: cache-1
+      type: cache
+      position: [3, 0.3, -1.2]
+      label: Redis
+      config:
+        strategy: cache-aside
+        evictionPolicy: allkeys-lru
+    - id: db-1
+      type: database
+      position: [3, 0.3, 1.2]
+      label: PostgreSQL
+      config:
+        engine: postgresql
+        storageGB: 10
+        maxConnections: 100
+  edges:
+    - id: e-app-cache
+      sourceId: app-1
+      targetId: cache-1
+      protocol: tcp
+    - id: e-app-db
+      sourceId: app-1
+      targetId: db-1
+      protocol: tcp
 seed:
   dbType: postgres
   dumpPath: url-shortener/urls.dump

@@ -346,6 +346,11 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if err := deployer.ValidateTierTopology(design, limits.TopologyLimits()); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
 	assessment := deployer.AssessTopology(design)
 	if assessment.Verdict == deployer.VerdictInvalid {
 		writeError(w, http.StatusBadRequest, assessment.Explanation)

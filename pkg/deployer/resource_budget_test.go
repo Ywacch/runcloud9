@@ -40,6 +40,61 @@ func TestSumDesignResources_urlShortenerDefaults(t *testing.T) {
 	assertQuantityEqual(t, got.Memory, "1408Mi", "memory total")
 }
 
+func TestSumDesignResources_urlShortenerLite(t *testing.T) {
+	t.Parallel()
+
+	got := SumDesignResources(urlShortenerLiteDesign(), "explorer")
+	assertQuantityEqual(t, got.CPU, "625m", "cpu total")
+	assertQuantityEqual(t, got.Memory, "1280Mi", "memory total")
+}
+
+func TestSumDesignResources_socialFeedPullLite(t *testing.T) {
+	t.Parallel()
+
+	got := SumDesignResources(socialFeedPullLiteDesign(), "explorer")
+	assertQuantityEqual(t, got.CPU, "500m", "cpu total")
+	assertQuantityEqual(t, got.Memory, "1Gi", "memory total")
+}
+
+func TestExplorerLiteBudget_maxAcrossTemplates(t *testing.T) {
+	t.Parallel()
+
+	designs := []struct {
+		name   string
+		design DeploymentDesign
+	}{
+		{name: "url-shortener", design: urlShortenerLiteDesign()},
+		{name: "ecommerce", design: ecommerceLiteDesign()},
+		{name: "social-feed", design: socialFeedLiteDesign()},
+		{name: "social-feed-pull", design: socialFeedPullLiteDesign()},
+	}
+
+	var maxCPU, maxMem resource.Quantity
+	for _, tc := range designs {
+		got := SumDesignResources(tc.design, "explorer")
+		if maxCPU.IsZero() || got.CPU.Cmp(maxCPU) > 0 {
+			maxCPU = got.CPU.DeepCopy()
+		}
+		if maxMem.IsZero() || got.Memory.Cmp(maxMem) > 0 {
+			maxMem = got.Memory.DeepCopy()
+		}
+	}
+	assertQuantityEqual(t, maxCPU, "625m", "max lite cpu")
+	assertQuantityEqual(t, maxMem, "1280Mi", "max lite memory")
+}
+
+func TestValidateResourceBudget_liteFailsExplorerToday(t *testing.T) {
+	t.Parallel()
+
+	err := ValidateResourceBudget(urlShortenerLiteDesign(), "explorer")
+	var budgetErr *ResourceBudgetError
+	if !errors.As(err, &budgetErr) {
+		t.Fatalf("expected ResourceBudgetError, got %v", err)
+	}
+	assertQuantityEqual(t, budgetErr.Requested.CPU, "625m", "requested cpu")
+	assertQuantityEqual(t, budgetErr.Requested.Memory, "1280Mi", "requested memory")
+}
+
 func TestValidateResourceBudget_urlShortenerDefaultsFailsExplorer(t *testing.T) {
 	t.Parallel()
 
@@ -136,6 +191,72 @@ func urlShortenerDefaultDesign() DeploymentDesign {
 				Name: "Redis",
 				Config: map[string]interface{}{
 					"strategy": "cache-aside",
+				},
+			},
+			{ID: "db-1", Type: "db", Name: "PostgreSQL"},
+		},
+	}
+	NormalizeDesign(&d)
+	return d
+}
+
+func urlShortenerLiteDesign() DeploymentDesign {
+	d := DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "url-shortener",
+		Nodes: []DeploymentNode{
+			{
+				ID:   "app-1",
+				Type: "app-server",
+				Name: "App Server",
+				Config: map[string]interface{}{
+					"replicas":     1,
+					"instanceSize": "small",
+				},
+			},
+			{
+				ID:   "cache-1",
+				Type: "cache",
+				Name: "Redis",
+				Config: map[string]interface{}{
+					"strategy": "cache-aside",
+				},
+			},
+			{ID: "db-1", Type: "db", Name: "PostgreSQL"},
+		},
+	}
+	NormalizeDesign(&d)
+	return d
+}
+
+func ecommerceLiteDesign() DeploymentDesign {
+	d := urlShortenerLiteDesign()
+	d.Template = "ecommerce"
+	d.Archetype = "ecommerce"
+	return d
+}
+
+func socialFeedLiteDesign() DeploymentDesign {
+	d := urlShortenerLiteDesign()
+	d.Template = "social-feed"
+	d.Archetype = "social-feed"
+	d.Nodes[1].Config["strategy"] = "timeline-store"
+	d.Nodes[1].Config["cacheStrategy"] = "timeline-store"
+	return d
+}
+
+func socialFeedPullLiteDesign() DeploymentDesign {
+	d := DeploymentDesign{
+		Template:  "social-feed-pull",
+		Archetype: "social-feed-pull",
+		Nodes: []DeploymentNode{
+			{
+				ID:   "app-1",
+				Type: "app-server",
+				Name: "Feed Service",
+				Config: map[string]interface{}{
+					"replicas":     1,
+					"instanceSize": "small",
 				},
 			},
 			{ID: "db-1", Type: "db", Name: "PostgreSQL"},
