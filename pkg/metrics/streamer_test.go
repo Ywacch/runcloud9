@@ -3,8 +3,6 @@ package metrics
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -202,14 +200,23 @@ func runStreamMetricsWSCount(t *testing.T, collect snapshotCollector, cfg stream
 
 	count := 0
 	deadline := time.Now().Add(duration)
-	for time.Now().Before(deadline) {
-		_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	for {
+		if ctx.Err() != nil {
+			return count
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return count
+		}
+		// Use the full remaining window per read so slow CI still receives the first
+		// frame (~400ms collect). Gorilla forbids ReadMessage after a failed read, so
+		// never retry on timeout with a short deadline.
+		_ = conn.SetReadDeadline(time.Now().Add(remaining))
 		_, data, err := conn.ReadMessage()
 		if err != nil {
-			if isTransientWSReadErr(err) {
-				continue
-			}
-			break
+			// Gorilla marks the conn failed on most read errors (including i/o timeout
+			// when Temporary() is false). Never call ReadMessage again after an error.
+			return count
 		}
 		var dm DeploymentMetrics
 		if err := json.Unmarshal(data, &dm); err != nil {
@@ -217,15 +224,6 @@ func runStreamMetricsWSCount(t *testing.T, collect snapshotCollector, cfg stream
 		}
 		count++
 	}
-	return count
-}
-
-// isTransientWSReadErr reports whether a WS read error is a read deadline timeout
-// where the connection may still be usable. Do not match "deadline" as a substring:
-// "context deadline exceeded" marks the conn failed and the next read panics.
-func isTransientWSReadErr(err error) bool {
-	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func newMetricsWSServer(t *testing.T, handler func(*websocket.Conn)) (*httptest.Server, string) {
