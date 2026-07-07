@@ -86,7 +86,7 @@ func TestOrchestrate_SeedingStartsAfterDBBeforeLaterLayers(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := h.orchestrate(context.Background(), design, ns)
+		_, err := h.orchestrate(context.Background(), design, ns, "explorer")
 		done <- err
 	}()
 
@@ -134,7 +134,7 @@ func TestOrchestrate_SeedFailureNonFatalWithStatus(t *testing.T) {
 		},
 	}
 
-	res, err := h.orchestrate(context.Background(), design, ns)
+	res, err := h.orchestrate(context.Background(), design, ns, "explorer")
 	if err != nil {
 		t.Fatalf("orchestrate returned error: %v", err)
 	}

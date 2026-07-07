@@ -11,7 +11,6 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -48,8 +47,6 @@ type Handler struct {
 	provisionCancel  map[string]context.CancelFunc
 }
 
-const defaultMaxActiveDeploymentsPerUser = 1
-
 type deploymentStore interface {
 	ListActiveDeployments(ctx context.Context, userID string) ([]store.ActiveDeploymentRow, error)
 	CreateDeployment(ctx context.Context, params store.CreateDeploymentParams) (string, error)
@@ -58,6 +55,7 @@ type deploymentStore interface {
 	UpdateMetricsSummary(ctx context.Context, namespace string, patch map[string]any) error
 	GetDeployment(ctx context.Context, namespace string) (store.DeploymentRow, error)
 	SetMetricsSummary(ctx context.Context, namespace string, summary map[string]any) error
+	GetUser(ctx context.Context, userID string) (store.UserRecord, error)
 }
 
 type seederService interface {
@@ -332,16 +330,19 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("template %q is not yet deployable — it can only be used in simulation mode", design.Template))
 		return
 	}
-	if tmpl.Premium {
-		if userID == "" {
-			writeError(w, http.StatusUnauthorized, "premium templates require authentication")
-			return
-		}
-		// TODO: check user's subscription tier from Supabase profiles table
-		writeError(w, http.StatusForbidden, fmt.Sprintf(
-			"template %q is a premium template — upgrade to Cloud9 Premium to deploy it",
-			design.Template,
-		))
+
+	userRecord, err := h.loadUserRecord(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load user")
+		return
+	}
+	effectiveTier := store.ResolveEffectiveTier(userRecord)
+	limits := store.GetTierLimits(effectiveTier)
+	resourceQuotaTier := store.ResourceQuotaTier(effectiveTier)
+	sessionMinutes := store.ResolveSessionMinutes(effectiveTier, design.SessionMinutes)
+
+	if !limits.AllTemplates && tmpl.Premium {
+		writeError(w, http.StatusForbidden, "premium templates require an active subscription")
 		return
 	}
 
@@ -365,7 +366,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := deployer.ValidateResourceBudget(design, defaultUserTier()); err != nil {
+	if err := deployer.ValidateResourceBudget(design, resourceQuotaTier); err != nil {
 		var budgetErr *deployer.ResourceBudgetError
 		if errors.As(err, &budgetErr) {
 			writeResourceBudgetError(w, budgetErr)
@@ -376,7 +377,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 	}
 
 	namespace := generateNamespace(design.Template, userID)
-	expiresAt := time.Now().Add(9 * time.Minute)
+	expiresAt := time.Now().Add(time.Duration(sessionMinutes) * time.Minute)
 
 	if h.store != nil {
 		active, err := h.store.ListActiveDeployments(r.Context(), userID)
@@ -384,8 +385,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusInternalServerError, "failed to check active deployments")
 			return
 		}
-		maxActive := maxActiveDeploymentsPerUser()
-		if len(active) >= maxActive {
+		if len(active) >= limits.MaxConcurrent {
 			writeError(w, http.StatusTooManyRequests, "you already have an active deployment — end it before creating another")
 			return
 		}
@@ -426,7 +426,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 	})
 
 	// Continue orchestration in the background after returning the response.
-	go func(design deployer.DeploymentDesign, namespace, userID string) {
+	go func(design deployer.DeploymentDesign, namespace, userID, quotaTier string, sessionMins int) {
 		// Stagger orchestration starts to avoid K8s API burst throttling.
 		// Deployment is already persisted, so user feedback is immediate.
 		stagger := time.Duration(rand.Intn(2000)) * time.Millisecond
@@ -441,7 +441,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		h.setProvisionCancel(namespace, cancel)
 		defer h.clearProvisionCancel(namespace)
 
-		result, err := h.orchestrate(ctx, design, namespace)
+		result, err := h.orchestrate(ctx, design, namespace, quotaTier)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || h.isDeploymentStatus(namespace, "terminated") {
 				log.Printf("orchestration canceled for namespace=%s", namespace)
@@ -510,7 +510,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 			return
 		}
 
-		runExpiresAt := time.Now().Add(9 * time.Minute)
+		runExpiresAt := time.Now().Add(time.Duration(sessionMins) * time.Minute)
 		if h.isDeploymentStatus(namespace, "terminated") {
 			log.Printf("skip final running status for terminated namespace=%s", namespace)
 			return
@@ -526,7 +526,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		if h.scheduler != nil {
 			h.scheduler.Schedule(namespace, runExpiresAt)
 		}
-	}(design, namespace, userID)
+	}(design, namespace, userID, resourceQuotaTier, sessionMinutes)
 }
 
 // orchestrate deploys nodes in dependency layers; nodes within a layer run in parallel.
@@ -535,12 +535,13 @@ func (h *Handler) orchestrate(
 	ctx context.Context,
 	design deployer.DeploymentDesign,
 	namespace string,
+	resourceQuotaTier string,
 ) (*deployer.DeploymentResult, error) {
 
 	var deployed []deployer.DeploymentNode
 
 	if h.clientset != nil {
-		if err := deployer.EnsureNamespaceResourceQuota(ctx, h.clientset, namespace, design, defaultUserTier()); err != nil {
+		if err := deployer.EnsureNamespaceResourceQuota(ctx, h.clientset, namespace, design, resourceQuotaTier); err != nil {
 			return nil, fmt.Errorf("resource quota: %w", err)
 		}
 	}
@@ -660,8 +661,7 @@ func (h *Handler) orchestrate(
 	}
 
 	if h.clientset != nil {
-		tier := defaultUserTier()
-		if err := deployer.DeployLoadgen(ctx, h.clientset, namespace, tier); err != nil {
+		if err := deployer.DeployLoadgen(ctx, h.clientset, namespace, resourceQuotaTier); err != nil {
 			log.Printf("loadgen pod deploy failed for namespace=%s (load testing unavailable): %v", namespace, err)
 		}
 	}
@@ -758,10 +758,6 @@ func validateDesign(d deployer.DeploymentDesign) error {
 		}
 	}
 	return nil
-}
-
-func defaultUserTier() string {
-	return "explorer"
 }
 
 func designHasLoadBalancer(design map[string]any) bool {
@@ -1044,18 +1040,6 @@ func writeResourceBudgetError(w http.ResponseWriter, err *deployer.ResourceBudge
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnprocessableEntity)
 	_ = json.NewEncoder(w).Encode(err.JSON())
-}
-
-func maxActiveDeploymentsPerUser() int {
-	raw := strings.TrimSpace(os.Getenv("MAX_ACTIVE_DEPLOYMENTS_PER_USER"))
-	if raw == "" {
-		return defaultMaxActiveDeploymentsPerUser
-	}
-	parsed, err := strconv.Atoi(raw)
-	if err != nil || parsed < 1 {
-		return defaultMaxActiveDeploymentsPerUser
-	}
-	return parsed
 }
 
 func (h *Handler) writeDiagnosticsSummary(namespace, url, outcome, collectionReason string, signatures []diagnostics.FailureSignature, partial bool, collectErr error) {

@@ -16,6 +16,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/loadgen"
 	"github.com/ywacch/cloud9/pkg/store"
+	"github.com/ywacch/cloud9/pkg/templates"
 )
 
 type fakeBlockingDeployer struct {
@@ -379,13 +380,15 @@ func TestHandleCreateDeployment_ConcurrentLimit_RejectsSecondActive(t *testing.T
 	}
 }
 
-func TestHandleCreateDeployment_ConcurrentLimit_RespectsEnvOverride(t *testing.T) {
+func TestHandleCreateDeployment_ConcurrentLimit_InternalTier(t *testing.T) {
 	t.Setenv("ENV", "development")
 	t.Setenv("SUPABASE_JWT_SECRET", "")
 	t.Setenv("SUPABASE_URL", "")
-	t.Setenv("MAX_ACTIVE_DEPLOYMENTS_PER_USER", "2")
 
 	s := newFakeDeploymentStore()
+	s.users = map[string]store.UserRecord{
+		"dev-user": {IsInternal: true},
+	}
 	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -403,45 +406,119 @@ func TestHandleCreateDeployment_ConcurrentLimit_RespectsEnvOverride(t *testing.T
 	}
 	raw, _ := json.Marshal(body)
 
-	req1 := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
-	req1.Header.Set("Content-Type", "application/json")
-	rec1 := httptest.NewRecorder()
-	mux.ServeHTTP(rec1, req1)
-	if rec1.Code != http.StatusCreated {
-		t.Fatalf("first create: want 201, got %d body=%s", rec1.Code, rec1.Body.String())
+	for i := 0; i < 10; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create %d: want 201, got %d body=%s", i+1, rec.Code, rec.Body.String())
+		}
 	}
 
-	req2 := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
-	req2.Header.Set("Content-Type", "application/json")
-	rec2 := httptest.NewRecorder()
-	mux.ServeHTTP(rec2, req2)
-	if rec2.Code != http.StatusCreated {
-		t.Fatalf("second create: want 201, got %d body=%s", rec2.Code, rec2.Body.String())
-	}
-
-	req3 := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
-	req3.Header.Set("Content-Type", "application/json")
-	rec3 := httptest.NewRecorder()
-	mux.ServeHTTP(rec3, req3)
-	if rec3.Code != http.StatusTooManyRequests {
-		t.Fatalf("third create: want 429, got %d body=%s", rec3.Code, rec3.Body.String())
+	req11 := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req11.Header.Set("Content-Type", "application/json")
+	rec11 := httptest.NewRecorder()
+	mux.ServeHTTP(rec11, req11)
+	if rec11.Code != http.StatusTooManyRequests {
+		t.Fatalf("11th create: want 429, got %d body=%s", rec11.Code, rec11.Body.String())
 	}
 }
 
-func TestMaxActiveDeploymentsPerUser_DefaultAndInvalid(t *testing.T) {
-	t.Setenv("MAX_ACTIVE_DEPLOYMENTS_PER_USER", "")
-	if got := maxActiveDeploymentsPerUser(); got != 1 {
-		t.Fatalf("default limit: got %d", got)
+func TestHandleCreateDeployment_PremiumTemplateDeniedForFree(t *testing.T) {
+	t.Setenv("ENV", "development")
+	t.Setenv("SUPABASE_JWT_SECRET", "")
+	t.Setenv("SUPABASE_URL", "")
+
+	restore := templates.ReplaceLoadedTemplatesForTest(append(templates.Registry(), templates.TemplateSpec{
+		ID:          "premium-only-test",
+		Name:        "Premium Only Test",
+		Available:   true,
+		Premium:     true,
+		Deployable:  true,
+		Simulatable: true,
+	}))
+	defer restore()
+
+	s := newFakeDeploymentStore()
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := deployer.DeploymentDesign{
+		Template:  "premium-only-test",
+		Archetype: "premium-only-test",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app", Type: "app-server", Name: "app", Config: map[string]interface{}{}},
+			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app", TargetID: "db"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status: want 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleCreateDeployment_EngineerSessionMinutesStored(t *testing.T) {
+	t.Setenv("ENV", "development")
+	t.Setenv("SUPABASE_JWT_SECRET", "")
+	t.Setenv("SUPABASE_URL", "")
+
+	future := time.Now().Add(24 * time.Hour)
+	s := newFakeDeploymentStore()
+	s.users = map[string]store.UserRecord{
+		"dev-user": {IsPremium: true, PremiumExpiresAt: &future},
+	}
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	session := 12
+	body := deployer.DeploymentDesign{
+		Template:       "url-shortener",
+		Archetype:      "standard",
+		SessionMinutes: &session,
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app", Type: "app-server", Name: "app", Config: map[string]interface{}{}},
+			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app", TargetID: "db"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status: want 201, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	t.Setenv("MAX_ACTIVE_DEPLOYMENTS_PER_USER", "abc")
-	if got := maxActiveDeploymentsPerUser(); got != 1 {
-		t.Fatalf("invalid value fallback: got %d", got)
+	var created struct {
+		Namespace string `json:"namespace"`
 	}
-
-	t.Setenv("MAX_ACTIVE_DEPLOYMENTS_PER_USER", "0")
-	if got := maxActiveDeploymentsPerUser(); got != 1 {
-		t.Fatalf("non-positive fallback: got %d", got)
+	if err := json.NewDecoder(rec.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	row, err := s.GetDeployment(context.Background(), created.Namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Now().Add(12 * time.Minute)
+	if row.ExpiresAt.Before(want.Add(-2*time.Minute)) || row.ExpiresAt.After(want.Add(2*time.Minute)) {
+		t.Fatalf("expiresAt: got %v want ~%v", row.ExpiresAt, want)
 	}
 }
 
@@ -717,10 +794,12 @@ func TestDeleteDuringProvision_StaysTerminated(t *testing.T) {
 }
 
 type fakeDeploymentStore struct {
-	mu      sync.Mutex
-	byNS    map[string]store.DeploymentRow
-	active  []store.ActiveDeploymentRow
-	nextSeq int
+	mu          sync.Mutex
+	byNS        map[string]store.DeploymentRow
+	active      []store.ActiveDeploymentRow
+	nextSeq     int
+	users       map[string]store.UserRecord
+	defaultUser store.UserRecord
 }
 
 func newFakeDeploymentStore() *fakeDeploymentStore {
@@ -852,6 +931,20 @@ func (f *fakeDeploymentStore) SetMetricsSummary(_ context.Context, namespace str
 	row.MetricsSummary = summary
 	f.byNS[namespace] = row
 	return nil
+}
+
+func (f *fakeDeploymentStore) GetUser(_ context.Context, userID string) (store.UserRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if userID == "" {
+		return store.UserRecord{}, store.ErrUserNotFound
+	}
+	if f.users != nil {
+		if u, ok := f.users[userID]; ok {
+			return u, nil
+		}
+	}
+	return f.defaultUser, nil
 }
 
 func TestDesignHasLoadBalancer(t *testing.T) {
