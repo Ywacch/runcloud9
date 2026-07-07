@@ -35,6 +35,7 @@ type TierLimits struct {
 	MaxAppServerReplicas int32
 	AllowLoadBalancer    bool
 	AllowMQWorker        bool
+	AllowProxyCache      bool
 }
 
 // ResolveEffectiveTier maps a user record to free, engineer, or internal.
@@ -60,6 +61,7 @@ func GetTierLimits(tier string) TierLimits {
 			MaxAppServerReplicas: 3,
 			AllowLoadBalancer:    true,
 			AllowMQWorker:        true,
+			AllowProxyCache:      true,
 		}
 	case TierEngineer:
 		return TierLimits{
@@ -70,6 +72,7 @@ func GetTierLimits(tier string) TierLimits {
 			MaxAppServerReplicas: 3,
 			AllowLoadBalancer:    true,
 			AllowMQWorker:        true,
+			AllowProxyCache:      true,
 		}
 	default:
 		return TierLimits{
@@ -80,6 +83,7 @@ func GetTierLimits(tier string) TierLimits {
 			MaxAppServerReplicas: 1,
 			AllowLoadBalancer:    false,
 			AllowMQWorker:        false,
+			AllowProxyCache:      false,
 		}
 	}
 }
@@ -109,6 +113,7 @@ func (l TierLimits) TopologyLimits() deployer.TierTopologyLimits {
 		MaxAppServerReplicas: l.MaxAppServerReplicas,
 		AllowLoadBalancer:    l.AllowLoadBalancer,
 		AllowMQWorker:        l.AllowMQWorker,
+		AllowProxyCache:      l.AllowProxyCache,
 	}
 }
 

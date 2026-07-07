@@ -6,6 +6,11 @@ description: >-
   Demonstrates consumer lag, backpressure, and queue depth under load.
 components: 6
 bottleneck: "Consumer lag under high fan-out"
+descriptionLite: >-
+  Fan-out on write without a queue: the app pushes new posts into follower timelines
+  in Redis. Reads are O(1) from sorted sets; POST pays sync fan-out cost on the app server.
+componentsLite: 3
+bottleneckLite: "Sync fan-out on POST scales with follower count"
 available: true
 premium: false
 tags: [async, fan-out, advanced]
@@ -347,9 +352,12 @@ storytelling:
         With RabbitMQ, the app inserts the post, publishes one message, and returns
         202 once the broker accepts it. A worker loads followers from Postgres and
         ZADDs each timeline. Your client never waits on Redis.
-        Remove the queue and the app still answers before Redis finishes: it loads
-        followers on the request thread and starts pipeline ZADD in a goroutine.
-        Large follower lists can slow the POST even when the response returns early.
+      explanationVariants:
+        - when: { topology: "hasCache+!hasMQ" }
+          text: >-
+            Sync push (no queue): the app inserts the post, loads followers from Postgres,
+            and ZADDs each timeline in a goroutine before returning 200. Reads stay cheap
+            in Redis; POST latency still scales with follower count.
   narrativeContext:
     cache_hit_low:
       cause: >-

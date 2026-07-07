@@ -203,6 +203,107 @@ func TestRegistryJSON_IncludesSimulatableDeployable(t *testing.T) {
 	}
 }
 
+func TestLiteDisplayMetadata(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		id                 string
+		wantComponentsLite int
+		wantBottleneckLite string
+	}{
+		{
+			id:                 "url-shortener",
+			wantComponentsLite: 3,
+			wantBottleneckLite: "Cache miss → DB query amplification",
+		},
+		{
+			id:                 "ecommerce",
+			wantComponentsLite: 3,
+			wantBottleneckLite: "Write contention on shared database",
+		},
+		{
+			id:                 "social-feed",
+			wantComponentsLite: 3,
+			wantBottleneckLite: "Sync fan-out on POST scales with follower count",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.id, func(t *testing.T) {
+			t.Parallel()
+			tmpl := GetTemplate(tc.id)
+			if tmpl == nil {
+				t.Fatal("template not found")
+			}
+			if tmpl.ComponentsLite != tc.wantComponentsLite {
+				t.Fatalf("componentsLite: got %d want %d", tmpl.ComponentsLite, tc.wantComponentsLite)
+			}
+			if tmpl.BottleneckLite != tc.wantBottleneckLite {
+				t.Fatalf("bottleneckLite: got %q want %q", tmpl.BottleneckLite, tc.wantBottleneckLite)
+			}
+			if tmpl.DescriptionLite == "" {
+				t.Fatal("descriptionLite should be set")
+			}
+			if strings.Contains(strings.ToLower(tmpl.DescriptionLite), "load balancer") {
+				t.Fatalf("descriptionLite should not mention load balancer: %q", tmpl.DescriptionLite)
+			}
+		})
+	}
+
+	sfp := GetTemplate("social-feed-pull")
+	if sfp == nil {
+		t.Fatal("social-feed-pull missing")
+	}
+	if sfp.DescriptionLite != "" || sfp.ComponentsLite != 0 || sfp.BottleneckLite != "" {
+		t.Fatalf("social-feed-pull should not define lite metadata: %+v", sfp)
+	}
+}
+
+func TestRegistryJSON_IncludesLiteDisplayMetadata(t *testing.T) {
+	t.Parallel()
+	b, err := json.Marshal(GetTemplate("social-feed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, key := range []string{`"descriptionLite"`, `"componentsLite"`, `"bottleneckLite"`} {
+		if !strings.Contains(s, key) {
+			t.Fatalf("JSON missing %s: %s", key, s)
+		}
+	}
+}
+
+func TestSocialFeedPostCreate_SyncPushExplanationVariant(t *testing.T) {
+	t.Parallel()
+	sf := GetTemplate("social-feed")
+	if sf == nil || sf.Storytelling == nil {
+		t.Fatal("social-feed storytelling missing")
+	}
+	var postCreate *JourneySpec
+	for i := range sf.Storytelling.Journeys {
+		if sf.Storytelling.Journeys[i].ID == "post-create" {
+			postCreate = &sf.Storytelling.Journeys[i]
+			break
+		}
+	}
+	if postCreate == nil {
+		t.Fatal("post-create journey missing")
+	}
+	found := false
+	for _, v := range postCreate.ExplanationVariants {
+		if v.When.Topology == "hasCache+!hasMQ" {
+			found = true
+			if !strings.Contains(v.Text, "Sync push") {
+				t.Fatalf("variant text unexpected: %q", v.Text)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected hasCache+!hasMQ explanation variant on post-create")
+	}
+}
+
 func TestEmbeddedProxyQueries(t *testing.T) {
 	t.Parallel()
 	us := GetTemplate("url-shortener")

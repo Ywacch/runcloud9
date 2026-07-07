@@ -15,10 +15,10 @@ func TestTierResourceCaps(t *testing.T) {
 		wantCPU string
 		wantMem string
 	}{
-		{tier: "explorer", wantCPU: "500m", wantMem: "1Gi"},
+		{tier: "explorer", wantCPU: "625m", wantMem: "1280Mi"},
 		{tier: "engineer", wantCPU: "1500m", wantMem: "3Gi"},
 		{tier: "architect", wantCPU: "4", wantMem: "8Gi"},
-		{tier: "", wantCPU: "500m", wantMem: "1Gi"},
+		{tier: "", wantCPU: "625m", wantMem: "1280Mi"},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -83,16 +83,12 @@ func TestExplorerLiteBudget_maxAcrossTemplates(t *testing.T) {
 	assertQuantityEqual(t, maxMem, "1280Mi", "max lite memory")
 }
 
-func TestValidateResourceBudget_liteFailsExplorerToday(t *testing.T) {
+func TestValidateResourceBudget_litePassesExplorer(t *testing.T) {
 	t.Parallel()
 
-	err := ValidateResourceBudget(urlShortenerLiteDesign(), "explorer")
-	var budgetErr *ResourceBudgetError
-	if !errors.As(err, &budgetErr) {
-		t.Fatalf("expected ResourceBudgetError, got %v", err)
+	if err := ValidateResourceBudget(urlShortenerLiteDesign(), "explorer"); err != nil {
+		t.Fatalf("expected lite design to fit explorer cap: %v", err)
 	}
-	assertQuantityEqual(t, budgetErr.Requested.CPU, "625m", "requested cpu")
-	assertQuantityEqual(t, budgetErr.Requested.Memory, "1280Mi", "requested memory")
 }
 
 func TestValidateResourceBudget_urlShortenerDefaultsFailsExplorer(t *testing.T) {
