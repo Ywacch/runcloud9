@@ -3,11 +3,12 @@ package deployer
 import "context"
 
 type DeploymentDesign struct {
-	Version     string           `json:"version"`
-	Template    string           `json:"template"`
-	Archetype   string           `json:"archetype"`
-	Nodes       []DeploymentNode `json:"nodes"`
-	Connections []DeploymentConn `json:"connections"`
+	Version        string           `json:"version"`
+	Template       string           `json:"template"`
+	Archetype      string           `json:"archetype"`
+	Nodes          []DeploymentNode `json:"nodes"`
+	Connections    []DeploymentConn `json:"connections"`
+	SessionMinutes *int             `json:"sessionMinutes,omitempty"`
 }
 
 type DeploymentNode struct {

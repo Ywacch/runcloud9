@@ -328,6 +328,15 @@ func Registry() []TemplateSpec {
 	return out
 }
 
+// ReplaceLoadedTemplatesForTest swaps the active registry and returns a restore function.
+func ReplaceLoadedTemplatesForTest(specs []TemplateSpec) func() {
+	prev := loadedTemplates
+	loadedTemplates = append([]TemplateSpec(nil), specs...)
+	return func() {
+		loadedTemplates = prev
+	}
+}
+
 // GetTemplate returns a specific template by ID, or nil if not found.
 func GetTemplate(id string) *TemplateSpec {
 	for _, t := range loadedTemplates {
