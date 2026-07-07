@@ -32,6 +32,9 @@ type TemplateSpec struct {
 	Description         string           `json:"description"`
 	Components          int              `json:"components"`
 	Bottleneck          string           `json:"bottleneck"`
+	DescriptionLite     string           `json:"descriptionLite,omitempty"`
+	ComponentsLite      int              `json:"componentsLite,omitempty"`
+	BottleneckLite      string           `json:"bottleneckLite,omitempty"`
 	Available           bool             `json:"available"`
 	Premium             bool             `json:"premium"`
 	Tags                []string         `json:"tags"`
@@ -106,6 +109,9 @@ type templateDef struct {
 	Description    string   `yaml:"description"`
 	Components     int      `yaml:"components"`
 	Bottleneck     string   `yaml:"bottleneck"`
+	DescriptionLite string  `yaml:"descriptionLite"`
+	ComponentsLite  int     `yaml:"componentsLite"`
+	BottleneckLite  string  `yaml:"bottleneckLite"`
 	Available      bool     `yaml:"available"`
 	Premium        bool     `yaml:"premium"`
 	Tags           []string `yaml:"tags"`
@@ -238,6 +244,9 @@ func defToSpec(def *templateDef) TemplateSpec {
 		Description:         def.Description,
 		Components:          def.Components,
 		Bottleneck:          def.Bottleneck,
+		DescriptionLite:     def.DescriptionLite,
+		ComponentsLite:      def.ComponentsLite,
+		BottleneckLite:      def.BottleneckLite,
 		Available:           def.Available,
 		Premium:             def.Premium,
 		Tags:                def.Tags,

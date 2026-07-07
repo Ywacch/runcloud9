@@ -6,6 +6,11 @@ description: >-
   Add a message queue and worker for async order processing.
 components: 5
 bottleneck: "Write contention on shared database"
+descriptionLite: >-
+  Product catalog with shared PostgreSQL and Redis cache on a single app server.
+  Catalog reads benefit from cache; checkout writes contend on the database.
+componentsLite: 3
+bottleneckLite: "Write contention on shared database"
 available: true
 premium: false
 tags: [multi-server, write-heavy, intermediate]

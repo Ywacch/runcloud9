@@ -144,9 +144,6 @@ storytelling:
       label: "Feed reads"
       trafficPercent: 60
       steps:
-        - component: lb
-          action: "Routes to app-server."
-          requires: [lb]
         - component: app-server
           action: "Runs fan-out-on-read query per request."
           detail: >-
@@ -177,9 +174,6 @@ storytelling:
       label: "Create post"
       trafficPercent: 30
       steps:
-        - component: lb
-          action: "Routes to app-server."
-          requires: [lb]
         - component: app-server
           action: "Validate user, INSERT post, return 200."
           detail: 'INSERT INTO posts (user_id, content) VALUES ($1, $2) RETURNING id, ...'

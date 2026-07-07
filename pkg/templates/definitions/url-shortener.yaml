@@ -6,6 +6,12 @@ description: >-
   and strategy tradeoffs.
 components: 4
 bottleneck: "Cache miss → DB query amplification"
+descriptionLite: >-
+  Classic read-heavy cache-aside with PostgreSQL + Redis on a single app server.
+  Demonstrates cache hit/miss ratios, DB query amplification on cache miss,
+  and strategy tradeoffs.
+componentsLite: 3
+bottleneckLite: "Cache miss → DB query amplification"
 available: true
 premium: false
 tags: [caching, read-heavy, beginner]
