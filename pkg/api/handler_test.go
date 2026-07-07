@@ -127,7 +127,7 @@ func TestHandleCreateDeployment_ResourceBudgetExceeded(t *testing.T) {
 				Name: "App Server",
 				Config: map[string]interface{}{
 					"replicas":     1,
-					"instanceSize": "small",
+					"instanceSize": "medium",
 				},
 			},
 			{
@@ -162,8 +162,8 @@ func TestHandleCreateDeployment_ResourceBudgetExceeded(t *testing.T) {
 	if out.Tier != "explorer" {
 		t.Fatalf("tier: got %q want explorer", out.Tier)
 	}
-	if out.Requested["cpu"] != "625m" {
-		t.Fatalf("requested cpu: got %q want 625m", out.Requested["cpu"])
+	if out.Requested["cpu"] != "750m" {
+		t.Fatalf("requested cpu: got %q want 750m", out.Requested["cpu"])
 	}
 	if len(out.Breakdown) == 0 {
 		t.Fatal("expected breakdown entries")
