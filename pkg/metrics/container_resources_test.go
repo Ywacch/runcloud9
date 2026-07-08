@@ -77,3 +77,21 @@ func TestCompilePodRE(t *testing.T) {
 		})
 	}
 }
+
+func TestMetricsAPIPodContainerMemory(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakePodMetricsProvider{list: appServerPodMetricsFixture()}
+	c := NewMetricsCollector("", nil, nil, provider, nil)
+
+	got := c.metricsAPIPodContainerMemory(context.Background(), "ns", "app-server.*", "app-server")
+	if len(got) != 2 {
+		t.Fatalf("len: want 2, got %d (%v)", len(got), got)
+	}
+	if got["app-server-abc"] != 128<<20 {
+		t.Fatalf("abc mem: got %d", got["app-server-abc"])
+	}
+	if got["app-server-def"] != 256<<20 {
+		t.Fatalf("def mem: got %d", got["app-server-def"])
+	}
+}

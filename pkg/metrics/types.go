@@ -52,7 +52,10 @@ const (
 type StorageIO struct {
 	ReadRate  float64 `json:"readRate"`
 	WriteRate float64 `json:"writeRate"`
-	Unit      string  `json:"unit"` // "rows/s" | "keys/s" | "ops/s"
+	// ReadTotal9m / WriteTotal9m are Prometheus increase(...[9m]) sums for session inspector totals.
+	ReadTotal9m  float64 `json:"readTotal9m,omitempty"`
+	WriteTotal9m float64 `json:"writeTotal9m,omitempty"`
+	Unit         string  `json:"unit"` // "rows/s" | "keys/s" | "ops/s"
 
 	// ReadLabel / WriteLabel are display titles for the inspector (e.g. "Rows scanned/s").
 	ReadLabel  string `json:"readLabel,omitempty"`
@@ -93,7 +96,7 @@ type ComponentMetrics struct {
 	// CacheHitsLast9m / CacheMissesLast9m are Prometheus increase(...[9m]) sums (estimated counts in window).
 	CacheHitsLast9m   float64 `json:"cacheHitsLast9m"`
 	CacheMissesLast9m float64 `json:"cacheMissesLast9m"`
-	ErrorRate float64 `json:"errorRate"` // errors/sec (rate over 30s)
+	ErrorRate         float64 `json:"errorRate"` // errors/sec (rate over 30s)
 	// TotalErrors9m is sum(increase(http_requests_total{status=~"5.."}[9m])) — rolling ~9m window.
 	TotalErrors9m float64 `json:"totalErrors9m,omitempty"`
 	// P99Latency9m is histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[9m])) in seconds.
@@ -170,6 +173,7 @@ type PodMetrics struct {
 	TotalRequests float64 `json:"totalRequests,omitempty"`
 	P99Latency    float64 `json:"p99Latency"`
 	CPUUsage      float64 `json:"cpuUsage,omitempty"`
+	MemoryBytes   int64   `json:"memoryBytes,omitempty"`
 	ErrorRate     float64 `json:"errorRate,omitempty"`
 }
 

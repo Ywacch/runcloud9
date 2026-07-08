@@ -34,3 +34,28 @@ func podMetricsFixture(cpuMilli int64, memBytes int64) *metricsv1beta1.PodMetric
 		}},
 	}
 }
+
+func appServerPodMetricsFixture() *metricsv1beta1.PodMetricsList {
+	return &metricsv1beta1.PodMetricsList{
+		Items: []metricsv1beta1.PodMetrics{
+			{
+				ObjectMeta: metav1ObjectMeta("app-server-abc"),
+				Containers: []metricsv1beta1.ContainerMetrics{{
+					Name: "app-server",
+					Usage: corev1.ResourceList{
+						corev1.ResourceMemory: *resource.NewQuantity(128<<20, resource.BinarySI),
+					},
+				}},
+			},
+			{
+				ObjectMeta: metav1ObjectMeta("app-server-def"),
+				Containers: []metricsv1beta1.ContainerMetrics{{
+					Name: "app-server",
+					Usage: corev1.ResourceList{
+						corev1.ResourceMemory: *resource.NewQuantity(256<<20, resource.BinarySI),
+					},
+				}},
+			},
+		},
+	}
+}
