@@ -40,7 +40,12 @@ jobs:
             go-build-${{ runner.os }}-
 
       - name: Test
-        run: go test ./...
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            go test -race ./...
+          else
+            go test ./...
+          fi
 
       - name: Vet
         run: go vet ./...
