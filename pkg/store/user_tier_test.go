@@ -53,14 +53,14 @@ func TestGetTierLimits(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		tier                 string
-		wantConcurrent       int
-		wantSessionCap       int
-		wantAllTemplates     bool
-		wantMaxAppReplicas   int32
-		wantAllowLB          bool
-		wantAllowMQWorker    bool
-		wantAllowProxyCache  bool
+		tier                string
+		wantConcurrent      int
+		wantSessionCap      int
+		wantAllTemplates    bool
+		wantMaxAppReplicas  int32
+		wantAllowLB         bool
+		wantAllowMQWorker   bool
+		wantAllowProxyCache bool
 	}{
 		{
 			tier: TierFree, wantConcurrent: 1, wantSessionCap: 9, wantAllTemplates: false,
@@ -148,7 +148,7 @@ func TestResourceQuotaTier(t *testing.T) {
 	if got := ResourceQuotaTier(TierEngineer); got != TierEngineer {
 		t.Fatalf("engineer: got %q", got)
 	}
-	if got := ResourceQuotaTier(TierInternal); got != TierEngineer {
+	if got := ResourceQuotaTier(TierInternal); got != TierInternal {
 		t.Fatalf("internal: got %q", got)
 	}
 }

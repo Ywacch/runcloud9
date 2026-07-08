@@ -77,7 +77,9 @@ func (e *ResourceBudgetError) JSON() ResourceBudgetErrorJSON {
 func TierResourceCaps(tier string) (cpu, memory resource.Quantity) {
 	switch strings.ToLower(strings.TrimSpace(tier)) {
 	case "engineer":
-		return resource.MustParse("1500m"), resource.MustParse("3Gi")
+		return resource.MustParse("3375m"), resource.MustParse("6912Mi")
+	case "internal":
+		return resource.MustParse("4250m"), resource.MustParse("8320Mi")
 	case "architect":
 		return resource.MustParse("4"), resource.MustParse("8Gi")
 	default: // explorer
