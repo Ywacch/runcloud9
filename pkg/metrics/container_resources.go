@@ -135,3 +135,34 @@ func (c *MetricsCollector) queryMetricsAPIContainerMemory(ctx context.Context, n
 	_, mem, ok := c.sumMetricsAPIContainer(ctx, ns, podRe, container)
 	return mem, ok
 }
+
+// metricsAPIPodContainerMemory returns per-pod memory bytes for a container via metrics.k8s.io.
+func (c *MetricsCollector) metricsAPIPodContainerMemory(ctx context.Context, ns, podRe, container string) map[string]int64 {
+	if c == nil || c.metricsClient == nil {
+		return nil
+	}
+	re, err := compilePodRE(podRe)
+	if err != nil {
+		return nil
+	}
+	list, err := c.metricsClient.ListPodMetrics(ctx, ns)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]int64)
+	for _, pm := range list.Items {
+		if !re.MatchString(pm.Name) {
+			continue
+		}
+		for _, cont := range pm.Containers {
+			if cont.Name != container {
+				continue
+			}
+			out[pm.Name] += cont.Usage.Memory().Value()
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}

@@ -70,16 +70,21 @@ func TestMergeStorageIO(t *testing.T) {
 	t.Parallel()
 	stub := &StorageIO{Unit: "rows/s", Source: "postgres_exporter"}
 	live := &StorageIO{
-		Unit:      "rows/s",
-		Source:    "postgres_exporter",
-		ReadRate:  400,
-		WriteRate: 100,
-		BytesUsed: 1_000_000,
-		ErrorRate: 0.2,
+		Unit:         "rows/s",
+		Source:       "postgres_exporter",
+		ReadRate:     400,
+		WriteRate:    100,
+		ReadTotal9m:  5940,
+		WriteTotal9m: 1200,
+		BytesUsed:    1_000_000,
+		ErrorRate:    0.2,
 	}
 	got := mergeStorageIO(stub, live)
 	if got.ReadRate != 400 || got.WriteRate != 100 || got.Unit != "rows/s" {
 		t.Fatalf("merge: %+v", got)
+	}
+	if got.ReadTotal9m != 5940 || got.WriteTotal9m != 1200 {
+		t.Fatalf("9m totals: %+v", got)
 	}
 	if got.ReadLatency != 0 || got.WriteLatency != 0 {
 		t.Fatalf("latency should stay zero until wired: %+v", got)
@@ -204,5 +209,32 @@ func TestMaxStoragePeaksFromComponents(t *testing.T) {
 	r, w, rl, wl, u, e := maxStoragePeaksFromComponents(components)
 	if r != 100 || w != 30 || rl != 10 || wl != 50 || u != 80 || e != 0.5 {
 		t.Fatalf("peaks: r=%v w=%v rl=%v wl=%v u=%v e=%v", r, w, rl, wl, u, e)
+	}
+}
+
+func TestPostgreSQLUserTableReadTotal9mQuery(t *testing.T) {
+	t.Parallel()
+	q := postgresUserTableReadTotal9mQuery("ns1")
+	for _, want := range []string{
+		`namespace="ns1"`,
+		"increase(pg_stat_user_tables_seq_tup_read",
+		"increase(pg_stat_user_tables_idx_tup_fetch",
+		"[9m]",
+	} {
+		if !strings.Contains(q, want) {
+			t.Fatalf("read total query missing %q: %s", want, q)
+		}
+	}
+}
+
+func TestRedisStorageTotal9mQueries_SocialFeed(t *testing.T) {
+	t.Parallel()
+	readQ := redisStorageReadTotal9mQuery("ns-feed", "social-feed")
+	writeQ := redisStorageWriteTotal9mQuery("ns-feed", "social-feed")
+	if !strings.Contains(readQ, `cmd=~"zrevrange"`) || !strings.Contains(readQ, "[9m]") {
+		t.Fatalf("read total: %s", readQ)
+	}
+	if !strings.Contains(writeQ, `cmd=~"zadd|zremrangebyrank"`) || !strings.Contains(writeQ, "[9m]") {
+		t.Fatalf("write total: %s", writeQ)
 	}
 }

@@ -17,7 +17,10 @@ func podReadyStatus(pod corev1.Pod) bool {
 	return false
 }
 
-func (c *MetricsCollector) appServerReplicaSeries(ctx context.Context, ns string) (rps, p99, cpu, errRate, totalReqs9m map[string]float64) {
+func (c *MetricsCollector) appServerReplicaSeries(ctx context.Context, ns string) (
+	rps, p99, cpu, errRate, totalReqs9m map[string]float64,
+	memBytes map[string]int64,
+) {
 	nsSel := fmt.Sprintf(`namespace=%q`, ns)
 	podSel := fmt.Sprintf(`namespace=%q,pod=~"app-server.*"`, ns)
 	podRe := "app-server.*"
@@ -25,7 +28,8 @@ func (c *MetricsCollector) appServerReplicaSeries(ctx context.Context, ns string
 		c.queryMultiResult(ctx, fmt.Sprintf(`histogram_quantile(0.99, sum by (pod, le) (rate(http_request_duration_seconds_bucket{%s}%s)))`, nsSel, promRateRange()), "pod"),
 		c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (rate(process_cpu_seconds_total{namespace=%q,pod=~%q}%s))`, ns, podRe, promRateRange()), "pod"),
 		c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (rate(http_requests_total{%s,status=~"5.."}%s))`, nsSel, promRateRange()), "pod"),
-		c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (increase(http_requests_total{%s}[9m]))`, podSel), "pod")
+		c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (increase(http_requests_total{%s}[9m]))`, podSel), "pod"),
+		c.metricsAPIPodContainerMemory(ctx, ns, podRe, "app-server")
 }
 
 func (c *MetricsCollector) listAppServerPods(ctx context.Context, ns string) (names []string, ready map[string]bool, counts BackendReplicas) {
@@ -58,6 +62,7 @@ func mergePodMetricMaps(
 	names []string,
 	ready map[string]bool,
 	rps, p99, cpu, errRate, totalReqs9m map[string]float64,
+	memBytes map[string]int64,
 ) []PodMetrics {
 	seen := make(map[string]struct{})
 	var out []PodMetrics
@@ -76,6 +81,7 @@ func mergePodMetricMaps(
 			TotalRequests: totalReqs9m[name],
 			P99Latency:    p99[name],
 			CPUUsage:      cpu[name],
+			MemoryBytes:   memBytes[name],
 			ErrorRate:     errRate[name],
 		})
 	}
@@ -89,6 +95,9 @@ func mergePodMetricMaps(
 		add(name)
 	}
 	for name := range totalReqs9m {
+		add(name)
+	}
+	for name := range memBytes {
 		add(name)
 	}
 	return out

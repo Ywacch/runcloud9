@@ -42,7 +42,7 @@ type MetricsCollector struct {
 	scrapeClient    *http.Client // short timeout for in-cluster LB / RabbitMQ HTTP scrapes
 	loadgen         loadgen.LoadGenerator
 	clientset       kubernetes.Interface // optional: LB metadata from ConfigMap
-	metricsClient   PodMetricsProvider // optional: metrics.k8s.io for container CPU/mem on Autopilot
+	metricsClient   PodMetricsProvider   // optional: metrics.k8s.io for container CPU/mem on Autopilot
 	debugMetrics    bool
 	eventBus        *EventBus
 	thresholds      *ThresholdDetector
@@ -751,9 +751,9 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmApp.CPULimit = c.kubeLimitCPU(ctx, ns, "app-server.*", "app-server")
 	cmApp.MemoryLimit = c.kubeLimitMem(ctx, ns, "app-server.*", "app-server")
 
-	rpsByPod, p99ByPod, cpuByPod, errByPod, totalReqsByPod := c.appServerReplicaSeries(ctx, ns)
+	rpsByPod, p99ByPod, cpuByPod, errByPod, totalReqsByPod, memByPod := c.appServerReplicaSeries(ctx, ns)
 	podNames, readyByPod, backendReplicas := c.listAppServerPods(ctx, ns)
-	replicaRows := mergePodMetricMaps(podNames, readyByPod, rpsByPod, p99ByPod, cpuByPod, errByPod, totalReqsByPod)
+	replicaRows := mergePodMetricMaps(podNames, readyByPod, rpsByPod, p99ByPod, cpuByPod, errByPod, totalReqsByPod, memByPod)
 	if len(replicaRows) > 0 {
 		cmApp.Replicas = replicaRows
 	}

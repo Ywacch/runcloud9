@@ -122,6 +122,21 @@ func postgresUserTableWriteRateQuery(ns string) string {
 		` + sum(rate(pg_stat_user_tables_n_tup_del{` + filter + `}` + rw + `))`
 }
 
+// postgresUserTableReadTotal9mQuery sums rows read from user tables over the rolling 9m window.
+func postgresUserTableReadTotal9mQuery(ns string) string {
+	filter := `namespace="` + ns + `",datname!~"template0|template1"`
+	return `sum(increase(pg_stat_user_tables_seq_tup_read{` + filter + `}[9m]))` +
+		` + sum(increase(pg_stat_user_tables_idx_tup_fetch{` + filter + `}[9m]))`
+}
+
+// postgresUserTableWriteTotal9mQuery sums row writes on user tables over the rolling 9m window.
+func postgresUserTableWriteTotal9mQuery(ns string) string {
+	filter := `namespace="` + ns + `",datname!~"template0|template1"`
+	return `sum(increase(pg_stat_user_tables_n_tup_ins{` + filter + `}[9m]))` +
+		` + sum(increase(pg_stat_user_tables_n_tup_upd{` + filter + `}[9m]))` +
+		` + sum(increase(pg_stat_user_tables_n_tup_del{` + filter + `}[9m]))`
+}
+
 // LookupStorageProvider returns the metrics provider for an engine id, if registered.
 func LookupStorageProvider(engine StorageEngineID) (StorageIOProvider, bool) {
 	p, ok := storageIORegistry[engine]
@@ -149,6 +164,8 @@ func mergeStorageIO(stub, live *StorageIO) *StorageIO {
 	}
 	out.ReadRate = live.ReadRate
 	out.WriteRate = live.WriteRate
+	out.ReadTotal9m = live.ReadTotal9m
+	out.WriteTotal9m = live.WriteTotal9m
 	out.ReadLatency = live.ReadLatency
 	out.WriteLatency = live.WriteLatency
 	out.BytesUsed = live.BytesUsed
@@ -265,6 +282,16 @@ func redisStorageWriteRateQuery(ns, template string) string {
 	return fmt.Sprintf(`sum(rate(redis_commands_total{namespace=%q,cmd=~%q}%s))`, ns, cmd, promRateRange())
 }
 
+func redisStorageReadTotal9mQuery(ns, template string) string {
+	cmd := redisStorageReadCmdPattern(template)
+	return fmt.Sprintf(`sum(increase(redis_commands_total{namespace=%q,cmd=~%q}[9m]))`, ns, cmd)
+}
+
+func redisStorageWriteTotal9mQuery(ns, template string) string {
+	cmd := redisStorageWriteCmdPattern(template)
+	return fmt.Sprintf(`sum(increase(redis_commands_total{namespace=%q,cmd=~%q}[9m]))`, ns, cmd)
+}
+
 func redisStorageReadLatencyQuery(ns, template string) string {
 	cmd := redisStorageReadLatencyCmdPattern(template)
 	return fmt.Sprintf(
@@ -293,6 +320,8 @@ func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel strin
 	case StorageEngineRedis:
 		io.ReadRate, _ = c.query(ctx, redisStorageReadRateQuery(ns, template))
 		io.WriteRate, _ = c.query(ctx, redisStorageWriteRateQuery(ns, template))
+		io.ReadTotal9m, _ = c.query(ctx, redisStorageReadTotal9mQuery(ns, template))
+		io.WriteTotal9m, _ = c.query(ctx, redisStorageWriteTotal9mQuery(ns, template))
 		io.ReadLatency, _ = c.query(ctx, redisStorageReadLatencyQuery(ns, template))
 		io.WriteLatency, _ = c.query(ctx, redisStorageWriteLatencyQuery(ns, template))
 	default:
@@ -301,6 +330,10 @@ func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel strin
 		}
 		if prov.WriteQuery != nil {
 			io.WriteRate, _ = c.query(ctx, prov.WriteQuery(ns))
+		}
+		if engine == StorageEnginePostgreSQL {
+			io.ReadTotal9m, _ = c.query(ctx, postgresUserTableReadTotal9mQuery(ns))
+			io.WriteTotal9m, _ = c.query(ctx, postgresUserTableWriteTotal9mQuery(ns))
 		}
 		if prov.ReadLatencyQuery != nil {
 			io.ReadLatency, _ = c.query(ctx, prov.ReadLatencyQuery(ns, nsSel))
