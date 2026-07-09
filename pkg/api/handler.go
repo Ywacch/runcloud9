@@ -560,7 +560,7 @@ func (h *Handler) orchestrate(
 	for _, n := range design.Nodes {
 		componentStatus[n.ID] = "pending"
 	}
-	h.emitProvisionStatus(namespace, "deploying", componentStatus, "pending")
+	h.emitProvisionStatus(namespace, "deploying", componentStatus, "pending", loadgenStatusPending(h.clientset))
 
 	type dumpResult struct {
 		path string
@@ -585,7 +585,7 @@ func (h *Handler) orchestrate(
 		for _, node := range layer {
 			componentStatus[node.ID] = "deploying"
 		}
-		h.emitProvisionStatus(namespace, "deploying", componentStatus, statusOrSkipped(h.seeder, "pending"))
+		h.emitProvisionStatus(namespace, "deploying", componentStatus, statusOrSkipped(h.seeder, "pending"), loadgenStatusPending(h.clientset))
 
 		errs := make([]error, len(layer))
 		var wg sync.WaitGroup
@@ -616,7 +616,7 @@ func (h *Handler) orchestrate(
 						componentStatus[layer[i].ID] = "failed"
 					}
 				}
-				h.emitProvisionStatus(namespace, "failed", componentStatus, statusOrSkipped(h.seeder, "failed"))
+				h.emitProvisionStatus(namespace, "failed", componentStatus, statusOrSkipped(h.seeder, "failed"), loadgenStatusPending(h.clientset))
 				log.Printf("deploy failed, rolling back %d nodes", len(deployed))
 				h.rollback(context.Background(), deployed, namespace)
 				return nil, e
@@ -626,11 +626,11 @@ func (h *Handler) orchestrate(
 		for _, node := range layer {
 			componentStatus[node.ID] = "ready"
 		}
-		h.emitProvisionStatus(namespace, "deploying", componentStatus, statusOrSkipped(h.seeder, "pending"))
+		h.emitProvisionStatus(namespace, "deploying", componentStatus, statusOrSkipped(h.seeder, "pending"), loadgenStatusPending(h.clientset))
 
 		if !startedSeed && h.seeder != nil && layerContainsType(layer, "db") {
 			startedSeed = true
-			h.emitProvisionStatus(namespace, "deploying", componentStatus, "seeding")
+			h.emitProvisionStatus(namespace, "deploying", componentStatus, "seeding", loadgenStatusPending(h.clientset))
 			ch := make(chan seedResult, 1)
 			seedDone = ch
 			go func() {
@@ -665,13 +665,16 @@ func (h *Handler) orchestrate(
 		}
 	}
 
+	loadgenStatus := loadgenStatusPending(h.clientset)
 	if h.clientset != nil {
+		loadgenStatus = "ready"
 		if err := deployer.DeployLoadgen(ctx, h.clientset, namespace, resourceQuotaTier); err != nil {
 			log.Printf("loadgen pod deploy failed for namespace=%s (load testing unavailable): %v", namespace, err)
+			loadgenStatus = "failed"
 		}
 	}
 
-	h.emitProvisionStatus(namespace, "running", componentStatus, seedingStatus)
+	h.emitProvisionStatus(namespace, "running", componentStatus, seedingStatus, loadgenStatus)
 
 	return &deployer.DeploymentResult{
 		DeploymentID: namespace,
@@ -695,13 +698,14 @@ func (h *Handler) rollback(ctx context.Context, nodes []deployer.DeploymentNode,
 	}
 }
 
-func (h *Handler) emitProvisionStatus(namespace, phase string, components map[string]string, seeding string) {
+func (h *Handler) emitProvisionStatus(namespace, phase string, components map[string]string, seeding, loadgen string) {
 	if h.store == nil {
 		return
 	}
 	summary := map[string]any{
 		"provision_phase": phase,
 		"seeding_status":  seeding,
+		"loadgen_status":  loadgen,
 	}
 	c := make(map[string]string, len(components))
 	for k, v := range components {
@@ -737,6 +741,13 @@ func statusOrSkipped(s seederService, status string) string {
 		return "skipped"
 	}
 	return status
+}
+
+func loadgenStatusPending(clientset kubernetes.Interface) string {
+	if clientset != nil {
+		return "pending"
+	}
+	return "skipped"
 }
 
 func validateDesign(d deployer.DeploymentDesign) error {
