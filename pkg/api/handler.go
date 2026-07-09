@@ -312,6 +312,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	deployer.NormalizeDesign(&design)
+	deployer.EnsureLoadBalancerForReplicas(&design)
 
 	if err := validateDesign(design); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
