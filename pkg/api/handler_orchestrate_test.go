@@ -9,6 +9,9 @@ import (
 
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/store"
+	"k8s.io/apimachinery/pkg/runtime"
+	k8stesting "k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 )
 
 type fakeComponentDeployer struct {
@@ -151,5 +154,132 @@ func TestOrchestrate_SeedFailureNonFatalWithStatus(t *testing.T) {
 	}
 	if got, _ := row.MetricsSummary["provision_phase"].(string); got != "running" {
 		t.Fatalf("provision_phase: want running, got %q", got)
+	}
+}
+
+func TestOrchestrate_LoadgenFailureNonFatalWithStatus(t *testing.T) {
+	s := newFakeDeploymentStore()
+	ns := "ns-loadgen-fail"
+	_, _ = s.CreateDeployment(context.Background(), store.CreateDeploymentParams{
+		Namespace: ns, Template: "url-shortener", Archetype: "default", Design: map[string]any{}, ExpiresAt: time.Now().Add(time.Minute),
+	})
+
+	cs := k8stesting.NewClientset()
+	cs.PrependReactor("create", "deployments", func(action ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("exceeded quota")
+	})
+
+	deployers := map[string]deployer.ComponentDeployer{
+		"db":         &fakeComponentDeployer{},
+		"app-server": &fakeComponentDeployer{},
+	}
+	h := NewHandler(deployers, s, nil, nil, nil, nil, cs, nil, nil)
+
+	design := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "default",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "db-1", Type: "db", Name: "DB"},
+			{ID: "app-1", Type: "app-server", Name: "App"},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app-1", TargetID: "db-1"},
+		},
+	}
+
+	res, err := h.orchestrate(context.Background(), design, ns, "explorer")
+	if err != nil {
+		t.Fatalf("orchestrate returned error: %v", err)
+	}
+	if res.Status != "running" {
+		t.Fatalf("status: want running, got %q", res.Status)
+	}
+
+	row, err := s.GetDeployment(context.Background(), ns)
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	if got, _ := row.MetricsSummary["loadgen_status"].(string); got != "failed" {
+		t.Fatalf("loadgen_status: want failed, got %q", got)
+	}
+	if got, _ := row.MetricsSummary["provision_phase"].(string); got != "running" {
+		t.Fatalf("provision_phase: want running, got %q", got)
+	}
+}
+
+func TestOrchestrate_LoadgenSkippedWithoutClientset(t *testing.T) {
+	s := newFakeDeploymentStore()
+	ns := "ns-loadgen-skip"
+	_, _ = s.CreateDeployment(context.Background(), store.CreateDeploymentParams{
+		Namespace: ns, Template: "url-shortener", Archetype: "default", Design: map[string]any{}, ExpiresAt: time.Now().Add(time.Minute),
+	})
+
+	deployers := map[string]deployer.ComponentDeployer{
+		"db":         &fakeComponentDeployer{},
+		"app-server": &fakeComponentDeployer{},
+	}
+	h := NewHandler(deployers, s, nil, nil, nil, nil, nil, nil, nil)
+
+	design := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "default",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "db-1", Type: "db", Name: "DB"},
+			{ID: "app-1", Type: "app-server", Name: "App"},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app-1", TargetID: "db-1"},
+		},
+	}
+
+	if _, err := h.orchestrate(context.Background(), design, ns, "explorer"); err != nil {
+		t.Fatalf("orchestrate returned error: %v", err)
+	}
+
+	row, err := s.GetDeployment(context.Background(), ns)
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	if got, _ := row.MetricsSummary["loadgen_status"].(string); got != "skipped" {
+		t.Fatalf("loadgen_status: want skipped, got %q", got)
+	}
+}
+
+func TestOrchestrate_LoadgenReadyWithClientset(t *testing.T) {
+	s := newFakeDeploymentStore()
+	ns := "ns-loadgen-ready"
+	_, _ = s.CreateDeployment(context.Background(), store.CreateDeploymentParams{
+		Namespace: ns, Template: "url-shortener", Archetype: "default", Design: map[string]any{}, ExpiresAt: time.Now().Add(time.Minute),
+	})
+
+	cs := k8stesting.NewClientset()
+	deployers := map[string]deployer.ComponentDeployer{
+		"db":         &fakeComponentDeployer{},
+		"app-server": &fakeComponentDeployer{},
+	}
+	h := NewHandler(deployers, s, nil, nil, nil, nil, cs, nil, nil)
+
+	design := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "default",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "db-1", Type: "db", Name: "DB"},
+			{ID: "app-1", Type: "app-server", Name: "App"},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app-1", TargetID: "db-1"},
+		},
+	}
+
+	if _, err := h.orchestrate(context.Background(), design, ns, "explorer"); err != nil {
+		t.Fatalf("orchestrate returned error: %v", err)
+	}
+
+	row, err := s.GetDeployment(context.Background(), ns)
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	if got, _ := row.MetricsSummary["loadgen_status"].(string); got != "ready" {
+		t.Fatalf("loadgen_status: want ready, got %q", got)
 	}
 }
