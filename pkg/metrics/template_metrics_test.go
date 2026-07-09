@@ -13,8 +13,8 @@ func TestTemplatePrometheusMetricsFromYAML(t *testing.T) {
 		template string
 		minKeys  int
 	}{
-		{"social-feed", 15},
-		{"social-feed-pull", 15},
+		{"social-feed", 16},
+		{"social-feed-pull", 16},
 		{"ecommerce", 7},
 		{"url-shortener", 1},
 	}
