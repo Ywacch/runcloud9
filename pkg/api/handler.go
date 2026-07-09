@@ -112,6 +112,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	mux.Handle("POST /deployments", routeAuthExpensive(auth, rl, http.HandlerFunc(h.handleCreateDeployment)))
 	mux.Handle("GET /deployments", routeAuth(auth, rl, http.HandlerFunc(h.handleListDeployments)))
+	mux.Handle("GET /me", routeAuth(auth, rl, http.HandlerFunc(h.handleGetCurrentUser)))
 	mux.Handle("GET /deployments/{id}", routeAuth(auth, rl, http.HandlerFunc(h.handleGetDeployment)))
 	mux.Handle("DELETE /deployments/{id}", routeAuth(auth, rl, http.HandlerFunc(h.handleDeleteDeployment)))
 	mux.Handle("GET /deployments/{id}/metrics", routeAuth(auth, rl, http.HandlerFunc(h.handleMetricsStream)))
