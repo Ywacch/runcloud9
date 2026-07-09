@@ -52,6 +52,14 @@ func TestGetTemplate(t *testing.T) {
 			t.Fatalf("presetLite must not include lb/mq/worker: %+v", n)
 		}
 	}
+	for _, n := range u.Preset.Nodes {
+		if n.Type == "load_balancer" {
+			t.Fatalf("url-shortener preset must not include load balancer: %+v", n)
+		}
+	}
+	if u.Components != 3 {
+		t.Fatalf("url-shortener components: want 3, got %d", u.Components)
+	}
 	if u.SeedConfig == nil || u.SeedConfig.DumpPath != "url-shortener/urls.dump" {
 		t.Fatalf("url-shortener seed config: %+v", u.SeedConfig)
 	}
@@ -67,6 +75,26 @@ func TestGetTemplate(t *testing.T) {
 	}
 	if e.Preset == nil {
 		t.Fatal("ecommerce preset should be present")
+	}
+	if e.Components != 5 {
+		t.Fatalf("ecommerce components: want 5, got %d", e.Components)
+	}
+	for _, n := range e.Preset.Nodes {
+		if n.Type == "load_balancer" {
+			t.Fatalf("ecommerce preset must not include load balancer: %+v", n)
+		}
+	}
+	sf := GetTemplate("social-feed")
+	if sf == nil || sf.Preset == nil {
+		t.Fatalf("social-feed preset missing: %+v", sf)
+	}
+	if sf.Components != 5 {
+		t.Fatalf("social-feed components: want 5, got %d", sf.Components)
+	}
+	for _, n := range sf.Preset.Nodes {
+		if n.Type == "load_balancer" {
+			t.Fatalf("social-feed preset must not include load balancer: %+v", n)
+		}
 	}
 	// Returned pointer must not alias the next call.
 	u2 := GetTemplate("url-shortener")
