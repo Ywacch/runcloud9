@@ -174,6 +174,47 @@ func TestSidecarOverhead_cacheAsideOnlyOnRedis(t *testing.T) {
 	assertQuantityEqual(t, got.CPU, "50m", "exporter cpu")
 }
 
+func TestAutopilotAdmissionOverhead_urlShortenerDefault(t *testing.T) {
+	t.Parallel()
+
+	design := urlShortenerDefaultDesign()
+	got := autopilotAdmissionOverhead(design, "explorer")
+	assertQuantityEqual(t, got.Memory, "768Mi", "six sub-512Mi containers × 128Mi")
+}
+
+func TestQuotaResourceLimits_scaledLargeEngineerIncludesSlack(t *testing.T) {
+	t.Parallel()
+
+	design := urlShortenerScaledLargeDesign()
+	user := SumDesignResources(design, "engineer")
+	sidecar := SidecarOverhead(design)
+	slack := autopilotAdmissionOverhead(design, "engineer")
+	quota := QuotaResourceLimits(design, "engineer")
+
+	assertQuantityEqual(t, slack.Memory, "384Mi", "small cache main/exporter + postgres exporter slack")
+	minMem := user.Memory.DeepCopy()
+	minMem.Add(sidecar.Memory)
+	minMem.Add(slack.Memory)
+	if quota.Memory.Cmp(minMem) < 0 {
+		t.Fatalf("quota memory %v below requested+sidecar+slack %v", quota.Memory, minMem)
+	}
+}
+
+func TestValidateResourceBudget_unaffectedByQuotaSlack(t *testing.T) {
+	t.Parallel()
+
+	if err := ValidateResourceBudget(urlShortenerLiteDesign(), "explorer"); err != nil {
+		t.Fatalf("explorer lite: %v", err)
+	}
+	if err := ValidateResourceBudget(urlShortenerDefaultDesign(), "engineer"); err != nil {
+		t.Fatalf("engineer default: %v", err)
+	}
+	err := ValidateResourceBudget(urlShortenerScaledLargeDesign(), "explorer")
+	if err == nil {
+		t.Fatal("expected scaled large design to fail explorer tier")
+	}
+}
+
 func assertQuantityEqual(t *testing.T, got resource.Quantity, want, label string) {
 	t.Helper()
 	wantQty := resource.MustParse(want)
