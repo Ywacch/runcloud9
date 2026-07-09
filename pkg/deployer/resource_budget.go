@@ -143,10 +143,12 @@ func ProxyCacheOverhead(design DeploymentDesign) ResourceBudget {
 }
 
 // QuotaResourceLimits returns namespace ResourceQuota hard limits for a design.
+// Includes GKE Autopilot admission slack so admitted pod limits fit the quota envelope.
 func QuotaResourceLimits(design DeploymentDesign, userTier string) ResourceBudget {
 	total := SumDesignResources(design, userTier)
 	mergeBudget(&total, SidecarOverhead(design))
 	mergeBudget(&total, ProxyCacheOverhead(design))
+	mergeBudget(&total, autopilotAdmissionOverhead(design, userTier))
 	return total
 }
 
@@ -238,4 +240,73 @@ func scaleQuantity(q resource.Quantity, replicas int32) resource.Quantity {
 	out := q.DeepCopy()
 	out.SetMilli(out.MilliValue() * int64(replicas))
 	return out
+}
+
+var (
+	autopilotSlackMemoryThreshold = resource.MustParse("512Mi")
+	autopilotSlackPerContainer    = resource.MustParse("128Mi")
+)
+
+// autopilotAdmissionOverhead adds memory slack for GKE Autopilot limit admission adjustments.
+// Manifest requests can be admitted higher than requested (see ganymede_appendix); namespace
+// ResourceQuota must account for admitted limits, not only SumDesignResources requests.
+func autopilotAdmissionOverhead(design DeploymentDesign, userTier string) ResourceBudget {
+	var total ResourceBudget
+	for _, node := range design.Nodes {
+		if !isDeployableNodeType(node.Type) {
+			continue
+		}
+		replicas := replicasForBudget(node)
+		if replicas < 1 {
+			replicas = 1
+		}
+		res := ResolveNodeResources(node.Type, node.Config)
+		addAutopilotContainerSlack(&total, budgetNodeLabel(node, replicas)+" autopilot slack", res, replicas)
+		if sidecarOverheadForNode(node) {
+			addAutopilotContainerSlack(
+				&total,
+				budgetNodeLabel(node, replicas)+" exporter autopilot slack",
+				ExporterResources(),
+				replicas,
+			)
+		}
+		if node.Type == "cache" && RequiresProxy(node) {
+			addAutopilotContainerSlack(
+				&total,
+				budgetNodeLabel(node, replicas)+" cache-proxy autopilot slack",
+				res,
+				replicas,
+			)
+		}
+	}
+	addAutopilotContainerSlack(&total, "loadgen autopilot slack", loadgenResources(userTier), 1)
+	return total
+}
+
+func addAutopilotContainerSlack(total *ResourceBudget, label string, res corev1.ResourceRequirements, replicas int32) {
+	slack := autopilotMemorySlackForContainer(res)
+	if slack.IsZero() {
+		return
+	}
+	scaled := scaleQuantity(slack, replicas)
+	total.Memory.Add(scaled)
+	total.Breakdown = append(total.Breakdown, ResourceBudgetLine{
+		Label:  label,
+		CPU:    "0",
+		Memory: scaled.String(),
+	})
+}
+
+func autopilotMemorySlackForContainer(res corev1.ResourceRequirements) resource.Quantity {
+	if res.Limits == nil {
+		return resource.Quantity{}
+	}
+	mem := res.Limits.Memory()
+	if mem == nil || mem.IsZero() {
+		return resource.Quantity{}
+	}
+	if mem.Cmp(autopilotSlackMemoryThreshold) < 0 {
+		return autopilotSlackPerContainer.DeepCopy()
+	}
+	return resource.Quantity{}
 }

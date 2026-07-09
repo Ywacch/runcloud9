@@ -13,7 +13,8 @@ import (
 const namespaceResourceQuotaName = "cloud9-deployment-quota"
 
 // EnsureNamespaceResourceQuota creates the deployment namespace (if needed) and applies
-// a ResourceQuota sized to the design's requested workloads plus sidecar/proxy overhead.
+// a ResourceQuota sized to the design's requested workloads plus sidecar/proxy overhead
+// and GKE Autopilot admission slack.
 func EnsureNamespaceResourceQuota(
 	ctx context.Context,
 	clientset kubernetes.Interface,
@@ -38,7 +39,7 @@ func EnsureNamespaceResourceQuota(
 	limits := QuotaResourceLimits(design, userTier)
 	hard := corev1.ResourceList{
 		corev1.ResourceLimitsCPU:      limits.CPU,
-		corev1.ResourceLimitsMemory:    limits.Memory,
+		corev1.ResourceLimitsMemory:   limits.Memory,
 		corev1.ResourceRequestsCPU:    limits.CPU,
 		corev1.ResourceRequestsMemory: limits.Memory,
 	}
