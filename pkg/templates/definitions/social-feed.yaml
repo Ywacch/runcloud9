@@ -4,7 +4,7 @@ description: >-
   Fan-out on write: new posts are pushed to every follower's pre-computed feed
   via a message queue and worker. Reads are O(1) but writes create amplification.
   Demonstrates consumer lag, backpressure, and queue depth under load.
-components: 6
+components: 5
 bottleneck: "Consumer lag under high fan-out"
 descriptionLite: >-
   Fan-out on write without a queue: the app pushes new posts into follower timelines
@@ -113,12 +113,6 @@ topology:
     position: [6, 1]
 preset:
   nodes:
-    - id: lb-1
-      type: load_balancer
-      position: [-4, 0.3, 0]
-      label: Load Balancer
-      config:
-        algorithm: round-robin
     - id: app-1
       type: compute
       position: [-1, 0.3, 0]
@@ -159,10 +153,6 @@ preset:
         storageGB: 10
         maxConnections: 100
   edges:
-    - id: e-lb-app
-      sourceId: lb-1
-      targetId: app-1
-      protocol: http
     - id: e-app-mq
       sourceId: app-1
       targetId: mq-1
