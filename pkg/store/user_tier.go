@@ -120,8 +120,10 @@ func (l TierLimits) TopologyLimits() deployer.TierTopologyLimits {
 // ResourceQuotaTier maps effective tier to deployer quota tier names.
 func ResourceQuotaTier(effectiveTier string) string {
 	switch strings.ToLower(strings.TrimSpace(effectiveTier)) {
-	case TierEngineer, TierInternal:
+	case TierEngineer:
 		return TierEngineer
+	case TierInternal:
+		return TierInternal
 	default:
 		return "explorer"
 	}

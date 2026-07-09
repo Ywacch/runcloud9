@@ -93,7 +93,7 @@ func loadgenImage() string {
 
 func loadgenResources(userTier string) corev1.ResourceRequirements {
 	switch userTier {
-	case "engineer", "architect":
+	case "engineer", "internal", "architect":
 		return corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse("500m"),

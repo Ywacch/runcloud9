@@ -16,7 +16,8 @@ func TestTierResourceCaps(t *testing.T) {
 		wantMem string
 	}{
 		{tier: "explorer", wantCPU: "625m", wantMem: "1280Mi"},
-		{tier: "engineer", wantCPU: "1500m", wantMem: "3Gi"},
+		{tier: "engineer", wantCPU: "3375m", wantMem: "6912Mi"},
+		{tier: "internal", wantCPU: "4250m", wantMem: "8320Mi"},
 		{tier: "architect", wantCPU: "4", wantMem: "8Gi"},
 		{tier: "", wantCPU: "625m", wantMem: "1280Mi"},
 	}
@@ -120,6 +121,21 @@ func TestValidateResourceBudget_scaledLargePassesArchitect(t *testing.T) {
 	design := urlShortenerScaledLargeDesign()
 	if err := ValidateResourceBudget(design, "architect"); err != nil {
 		t.Fatalf("expected architect tier to pass: %v", err)
+	}
+}
+
+func TestValidateResourceBudget_urlShortenerDefaultsPassesEngineerAndInternal(t *testing.T) {
+	t.Parallel()
+
+	design := urlShortenerDefaultDesign()
+	for _, tier := range []string{"engineer", "internal"} {
+		tier := tier
+		t.Run(tier, func(t *testing.T) {
+			t.Parallel()
+			if err := ValidateResourceBudget(design, tier); err != nil {
+				t.Fatalf("expected %s tier to pass: %v", tier, err)
+			}
+		})
 	}
 }
 

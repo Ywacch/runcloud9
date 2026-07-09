@@ -50,6 +50,15 @@ func TestDeployLoadgen_EngineerTierResources(t *testing.T) {
 	}
 }
 
+func TestDeployLoadgen_InternalTierResources(t *testing.T) {
+	t.Parallel()
+	res := loadgenResources("internal")
+	mem := res.Limits[corev1.ResourceMemory]
+	if mem.String() != "1Gi" {
+		t.Fatalf("internal memory: got %s want 1Gi", mem.String())
+	}
+}
+
 func TestDeployLoadgen_Idempotent(t *testing.T) {
 	t.Parallel()
 	cs := fake.NewClientset()
