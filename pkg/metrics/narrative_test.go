@@ -179,3 +179,31 @@ func deploymentForNarrativeTests(template string) *DeploymentMetrics {
 	}
 	return dm
 }
+
+func TestNarratePodOOM_withContext(t *testing.T) {
+	t.Parallel()
+	ctx := &CrashContext{MemPercent: 96.5, TerminationReason: "OOMKilled"}
+	out := narratePodOOM(ctx)
+	if out.Narrative == "" || out.Suggestion == "" {
+		t.Fatalf("narrative: %+v", out)
+	}
+	if !strings.Contains(out.Narrative, "OOMKilled") {
+		t.Fatalf("want OOMKilled mention: %q", out.Narrative)
+	}
+}
+
+func TestNarratePodRestart_withContext(t *testing.T) {
+	t.Parallel()
+	ctx := &CrashContext{
+		WaitingReason:     "CrashLoopBackOff",
+		RedisRejectedRate: 120,
+		ErrorRate:         2.5,
+	}
+	out := narratePodRestart(ctx)
+	if out.Narrative == "" || out.Suggestion == "" {
+		t.Fatalf("narrative: %+v", out)
+	}
+	if !strings.Contains(out.Narrative, "CrashLoopBackOff") {
+		t.Fatalf("want crash loop mention: %q", out.Narrative)
+	}
+}

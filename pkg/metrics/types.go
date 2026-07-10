@@ -31,6 +31,41 @@ type Event struct {
 	Narrative  string   `json:"narrative,omitempty"`
 	Suggestion string   `json:"suggestion,omitempty"`
 	Related    []string `json:"related,omitempty"`
+	// CrashContext snapshots component metrics from the same collect tick when a pod restart is detected.
+	CrashContext *CrashContext `json:"crashContext,omitempty"`
+}
+
+// CrashContext correlates a pod restart with live component metrics at detection time.
+type CrashContext struct {
+	Pod               string  `json:"pod,omitempty"`
+	TerminationReason string  `json:"terminationReason,omitempty"`
+	WaitingReason     string  `json:"waitingReason,omitempty"`
+	ExitCode          int32   `json:"exitCode,omitempty"`
+	CPUPercent        float64 `json:"cpuPercent,omitempty"`
+	MemPercent        float64 `json:"memPercent,omitempty"`
+	MemoryLimitBytes  int64   `json:"memoryLimitBytes,omitempty"`
+	ErrorRate         float64 `json:"errorRate,omitempty"`
+	ActiveConnections float64 `json:"activeConnections,omitempty"`
+	RedisRejectedRate float64 `json:"redisRejectedRate,omitempty"`
+	RedisOpsPerSec    float64 `json:"redisOpsPerSec,omitempty"`
+	QueueDepth        float64 `json:"queueDepth,omitempty"`
+}
+
+// RuntimeHealth summarizes live pod readiness and restart state for a component.
+type RuntimeHealth struct {
+	UnreadyCount int                `json:"unreadyCount"`
+	Restarting   bool               `json:"restarting"`
+	Pods         []PodRuntimeHealth `json:"pods,omitempty"`
+}
+
+// PodRuntimeHealth is one pod's K8s status exposed on the metrics stream.
+type PodRuntimeHealth struct {
+	Name                  string `json:"name"`
+	Ready                 bool   `json:"ready"`
+	RestartCount          int32  `json:"restartCount"`
+	WaitingReason         string `json:"waitingReason,omitempty"`
+	LastTerminationReason string `json:"lastTerminationReason,omitempty"`
+	ExitCode              int32  `json:"exitCode,omitempty"`
 }
 
 // ComparisonMetrics is reserved for side-by-side deployment streams (future).
@@ -156,6 +191,8 @@ type ComponentMetrics struct {
 	StorageEngine string     `json:"storageEngine,omitempty"`
 	StorageRole   string     `json:"storageRole,omitempty"`
 	StorageIO     *StorageIO `json:"storageIo,omitempty"`
+	// RuntimeHealth is populated from the Kubernetes API when clientset is configured.
+	RuntimeHealth *RuntimeHealth `json:"runtimeHealth,omitempty"`
 }
 
 // BackendReplicas tracks desired vs ready app-server pods (LB-facing view).

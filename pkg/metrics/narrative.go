@@ -44,6 +44,10 @@ func Narrate(rule string, dm *DeploymentMetrics, topo TopologyFlags, tmpl *templ
 		return applyNarrativeFromTemplate(rule, dm, tmpl, narrateCascadeLatencyMiss(dm, topo))
 	case cascadeRuleMQBackpressure:
 		return applyNarrativeFromTemplate(rule, dm, tmpl, narrateCascadeMQBackpressure(dm, topo))
+	case rulePodOOM:
+		return narratePodOOM(nil)
+	case rulePodRestart:
+		return narratePodRestart(nil)
 	default:
 		return NarrativeOutput{}
 	}
@@ -328,5 +332,50 @@ func narrateCascadeMQBackpressure(dm *DeploymentMetrics, _ TopologyFlags) Narrat
 		Narrative:  strings.TrimSpace(b.String()),
 		Suggestion: "Add worker replicas to raise aggregate consume throughput.",
 		Related:    []string{"mq", "worker", "cache"},
+	}
+}
+
+func narratePodOOM(ctx *CrashContext) NarrativeOutput {
+	var memPct float64
+	if ctx != nil {
+		memPct = ctx.MemPercent
+	}
+	var b strings.Builder
+	b.WriteString("Kubernetes terminated the container with OOMKilled — it exceeded its cgroup memory limit.")
+	if memPct >= 85 {
+		fmt.Fprintf(&b, " Memory utilization was about %.0f%% of limit on the last metrics tick.", memPct)
+	}
+	sug := "Raise the instance size for this component or reduce load until memory stays below the limit."
+	return NarrativeOutput{
+		Narrative:  strings.TrimSpace(b.String()),
+		Suggestion: sug,
+		Related:    []string{"cache", "app-server", "db"},
+	}
+}
+
+func narratePodRestart(ctx *CrashContext) NarrativeOutput {
+	var b strings.Builder
+	b.WriteString("A pod restarted during the live session.")
+	if ctx != nil {
+		if ctx.WaitingReason == "CrashLoopBackOff" {
+			b.WriteString(" It is in CrashLoopBackOff — Kubernetes is backing off after repeated failures.")
+		}
+		if ctx.ErrorRate > 1 {
+			fmt.Fprintf(&b, " App error rate was about %.1f/s on the same tick.", ctx.ErrorRate)
+		}
+		if ctx.ActiveConnections > 0 && ctx.ActiveConnections > 500 {
+			fmt.Fprintf(&b, " Load balancer active connections were about %.0f.", ctx.ActiveConnections)
+		}
+		if ctx.RedisRejectedRate > 0 {
+			fmt.Fprintf(&b, " Redis rejected about %.0f connections/s.", ctx.RedisRejectedRate)
+		}
+		if ctx.QueueDepth > 50 {
+			fmt.Fprintf(&b, " Queue depth was about %.0f.", ctx.QueueDepth)
+		}
+	}
+	return NarrativeOutput{
+		Narrative:  strings.TrimSpace(b.String()),
+		Suggestion: "Check pod logs and whether CPU, memory, or upstream health checks failed under load.",
+		Related:    []string{"app-server", "cache", "lb"},
 	}
 }
