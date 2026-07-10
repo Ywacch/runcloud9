@@ -53,6 +53,8 @@ type MetricsCollector struct {
 	clientLatency   map[string]*clientLatencyAccumulator
 	mqRateMu        sync.Mutex
 	mqRates         map[string]rabbitCounterSnapshot
+	podHealthMu     sync.Mutex
+	podHealth       map[string]*podHealthTracker
 }
 
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
@@ -120,6 +122,11 @@ func (c *MetricsCollector) Cleanup(namespace string) {
 	c.mqRateMu.Lock()
 	delete(c.mqRates, namespace)
 	c.mqRateMu.Unlock()
+	c.podHealthMu.Lock()
+	if c.podHealth != nil {
+		delete(c.podHealth, namespace)
+	}
+	c.podHealthMu.Unlock()
 }
 
 // RingBufferFor returns the snapshot ring for a namespace, or nil if none yet.
@@ -988,6 +995,9 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	dm.TemplateMetrics = c.collectTemplateMetrics(ctx, nsSel, template)
 	c.augmentTemplateMetrics(dm, template)
 
+	tmpl := templates.GetTemplate(template)
+	runtimeEvents := c.attachRuntimeHealth(ctx, namespace, dm)
+
 	// Attach load generator stats to the metrics snapshot.
 	// UNDERSTAND: load stats are embedded in the existing metrics stream
 	// so the frontend gets everything on one WebSocket connection.
@@ -1003,7 +1013,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	if c.eventBus != nil {
 		ev = append(ev, c.eventBus.Drain(namespace)...)
 	}
-	tmpl := templates.GetTemplate(template)
+	ev = append(ev, runtimeEvents...)
 	if c.thresholds != nil {
 		ev = append(ev, c.thresholds.Eval(namespace, dm, topo, tmpl)...)
 	}
