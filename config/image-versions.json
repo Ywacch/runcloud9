@@ -1,9 +1,9 @@
 {
-    "url-shortener":  "git-5603560",
-    "ecommerce":  "git-5603560",
-    "social-feed":  "git-5603560",
+    "url-shortener":  "git-a08d6c1",
+    "ecommerce":  "git-a08d6c1",
+    "social-feed":  "git-a08d6c1",
     "ecommerce-worker":  "git-5603560",
     "fanout-worker":  "git-5603560",
-    "caching-proxy":  "git-94e61d7",
+    "caching-proxy":  "git-a08d6c1",
     "loadgen":  "git-1e6f421"
 }
