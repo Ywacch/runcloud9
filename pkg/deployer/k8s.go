@@ -31,19 +31,40 @@ const (
 	waitReadyRestartFailThreshold int32 = 3
 )
 
-// templateHTTPReadinessProbe returns GET /health readiness for template app containers.
-// /health commonly touches Postgres/cache/MQ; default probe timeout is only 1s — under load that
-// causes flaky NotReady. Caller picks delays appropriate for startup vs steady state.
-func templateHTTPReadinessProbe(port, initialDelaySeconds, periodSeconds, failureThreshold, timeoutSeconds int32) *corev1.Probe {
+// templateHTTPProbe builds an HTTP GET probe at path on port with the given timings.
+func templateHTTPProbe(path string, port, initialDelaySeconds, periodSeconds, failureThreshold, timeoutSeconds int32) *corev1.Probe {
 	return &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{
-			HTTPGet: &corev1.HTTPGetAction{Path: "/health", Port: intstr.FromInt32(port)},
+			HTTPGet: &corev1.HTTPGetAction{Path: path, Port: intstr.FromInt32(port)},
 		},
 		InitialDelaySeconds: initialDelaySeconds,
 		PeriodSeconds:       periodSeconds,
 		TimeoutSeconds:      timeoutSeconds,
 		FailureThreshold:    failureThreshold,
 	}
+}
+
+// templateHTTPReadinessProbe returns GET /health readiness for template app containers.
+// /health commonly touches Postgres/cache/MQ; default probe timeout is only 1s — under load that
+// causes flaky NotReady. Caller picks delays appropriate for startup vs steady state.
+// UNDERSTAND: kept for worker containers whose images do not (yet) serve the split
+// /health/live and /health/ready endpoints; app-server and cache-proxy use the split probes below.
+func templateHTTPReadinessProbe(port, initialDelaySeconds, periodSeconds, failureThreshold, timeoutSeconds int32) *corev1.Probe {
+	return templateHTTPProbe("/health", port, initialDelaySeconds, periodSeconds, failureThreshold, timeoutSeconds)
+}
+
+// templateReadyProbe returns GET /health/ready readiness. Unlike /health it does not chain
+// downstream dependency checks, so a slow or briefly-unavailable Redis/DB does not flip every
+// pod NotReady at once and drain the load balancer of backends (the readiness-cascade fix).
+func templateReadyProbe(port, initialDelaySeconds, periodSeconds, failureThreshold, timeoutSeconds int32) *corev1.Probe {
+	return templateHTTPProbe("/health/ready", port, initialDelaySeconds, periodSeconds, failureThreshold, timeoutSeconds)
+}
+
+// templateLiveProbe returns GET /health/live liveness. The endpoint performs no downstream
+// calls, so thresholds are conservative: liveness should fail (and restart the container) only
+// when the process itself is wedged, never because a dependency is momentarily slow.
+func templateLiveProbe(port int32) *corev1.Probe {
+	return templateHTTPProbe("/health/live", port, 10, 10, 6, 2)
 }
 
 // K8sDeployer is the real Kubernetes implementation of ComponentDeployer.
@@ -485,8 +506,12 @@ func (k *K8sDeployer) deployAppServer(ctx context.Context, cfg DeployConfig, res
 						ImagePullPolicy: corev1.PullAlways,
 						Ports:           []corev1.ContainerPort{{ContainerPort: 8080}},
 						Resources:       resources,
-						// UNDERSTAND: we use HTTP readiness to make PodReady reflect /health.
-						ReadinessProbe: templateHTTPReadinessProbe(8080, 3, 5, 8, 5),
+						// UNDERSTAND: readiness reflects only that the app can accept traffic
+						// (/health/ready is dependency-free); liveness (/health/live) restarts
+						// the container only when the process itself is wedged. This decouples
+						// PodReady from transient Redis/DB slowness that used to drain the LB.
+						ReadinessProbe: templateReadyProbe(8080, 3, 5, 8, 3),
+						LivenessProbe:  templateLiveProbe(8080),
 						Env:            envMapToK8s(envVars),
 					}},
 				},
@@ -761,7 +786,10 @@ func newCacheProxyContainer(image string, resources corev1.ResourceRequirements,
 		Ports:           []corev1.ContainerPort{{ContainerPort: 8081}},
 		Resources:       resources,
 		Env:             env,
-		ReadinessProbe:  templateHTTPReadinessProbe(8081, 3, 5, 8, 5),
+		// Readiness pings only Redis (/health/ready); the DB check stays in /health so a
+		// slow Postgres does not remove the proxy from rotation and cascade into the app tier.
+		ReadinessProbe: templateReadyProbe(8081, 3, 5, 8, 5),
+		LivenessProbe:  templateLiveProbe(8081),
 	}
 }
 

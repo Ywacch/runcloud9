@@ -33,12 +33,61 @@ func TestNewCacheProxyContainer_SetsPullAlways(t *testing.T) {
 	if c.ReadinessProbe == nil || c.ReadinessProbe.HTTPGet == nil {
 		t.Fatal("expected HTTP readiness probe for cache-proxy")
 	}
+	if got := c.ReadinessProbe.HTTPGet.Path; got != "/health/ready" {
+		t.Fatalf("cache-proxy readiness path: got %q want /health/ready", got)
+	}
 	if c.ReadinessProbe.TimeoutSeconds != 5 || c.ReadinessProbe.PeriodSeconds != 5 {
 		t.Fatalf("cache-proxy readiness: TimeoutSeconds=%d PeriodSeconds=%d want 5/5",
 			c.ReadinessProbe.TimeoutSeconds, c.ReadinessProbe.PeriodSeconds)
 	}
 	if c.ReadinessProbe.FailureThreshold != 8 {
 		t.Fatalf("cache-proxy readiness FailureThreshold: got %d want 8", c.ReadinessProbe.FailureThreshold)
+	}
+	if c.LivenessProbe == nil || c.LivenessProbe.HTTPGet == nil {
+		t.Fatal("expected HTTP liveness probe for cache-proxy")
+	}
+	if got := c.LivenessProbe.HTTPGet.Path; got != "/health/live" {
+		t.Fatalf("cache-proxy liveness path: got %q want /health/live", got)
+	}
+}
+
+func TestTemplateProbes_SplitPaths(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		probe *corev1.Probe
+		path  string
+	}{
+		{"ready", templateReadyProbe(8080, 3, 5, 8, 3), "/health/ready"},
+		{"live", templateLiveProbe(8080), "/health/live"},
+		{"legacy-health", templateHTTPReadinessProbe(8080, 3, 5, 8, 5), "/health"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if tc.probe == nil || tc.probe.HTTPGet == nil {
+				t.Fatalf("%s: expected HTTP probe", tc.name)
+			}
+			if got := tc.probe.HTTPGet.Path; got != tc.path {
+				t.Fatalf("%s path: got %q want %q", tc.name, got, tc.path)
+			}
+			if tc.probe.HTTPGet.Port.IntVal != 8080 {
+				t.Fatalf("%s port: got %d want 8080", tc.name, tc.probe.HTTPGet.Port.IntVal)
+			}
+		})
+	}
+}
+
+func TestTemplateLiveProbe_ConservativeThresholds(t *testing.T) {
+	t.Parallel()
+	p := templateLiveProbe(8081)
+	if p.FailureThreshold != 6 {
+		t.Fatalf("liveness FailureThreshold: got %d want 6", p.FailureThreshold)
+	}
+	if p.PeriodSeconds != 10 || p.InitialDelaySeconds != 10 {
+		t.Fatalf("liveness timing: period=%d initialDelay=%d want 10/10",
+			p.PeriodSeconds, p.InitialDelaySeconds)
 	}
 }
 

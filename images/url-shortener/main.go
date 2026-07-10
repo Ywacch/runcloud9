@@ -152,6 +152,8 @@ func (s *Server) routes() *http.ServeMux {
 	mux.Handle("/r/", withRecovery(withMetrics("/r", http.HandlerFunc(s.handleRedirect))))
 	mux.Handle("/stats/", withRecovery(withMetrics("/stats", http.HandlerFunc(s.handleStats))))
 	mux.Handle("/health", withRecovery(http.HandlerFunc(s.handleHealth)))
+	mux.Handle("/health/live", withRecovery(http.HandlerFunc(s.handleLive)))
+	mux.Handle("/health/ready", withRecovery(http.HandlerFunc(s.handleReady)))
 	mux.Handle("/cache-stats", withRecovery(http.HandlerFunc(s.handleCacheStats)))
 	mux.Handle("/code-pool", withRecovery(http.HandlerFunc(s.handleCodePool)))
 
@@ -477,6 +479,31 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"db":     "ok",
 		"cache":  cacheHealth,
 	})
+}
+
+// handleLive is the Kubernetes liveness endpoint. It reports only that the
+// process is up and serving HTTP; it never touches Redis, Postgres, or the
+// caching-proxy. Keeping it dependency-free means a slow or briefly-unavailable
+// downstream can never trigger a container restart storm.
+func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleReady is the Kubernetes readiness endpoint. It is intentionally
+// dependency-free: the app-server can accept traffic as soon as it is listening.
+// Chaining downstream checks here (DB SELECT, proxy /health) is what previously
+// flipped every pod NotReady under load and left the load balancer with no
+// backends, amplifying failures. Deep diagnostics remain at GET /health.
+func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 func (s *Server) handleCacheStats(w http.ResponseWriter, r *http.Request) {
