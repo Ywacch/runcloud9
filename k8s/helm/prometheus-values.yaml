@@ -61,17 +61,7 @@ prometheus:
 #   prometheus.io/path: "/metrics"  (default, can omit)
 
 grafana:
-  enabled: true
-  adminPassword: "cloud9-dev" # dev only — change for production
-  service:
-    type: ClusterIP # access via port-forward, not LoadBalancer
-  resources:
-    requests:
-      cpu: 100m
-      memory: 256Mi
-    limits:
-      cpu: 200m
-      memory: 512Mi
+  enabled: false # UI unused — ganymede queries Prometheus directly (PROMETHEUS_URL)
 
 # Reduce resource usage — Autopilot has minimum floors so keep these reasonable
 alertmanager:
