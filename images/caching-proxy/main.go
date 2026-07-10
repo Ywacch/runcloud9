@@ -100,13 +100,15 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle("/get/", withRecovery(s.handleGet))             // GET /get/{code}
-	mux.Handle("/set/", withRecovery(s.handleSet))             // POST /set/{code}
-	mux.Handle("/del/", withRecovery(s.handleDel))             // DELETE /del/{code}
-	mux.Handle("/exists/", withRecovery(s.handleExists))       // GET /exists/{code}
-	mux.Handle("/stats/", withRecovery(s.handleStats)) // GET /stats/{code}
+	mux.Handle("/get/", withRecovery(s.handleGet))       // GET /get/{code}
+	mux.Handle("/set/", withRecovery(s.handleSet))       // POST /set/{code}
+	mux.Handle("/del/", withRecovery(s.handleDel))       // DELETE /del/{code}
+	mux.Handle("/exists/", withRecovery(s.handleExists)) // GET /exists/{code}
+	mux.Handle("/stats/", withRecovery(s.handleStats))   // GET /stats/{code}
 	mux.Handle("/codes", withRecovery(s.handleCodes))
 	mux.Handle("/health", withRecovery(s.handleHealth))
+	mux.Handle("/health/live", withRecovery(s.handleLive))
+	mux.Handle("/health/ready", withRecovery(s.handleReady))
 	mux.Handle("/metrics", promhttp.Handler())
 	return mux
 }
@@ -368,6 +370,39 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"redis":  "ok",
 		"db":     "ok",
 	})
+}
+
+// handleLive is the Kubernetes liveness endpoint. It reports only that the
+// process is up and serving HTTP; it never touches Redis or Postgres. Keeping
+// it dependency-free means a slow or briefly-unavailable backing store can
+// never trigger a container restart storm.
+func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleReady is the Kubernetes readiness endpoint. It pings only the backing
+// Redis (fast, in-namespace) with a tight timeout. The Postgres check stays in
+// GET /health: a slow DB must not remove the proxy from rotation, since that
+// would cascade into app-server readiness failures and LB connection pile-up.
+func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+	defer cancel()
+	if err := s.redis.Ping(ctx).Err(); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"status": "unready",
+			"redis":  "unreachable",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 func (s *Server) writeBehindFlusher(ctx context.Context) {
