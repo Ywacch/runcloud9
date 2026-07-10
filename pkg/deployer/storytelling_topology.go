@@ -18,6 +18,7 @@ type StorytellingTopology struct {
 	DBRole        string
 	CacheEngine   string
 	CacheRole     string
+	HasProxyCache bool
 }
 
 // StorytellingTopologyFromDesign walks design nodes (load_balancer, message_queue, worker, cache).
@@ -49,6 +50,9 @@ func StorytellingTopologyFromDesign(d *DeploymentDesign, template string) Storyt
 		case "cache":
 			t.HasCache = true
 			t.CacheEngine = "redis"
+			if RequiresProxy(n) {
+				t.HasProxyCache = true
+			}
 			if t.CacheStrategy == "" {
 				t.CacheStrategy = configStringFromNodeConfig(n.Config, "strategy")
 			}

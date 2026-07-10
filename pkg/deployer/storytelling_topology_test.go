@@ -44,6 +44,22 @@ func TestStorytellingTopologyFromDesign_Storage(t *testing.T) {
 	if got.CacheEngine != "redis" || got.CacheRole != "write-through" {
 		t.Fatalf("cache: engine=%q role=%q", got.CacheEngine, got.CacheRole)
 	}
+	if !got.HasProxyCache {
+		t.Fatal("write-through cache should set HasProxyCache")
+	}
+}
+
+func TestStorytellingTopologyFromDesign_CacheAsideNoProxy(t *testing.T) {
+	t.Parallel()
+	d := &DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{Type: "cache", Config: map[string]interface{}{"strategy": "cache-aside"}},
+		},
+	}
+	got := StorytellingTopologyFromDesign(d, "")
+	if got.HasProxyCache {
+		t.Fatal("cache-aside should not set HasProxyCache")
+	}
 }
 
 func TestStorytellingTopologyFromDesign_RedisOnlyPrimary(t *testing.T) {

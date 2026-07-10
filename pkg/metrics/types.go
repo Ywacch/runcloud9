@@ -193,6 +193,30 @@ type ComponentMetrics struct {
 	StorageIO     *StorageIO `json:"storageIo,omitempty"`
 	// RuntimeHealth is populated from the Kubernetes API when clientset is configured.
 	RuntimeHealth *RuntimeHealth `json:"runtimeHealth,omitempty"`
+	// Layers splits cache (and future multi-process components) by role when proxy mode is active.
+	Layers []ComponentLayerMetrics `json:"layers,omitempty"`
+}
+
+// ComponentLayerMetrics holds per-process metrics for a layered component (e.g. redis-internal vs cache-proxy).
+type ComponentLayerMetrics struct {
+	ID       string  `json:"id"`
+	Role     string  `json:"role"`
+	Engine   string  `json:"engine"`
+	CPUUsage float64 `json:"cpuUsage"`
+	// MemoryBytes is working-set bytes for this layer.
+	MemoryBytes    int64   `json:"memoryUsage"`
+	CPULimit       float64 `json:"cpuLimit,omitempty"`
+	MemoryLimit    int64   `json:"memoryLimit,omitempty"`
+	CPUIsEstimated bool    `json:"cpuIsEstimated,omitempty"`
+	MemIsEstimated bool    `json:"memIsEstimated,omitempty"`
+	CPUSource      string  `json:"cpuSource,omitempty"`
+	MemSource      string  `json:"memSource,omitempty"`
+	// Redis exporter signals (backing-store layer only).
+	RedisOpsPerSec      float64 `json:"redisOpsPerSec,omitempty"`
+	RedisKeyspaceHits   float64 `json:"redisKeyspaceHits,omitempty"`
+	RedisKeyspaceMisses float64 `json:"redisKeyspaceMisses,omitempty"`
+	RedisRejectedRate   float64 `json:"redisRejectedRate,omitempty"`
+	RestartCount        int32   `json:"restartCount,omitempty"`
 }
 
 // BackendReplicas tracks desired vs ready app-server pods (LB-facing view).
