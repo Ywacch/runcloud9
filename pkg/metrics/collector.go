@@ -847,6 +847,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	if topo.CacheStrategy != "" {
 		cmCache.CacheStrategy = topo.CacheStrategy
 	}
+	layerSplit := c.collectCacheLayerSplit(ctx, ns)
+	applyCacheLayers(&cmCache, layerSplit)
 	dm.Components["cache"] = cmCache
 
 	cmMQ := ComponentMetrics{Component: "mq"}
@@ -997,6 +999,10 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 
 	tmpl := templates.GetTemplate(template)
 	runtimeEvents := c.attachRuntimeHealth(ctx, namespace, dm)
+	if cm, ok := dm.Components["cache"]; ok {
+		syncCacheLayerRestarts(&cm)
+		dm.Components["cache"] = cm
+	}
 
 	// Attach load generator stats to the metrics snapshot.
 	// UNDERSTAND: load stats are embedded in the existing metrics stream

@@ -17,4 +17,6 @@ type TopologyFlags struct {
 	DBRole      string // e.g. "primary"
 	CacheEngine string // e.g. "redis" when HasCache
 	CacheRole   string // e.g. "cache-aside" | "primary"
+	// HasProxyCache is true when the cache node uses write-through, write-behind, or read-through.
+	HasProxyCache bool
 }

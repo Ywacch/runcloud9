@@ -21,6 +21,23 @@ func TestMetricsTopologyFromDeploymentDesign_Storage(t *testing.T) {
 	if !topo.HasCache || topo.CacheEngine != "redis" || topo.CacheRole != "cache-aside" {
 		t.Fatalf("cache: has=%v engine=%q role=%q", topo.HasCache, topo.CacheEngine, topo.CacheRole)
 	}
+	if topo.HasProxyCache {
+		t.Fatal("cache-aside should not set HasProxyCache")
+	}
+}
+
+func TestMetricsTopologyFromDeploymentDesign_ProxyCache(t *testing.T) {
+	t.Parallel()
+	d := &deployer.DeploymentDesign{
+		Nodes: []deployer.DeploymentNode{
+			{Type: "db"},
+			{Type: "cache", Config: map[string]interface{}{"strategy": "read-through"}},
+		},
+	}
+	topo := MetricsTopologyFromDeploymentDesign(d, "url-shortener")
+	if !topo.HasProxyCache {
+		t.Fatal("read-through should set HasProxyCache")
+	}
 }
 
 func TestMetricsTopologyFromDeploymentDesign_RedisPrimary(t *testing.T) {

@@ -21,5 +21,6 @@ func MetricsTopologyFromDeploymentDesign(d *deployer.DeploymentDesign, template 
 		DBRole:        st.DBRole,
 		CacheEngine:   st.CacheEngine,
 		CacheRole:     st.CacheRole,
+		HasProxyCache: st.HasProxyCache,
 	}
 }
