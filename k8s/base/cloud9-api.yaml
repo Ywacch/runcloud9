@@ -21,7 +21,7 @@ rules:
     resources: ["resourcequotas"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
-    resources: ["services", "services/proxy", "configmaps", "secrets", "pods", "persistentvolumeclaims"]
+    resources: ["services", "services/proxy", "configmaps", "secrets", "pods", "persistentvolumeclaims", "endpoints"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["events"]
