@@ -28,6 +28,9 @@ func setRequestIDHeader(req *http.Request, ctx context.Context) {
 }
 
 func logDBOp(ctx context.Context, operation string, start time.Time) {
+	if !verboseLogsEnabled() {
+		return
+	}
 	rid := requestIDFrom(ctx)
 	if rid == "" {
 		return
@@ -36,6 +39,9 @@ func logDBOp(ctx context.Context, operation string, start time.Time) {
 }
 
 func logCacheGet(ctx context.Context, key string, hit bool, start time.Time) {
+	if !verboseLogsEnabled() {
+		return
+	}
 	rid := requestIDFrom(ctx)
 	if rid == "" {
 		return
@@ -44,6 +50,9 @@ func logCacheGet(ctx context.Context, key string, hit bool, start time.Time) {
 }
 
 func logCacheSet(ctx context.Context, key string, start time.Time) {
+	if !verboseLogsEnabled() {
+		return
+	}
 	rid := requestIDFrom(ctx)
 	if rid == "" {
 		return

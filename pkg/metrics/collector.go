@@ -422,8 +422,8 @@ func (c *MetricsCollector) lbMetadataFromCluster(ctx context.Context, namespace 
 	return algorithm, backends
 }
 
-// nginxWorkerConnections matches worker_connections in pkg/deployer/k8s.go (LB nginx template).
-const nginxWorkerConnections = 1024
+// nginxWorkerConnections matches worker_connections in pkg/deployer/lb.go DefaultLBSpec.
+const nginxWorkerConnections = 4096
 
 func redisCommandPattern(template string) string {
 	switch template {

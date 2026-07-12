@@ -12,6 +12,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/kubernetes"
+)
+
+const (
+	lbConfigMapName              = "lb-config"
+	lbConfigReloadAnnotation     = "cloud9.io/lb-config-reload"
+	lbUpstreamFallbackAnnotation = "cloud9.io/lb-upstream-fallback"
+	lbReconcileRetryWait         = 60 * time.Second
 )
 
 // LBSpec describes the demo nginx load balancer (explicit deploy path, not componentRegistry).
@@ -34,7 +42,7 @@ func DefaultLBSpec() LBSpec {
 		Port:               80,
 		Resources:          ComponentDefaultResources("lb"),
 		WorkerConnections:  4096,
-		UpstreamKeepalive:  32,
+		UpstreamKeepalive:  256,
 		UpstreamRetryWait:  30 * time.Second,
 		UpstreamRetryEvery: 2 * time.Second,
 	}
@@ -47,6 +55,111 @@ type LBEndpointSnapshot struct {
 	Ready   bool   `json:"ready"`
 }
 
+// FindLBNode returns the first lb node in the design, if any.
+func FindLBNode(design DeploymentDesign) (DeploymentNode, bool) {
+	for _, n := range design.Nodes {
+		if n.Type == "lb" {
+			return n, true
+		}
+	}
+	return DeploymentNode{}, false
+}
+
+// ReconcileLBUpstream re-resolves app-server pod IPs after the full deploy wave and
+// updates lb-config so nginx balances per pod instead of a single service upstream.
+func ReconcileLBUpstream(ctx context.Context, clientset kubernetes.Interface, namespace string, design DeploymentDesign) error {
+	lbNode, ok := FindLBNode(design)
+	if !ok {
+		return nil
+	}
+
+	k := NewK8sDeployer(clientset, "lb")
+	spec := DefaultLBSpec()
+	appReplicas := appServerDesiredReplicas(lbNode, design)
+	upstreamHosts, endpointSnap := waitResolveAppServerUpstream(
+		ctx, k, namespace, appReplicas, lbReconcileRetryWait, spec.UpstreamRetryEvery,
+	)
+	if isUpstreamServiceFallback(upstreamHosts, endpointSnap) {
+		return fmt.Errorf("app-server endpoints unavailable: nginx would use service fallback")
+	}
+
+	algo := configString(lbNode.Config, "lbAlgorithm", "round-robin")
+	if cm, err := clientset.CoreV1().ConfigMaps(namespace).Get(ctx, lbConfigMapName, metav1.GetOptions{}); err == nil {
+		if v := cm.Annotations["cloud9.io/lb-algorithm"]; v != "" {
+			algo = v
+		}
+	}
+
+	logicalBackends := lbBackends(lbNode, design)
+	nginxConf := spec.nginxConfig(upstreamHosts, algo)
+
+	cm, err := buildLBConfigMap(lbConfigInput{
+		algo:            algo,
+		logicalBackends: logicalBackends,
+		appReplicas:     appReplicas,
+		upstreamHosts:   upstreamHosts,
+		endpointSnap:    endpointSnap,
+		nginxConf:       nginxConf,
+		serviceFallback: false,
+	})
+	if err != nil {
+		return err
+	}
+	cm.Namespace = namespace
+
+	existing, err := clientset.CoreV1().ConfigMaps(namespace).Get(ctx, lbConfigMapName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get lb configmap: %w", err)
+	}
+	if existing.Data["nginx.conf"] == nginxConf {
+		return nil
+	}
+
+	cm.ObjectMeta.ResourceVersion = existing.ResourceVersion
+	if _, err := clientset.CoreV1().ConfigMaps(namespace).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("update lb configmap: %w", err)
+	}
+	return k.reloadLBDeployment(ctx, namespace)
+}
+
+type lbConfigInput struct {
+	algo            string
+	logicalBackends []string
+	appReplicas     int32
+	upstreamHosts   []string
+	endpointSnap    []LBEndpointSnapshot
+	nginxConf       string
+	serviceFallback bool
+}
+
+func buildLBConfigMap(in lbConfigInput) (*corev1.ConfigMap, error) {
+	endpointsJSON, err := json.Marshal(in.endpointSnap)
+	if err != nil {
+		return nil, fmt.Errorf("marshal lb endpoints: %w", err)
+	}
+	fallback := "false"
+	if in.serviceFallback {
+		fallback = "true"
+	}
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: lbConfigMapName,
+			Annotations: map[string]string{
+				"cloud9.io/lb-algorithm":       in.algo,
+				"cloud9.io/lb-backends":        strings.Join(in.logicalBackends, ","),
+				"cloud9.io/lb-endpoints":       string(endpointsJSON),
+				"cloud9.io/lb-app-replicas":    strconv.FormatInt(int64(in.appReplicas), 10),
+				lbUpstreamFallbackAnnotation:   fallback,
+			},
+		},
+		Data: map[string]string{"nginx.conf": in.nginxConf},
+	}, nil
+}
+
+func isUpstreamServiceFallback(hosts []string, endpoints []LBEndpointSnapshot) bool {
+	return len(endpoints) == 0 && len(hosts) == 1 && hosts[0] == "app-server"
+}
+
 func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources corev1.ResourceRequirements, replicas int32) error {
 	spec := DefaultLBSpec()
 	spec.Resources = resources
@@ -57,26 +170,23 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 	}
 	appReplicas := appServerDesiredReplicas(cfg.Node, cfg.Design)
 	upstreamHosts, endpointSnap := k.waitResolveAppServerUpstream(ctx, cfg.Namespace, appReplicas, spec)
+	serviceFallback := isUpstreamServiceFallback(upstreamHosts, endpointSnap)
 	nginxConf := spec.nginxConfig(upstreamHosts, algo)
 
-	endpointsJSON, err := json.Marshal(endpointSnap)
+	cm, err := buildLBConfigMap(lbConfigInput{
+		algo:            algo,
+		logicalBackends: logicalBackends,
+		appReplicas:     appReplicas,
+		upstreamHosts:   upstreamHosts,
+		endpointSnap:    endpointSnap,
+		nginxConf:       nginxConf,
+		serviceFallback: serviceFallback,
+	})
 	if err != nil {
-		return fmt.Errorf("marshal lb endpoints: %w", err)
+		return err
 	}
+	cm.Namespace = cfg.Namespace
 
-	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "lb-config",
-			Namespace: cfg.Namespace,
-			Annotations: map[string]string{
-				"cloud9.io/lb-algorithm":    algo,
-				"cloud9.io/lb-backends":     strings.Join(logicalBackends, ","),
-				"cloud9.io/lb-endpoints":    string(endpointsJSON),
-				"cloud9.io/lb-app-replicas": strconv.FormatInt(int64(appReplicas), 10),
-			},
-		},
-		Data: map[string]string{"nginx.conf": nginxConf},
-	}
 	if _, err = k.clientset.CoreV1().ConfigMaps(cfg.Namespace).Create(ctx, cm, metav1.CreateOptions{}); err != nil {
 		return fmt.Errorf("create lb configmap: %w", err)
 	}
@@ -111,7 +221,7 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 						Name: "config",
 						VolumeSource: corev1.VolumeSource{
 							ConfigMap: &corev1.ConfigMapVolumeSource{
-								LocalObjectReference: corev1.LocalObjectReference{Name: "lb-config"},
+								LocalObjectReference: corev1.LocalObjectReference{Name: lbConfigMapName},
 							},
 						},
 					}},
@@ -136,6 +246,25 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 	}
 
 	return k.waitForReady(ctx, cfg.Namespace, "lb", replicas)
+}
+
+func (k *K8sDeployer) reloadLBDeployment(ctx context.Context, namespace string) error {
+	dep, err := k.clientset.AppsV1().Deployments(namespace).Get(ctx, "lb", metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get lb deployment: %w", err)
+	}
+	if dep.Spec.Template.Annotations == nil {
+		dep.Spec.Template.Annotations = map[string]string{}
+	}
+	dep.Spec.Template.Annotations[lbConfigReloadAnnotation] = time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := k.clientset.AppsV1().Deployments(namespace).Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("update lb deployment: %w", err)
+	}
+	replicas := int32(1)
+	if dep.Spec.Replicas != nil {
+		replicas = *dep.Spec.Replicas
+	}
+	return k.waitForReady(ctx, namespace, "lb", replicas)
 }
 
 // nginxConfig builds a minimal nginx.conf with an upstream and reverse proxy to app backends.

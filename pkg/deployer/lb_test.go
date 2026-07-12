@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -17,7 +18,7 @@ func TestDefaultLBSpec(t *testing.T) {
 	if spec.Image != imageNginx {
 		t.Fatalf("Image = %q want %q", spec.Image, imageNginx)
 	}
-	if spec.WorkerConnections != 4096 || spec.UpstreamKeepalive != 32 {
+	if spec.WorkerConnections != 4096 || spec.UpstreamKeepalive != 256 {
 		t.Fatalf("nginx tuning: worker_connections=%d keepalive=%d", spec.WorkerConnections, spec.UpstreamKeepalive)
 	}
 	cpu := spec.Resources.Limits.Cpu().String()
@@ -77,7 +78,7 @@ func TestLBSpec_nginxConfig(t *testing.T) {
 	if !strings.Contains(multi, "worker_connections 4096") {
 		t.Fatalf("expected worker_connections 4096: %s", multi)
 	}
-	if !strings.Contains(multi, "keepalive 32") {
+	if !strings.Contains(multi, "keepalive 256") {
 		t.Fatalf("expected upstream keepalive: %s", multi)
 	}
 	if !strings.Contains(multi, "proxy_http_version 1.1") || !strings.Contains(multi, "proxy_read_timeout 60s") {
@@ -226,5 +227,118 @@ func TestWaitResolveAppServerUpstream_timeoutFallback(t *testing.T) {
 	}
 	if len(hosts) != 1 || hosts[0] != "app-server" {
 		t.Fatalf("hosts = %v want [app-server]", hosts)
+	}
+}
+
+func TestFindLBNode(t *testing.T) {
+	t.Parallel()
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "lb1", Type: "lb", Name: "LB"},
+			{ID: "a1", Type: "app-server", Name: "App"},
+		},
+	}
+	node, ok := FindLBNode(design)
+	if !ok || node.ID != "lb1" {
+		t.Fatalf("FindLBNode: got %+v ok=%v", node, ok)
+	}
+}
+
+func TestIsUpstreamServiceFallback(t *testing.T) {
+	t.Parallel()
+	if !isUpstreamServiceFallback([]string{"app-server"}, nil) {
+		t.Fatal("expected service fallback")
+	}
+	if isUpstreamServiceFallback([]string{"10.0.0.1"}, []LBEndpointSnapshot{{PodIP: "10.0.0.1"}}) {
+		t.Fatal("expected pod IP upstream not to be fallback")
+	}
+}
+
+func TestReconcileLBUpstream_rejectsServiceFallback(t *testing.T) {
+	t.Parallel()
+	ns := "cloud9-reconcile-fallback"
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "lb1", Type: "lb", Name: "LB"},
+			{ID: "a1", Type: "app-server", Name: "App", Config: map[string]interface{}{"replicas": 3}},
+		},
+		Connections: []DeploymentConn{{SourceID: "lb1", TargetID: "a1"}},
+	}
+	client := fake.NewSimpleClientset(&corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: lbConfigMapName, Namespace: ns},
+		Data:       map[string]string{"nginx.conf": "old"},
+	})
+	err := ReconcileLBUpstream(context.Background(), client, ns, design)
+	if err == nil {
+		t.Fatal("expected error when endpoints unavailable")
+	}
+}
+
+func TestReconcileLBUpstream_updatesConfigMap(t *testing.T) {
+	t.Parallel()
+	ns := "cloud9-reconcile-update"
+	spec := DefaultLBSpec()
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "lb1", Type: "lb", Name: "LB"},
+			{ID: "a1", Type: "app-server", Name: "App", Config: map[string]interface{}{"replicas": 2}},
+		},
+		Connections: []DeploymentConn{{SourceID: "lb1", TargetID: "a1"}},
+	}
+	upstreamHosts := []string{"10.0.0.1", "10.0.0.2"}
+	wantConf := spec.nginxConfig(upstreamHosts, "round-robin")
+
+	client := fake.NewSimpleClientset(
+		&corev1.Endpoints{
+			ObjectMeta: metav1.ObjectMeta{Name: "app-server", Namespace: ns},
+			Subsets: []corev1.EndpointSubset{{
+				Addresses: []corev1.EndpointAddress{
+					{IP: "10.0.0.1", TargetRef: &corev1.ObjectReference{Name: "app-server-0"}},
+					{IP: "10.0.0.2", TargetRef: &corev1.ObjectReference{Name: "app-server-1"}},
+				},
+			}},
+		},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: lbConfigMapName, Namespace: ns},
+			Data:       map[string]string{"nginx.conf": spec.nginxConfig([]string{"app-server"}, "round-robin")},
+		},
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "lb", Namespace: ns},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: ptr(int32(1)),
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "lb", "deployment": ns}},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "lb", "deployment": ns}},
+				},
+			},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "lb-ready",
+				Namespace: ns,
+				Labels:    map[string]string{"app": "lb", "deployment": ns},
+			},
+			Status: corev1.PodStatus{
+				Conditions: []corev1.PodCondition{{
+					Type:   corev1.PodReady,
+					Status: corev1.ConditionTrue,
+				}},
+			},
+		},
+	)
+
+	if err := ReconcileLBUpstream(context.Background(), client, ns, design); err != nil {
+		t.Fatalf("ReconcileLBUpstream: %v", err)
+	}
+
+	cm, err := client.CoreV1().ConfigMaps(ns).Get(context.Background(), lbConfigMapName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get configmap: %v", err)
+	}
+	if cm.Data["nginx.conf"] != wantConf {
+		t.Fatalf("nginx.conf not updated to pod IPs\nwant contains 10.0.0.1\n got %s", cm.Data["nginx.conf"])
+	}
+	if cm.Annotations[lbUpstreamFallbackAnnotation] != "false" {
+		t.Fatalf("fallback annotation = %q want false", cm.Annotations[lbUpstreamFallbackAnnotation])
 	}
 }
