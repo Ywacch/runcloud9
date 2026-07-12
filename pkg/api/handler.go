@@ -667,6 +667,12 @@ func (h *Handler) orchestrate(
 		}
 	}
 
+	if h.clientset != nil {
+		if err := deployer.ReconcileLBUpstream(ctx, h.clientset, namespace, design); err != nil {
+			log.Printf("lb upstream reconcile failed namespace=%s: %v", namespace, err)
+		}
+	}
+
 	loadgenStatus := loadgenStatusPending(h.clientset)
 	if h.clientset != nil {
 		loadgenStatus = "ready"
