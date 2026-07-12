@@ -272,6 +272,9 @@ func TestReconcileLBUpstream_rejectsServiceFallback(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when endpoints unavailable")
 	}
+	if !strings.Contains(err.Error(), "service fallback") && !strings.Contains(err.Error(), "endpoints") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func TestReconcileLBUpstream_updatesConfigMap(t *testing.T) {

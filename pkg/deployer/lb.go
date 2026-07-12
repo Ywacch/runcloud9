@@ -80,6 +80,9 @@ func ReconcileLBUpstream(ctx context.Context, clientset kubernetes.Interface, na
 		ctx, k, namespace, appReplicas, lbReconcileRetryWait, spec.UpstreamRetryEvery,
 	)
 	if isUpstreamServiceFallback(upstreamHosts, endpointSnap) {
+		if _, err := clientset.CoreV1().Endpoints(namespace).Get(ctx, "app-server", metav1.GetOptions{}); err != nil {
+			return fmt.Errorf("app-server endpoints unavailable (cloud9-api needs get/list on endpoints): %w", err)
+		}
 		return fmt.Errorf("app-server endpoints unavailable: nginx would use service fallback")
 	}
 
@@ -311,6 +314,8 @@ http {
 }
 
 // resolveAppServerUpstream returns nginx upstream hosts (pod IPs when available, else service name).
+// Requires cloud9-api ClusterRole get/list on core Endpoints; without it Get fails and callers
+// receive the app-server service fallback.
 func (k *K8sDeployer) resolveAppServerUpstream(ctx context.Context, namespace string) (hosts []string, endpoints []LBEndpointSnapshot) {
 	ep, err := k.clientset.CoreV1().Endpoints(namespace).Get(ctx, "app-server", metav1.GetOptions{})
 	if err != nil || len(ep.Subsets) == 0 {
