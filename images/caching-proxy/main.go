@@ -214,18 +214,22 @@ func (s *Server) handleSet(w http.ResponseWriter, r *http.Request) {
 	switch s.cfg.Strategy {
 	case "write-through", "read-through":
 		// URLs table persistence only accepts valid URLs (url-shortener). Opaque bodies go to Redis-only paths.
+		// read-through remains accepted as a write strategy until the fold-read-through PR normalizes it away.
 		if _, err := url.ParseRequestURI(req.Value); err != nil {
 			jsonError(w, http.StatusBadRequest, "value is not a valid url")
 			return
 		}
-		// Synchronously persist to DB.
-		if err := s.db.SaveURL(ctx, code, req.Value); err != nil {
-			slog.Error("db SaveURL failed (write-through)", "code", code, "error", err)
-			jsonError(w, http.StatusInternalServerError, "db write failed")
+		// Textbook write-through: Redis first, then DB; DEL on DB failure so no phantom cache entry.
+		if err := writeThrough(ctx, redisKV{s.redis}, s.db, code, req.Value, ttl); err != nil {
+			slog.Error("write-through failed", "code", code, "error", err)
+			msg := "write failed"
+			if errors.Is(err, errWriteThroughCache) {
+				msg = "cache write failed"
+			} else if errors.Is(err, errWriteThroughDB) {
+				msg = "db write failed"
+			}
+			jsonError(w, http.StatusInternalServerError, msg)
 			return
-		}
-		if err := s.redis.Set(ctx, code, req.Value, ttl).Err(); err != nil {
-			slog.Warn("redis SET failed", "code", code, "error", err)
 		}
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	case "write-behind":
