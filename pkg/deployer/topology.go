@@ -521,9 +521,10 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 	switch node.Type {
 	case "app-server":
 		if hasCacheConn && !hasProxyCacheConn {
-			// CACHE_STRATEGY for redis mode comes from the connected cache-aside cache node, not the app-server.
+			// CACHE_STRATEGY for redis mode comes from the connected cache-aside cache node
+			// (strategy / cacheStrategy kept in sync by NormalizeDesign; prefer strategy).
 			if cacheNode, ok := firstNonProxyCacheFromApp(node.ID, design, nodeMap); ok {
-				env["CACHE_STRATEGY"] = configString(cacheNode.Config, "cacheStrategy", "cache-aside")
+				env["CACHE_STRATEGY"] = cacheNodeStrategy(cacheNode)
 			} else {
 				env["CACHE_STRATEGY"] = "cache-aside"
 			}
@@ -553,16 +554,9 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 }
 
 // cacheRedisStrategyForApp is the label shown in UI for app -> Redis (non-proxy) paths.
-// Prefer canvas key "strategy", then legacy "cacheStrategy", else cache-aside.
-// (DeriveEnvVars sets CACHE_STRATEGY from cacheStrategy only — see tests.)
+// Same resolution as cacheNodeStrategy (NormalizeDesign keeps strategy and cacheStrategy identical).
 func cacheRedisStrategyForApp(cacheNode DeploymentNode) string {
-	if s := configString(cacheNode.Config, "strategy", ""); s != "" {
-		return s
-	}
-	if s := configString(cacheNode.Config, "cacheStrategy", ""); s != "" {
-		return s
-	}
-	return "cache-aside"
+	return cacheNodeStrategy(cacheNode)
 }
 
 func configString(config map[string]any, key, defaultVal string) string {

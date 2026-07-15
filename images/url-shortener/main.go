@@ -205,20 +205,8 @@ func (s *Server) handleShorten(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// POST /shorten behaviour depends on cache strategy.
-	switch s.cfg.CacheStrategy {
-	case "cache-aside":
-		// DB row already inserted in allocateCodeDB; cache is populated on reads.
-	case "write-through":
-		if s.cache != nil {
-			if err := s.cache.Set(ctx, code, req.URL, s.cfg.CacheTTL); err != nil {
-				slog.Warn("cache set failed", "error", err)
-			}
-		}
-	default:
-		// DB row already inserted; no cache write.
-	}
-
+	// Cache-aside (redis mode): durable row already inserted in allocateCodeDB.
+	// Redis warms on GET miss. Write-through / write-behind only apply in proxy mode.
 	writeJSON(w, http.StatusCreated, map[string]string{
 		"code":      code,
 		"short_url": "/r/" + code,
