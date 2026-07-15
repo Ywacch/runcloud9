@@ -27,9 +27,17 @@ type ProxyClient struct {
 
 func NewProxyClient(cacheHost, proxyPort string) *ProxyClient {
 	// cacheHost is a Kubernetes service DNS name (e.g. "cache").
+	// Tuned idle pool: under load a bare Client opens a new TCP socket per request.
 	return &ProxyClient{
-		baseURL:    fmt.Sprintf("http://%s:%s", cacheHost, proxyPort),
-		httpClient: &http.Client{Timeout: 10 * time.Second},
+		baseURL: fmt.Sprintf("http://%s:%s", cacheHost, proxyPort),
+		httpClient: &http.Client{
+			Timeout: 10 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:        128,
+				MaxIdleConnsPerHost: 64,
+				IdleConnTimeout:     90 * time.Second,
+			},
+		},
 	}
 }
 

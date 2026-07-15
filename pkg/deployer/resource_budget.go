@@ -125,6 +125,7 @@ func SidecarOverhead(design DeploymentDesign) ResourceBudget {
 }
 
 // ProxyCacheOverhead adds the second main container per proxy-strategy cache node.
+// Uses CacheProxyResources (asymmetric vs redis-internal) so quota matches deploy.
 func ProxyCacheOverhead(design DeploymentDesign) ResourceBudget {
 	var total ResourceBudget
 	for _, node := range design.Nodes {
@@ -135,7 +136,7 @@ func ProxyCacheOverhead(design DeploymentDesign) ResourceBudget {
 		if replicas < 1 {
 			replicas = 1
 		}
-		res := ResolveNodeResources(node.Type, node.Config)
+		res := CacheProxyResources(node.Config)
 		label := budgetNodeLabel(node, replicas) + " cache-proxy"
 		addRequirements(&total, label, res, replicas)
 	}
@@ -274,7 +275,7 @@ func autopilotAdmissionOverhead(design DeploymentDesign, userTier string) Resour
 			addAutopilotContainerSlack(
 				&total,
 				budgetNodeLabel(node, replicas)+" cache-proxy autopilot slack",
-				res,
+				CacheProxyResources(node.Config),
 				replicas,
 			)
 		}

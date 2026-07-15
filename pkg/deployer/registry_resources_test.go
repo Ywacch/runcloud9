@@ -84,6 +84,40 @@ func TestResolveNodeResources_profileOverridesComponentDefault(t *testing.T) {
 	}
 }
 
+func TestCacheProxyResources_oneTierAboveRedis(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		config  map[string]interface{}
+		wantCPU string
+		wantMem string
+	}{
+		{name: "default/small", config: nil, wantCPU: "250m", wantMem: "512Mi"},
+		{name: "small", config: map[string]interface{}{"resourceProfile": "small"}, wantCPU: "250m", wantMem: "512Mi"},
+		{name: "medium", config: map[string]interface{}{"resourceProfile": "medium"}, wantCPU: "500m", wantMem: "1Gi"},
+		{name: "large", config: map[string]interface{}{"resourceProfile": "large"}, wantCPU: "750m", wantMem: "1536Mi"},
+		{name: "alpha", config: map[string]interface{}{"resourceProfile": "alpha"}, wantCPU: "250m", wantMem: "512Mi"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := CacheProxyResources(tc.config)
+			if got.Limits.Cpu().String() != tc.wantCPU {
+				t.Fatalf("cpu: got %s want %s", got.Limits.Cpu(), tc.wantCPU)
+			}
+			if got.Limits.Memory().String() != tc.wantMem {
+				t.Fatalf("memory: got %s want %s", got.Limits.Memory(), tc.wantMem)
+			}
+			redis := ResolveNodeResources("cache", tc.config)
+			if redis.Limits.Cpu().Cmp(*got.Limits.Cpu()) >= 0 {
+				t.Fatalf("proxy cpu %s should exceed redis-internal %s", got.Limits.Cpu(), redis.Limits.Cpu())
+			}
+		})
+	}
+}
+
 func TestResourceCatalogResponse_alphaMatchesSmall(t *testing.T) {
 	t.Parallel()
 
