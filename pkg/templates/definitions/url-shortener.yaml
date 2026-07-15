@@ -105,7 +105,7 @@ seed:
   container: postgres
   podLabel: app=postgres
 
-# Caching-proxy read-through: value returned to app is the original URL string only.
+# Proxy GET miss-fill (always-on for write-through / write-behind): value is the original URL string only.
 proxyQueries:
   - pattern: '^([^:]+)$'
     sql: SELECT original FROM urls WHERE code = $1
@@ -127,11 +127,13 @@ storytelling:
       base: "Redis holds short code to URL mappings"
       variants:
         - when: { strategy: "write-through" }
-          label: "SET hits Redis first; the caching proxy writes the row to Postgres before the write completes"
+          label: >-
+            SET hits Redis first; the caching proxy writes Postgres before ack.
+            On miss, the proxy loads from Postgres and refills Redis (read-through is always on).
         - when: { strategy: "write-behind" }
-          label: "SET lands in Redis; the proxy flushes the row to Postgres later"
-        - when: { strategy: "read-through" }
-          label: "On miss the proxy runs SQL, fills Redis, and returns the URL"
+          label: >-
+            SET lands in Redis; the proxy flushes Postgres later.
+            On miss, the proxy loads from Postgres and refills Redis (read-through is always on).
         - when: { strategy: "cache-aside" }
           label: "App checks Redis; on miss it reads Postgres and SETs the key"
     db:
@@ -154,7 +156,7 @@ storytelling:
           action: "Looks up the short code."
           metricsKey: p99Latency
         - component: cache
-          action: "GET short:{code} — hot path for popular links."
+          action: "GET short:{code} ; hot path for popular links."
           metricsKey: redisAvgLatency
           requires: [cache]
           lesson: >-
@@ -164,27 +166,28 @@ storytelling:
           detail: "SELECT url FROM urls WHERE code = ?"
           requires: [db]
           condition: "On miss"
-          excludeWhen: { strategy: "read-through" }
+          onlyWhen: { strategy: "cache-aside" }
           lesson: >-
             Cache-aside miss: the app loads the row and can warm Redis for the next GET.
         - component: db
-          action: "On miss, the caching proxy runs configured SQL, repopulates short:{code}, then returns the URL to the app."
-          detail: "Proxy-driven SELECT + backfill"
+          action: "On miss, the caching proxy runs configured SQL, repopulates the key, then returns the URL to the app."
+          detail: "Proxy-driven SELECT + backfill (read-through, always on in proxy mode)"
           requires: [db]
           condition: "On miss"
-          onlyWhen: { strategy: "read-through" }
+          excludeWhen: { strategy: "cache-aside" }
+          lesson: >-
+            Proxy miss-fill: your app never talks to Postgres on reads. The caching proxy owns the load.
       explanation: >-
         Classic cache-aside: try Redis for the mapping, fall back to Postgres on miss.
       explanationVariants:
         - when: { strategy: "write-through" }
           text: >-
-            Write-through: Redis stays warm for recently shortened codes because every write lands in the cache layer before durable storage; resolves rarely miss for fresh keys.
+            Write-through: every write lands in Redis then Postgres before ack, so fresh codes stay warm.
+            On miss, the proxy still loads from Postgres and refills Redis (read-through is always on).
         - when: { strategy: "write-behind" }
           text: >-
-            Write-behind: new codes appear in Redis immediately while Postgres persistence trails; hot keys stay warm so resolves are fast once the async flush completes.
-        - when: { strategy: "read-through" }
-          text: >-
-            Read-through: the app still checks Redis first; on miss the caching proxy loads from Postgres, fills short:{code}, and serves the mapping without the app hand-rolling a second hop.
+            Write-behind: new codes appear in Redis immediately while Postgres persistence trails.
+            On miss, the proxy loads from Postgres and refills Redis (read-through is always on).
     - id: shorten
       method: POST
       path: "/shorten"
@@ -197,42 +200,34 @@ storytelling:
         - component: app-server
           action: "Allocates a code, persists the mapping, returns short URL."
           metricsKey: p99Latency
-        # cache-aside (default): durable row first, then warm Redis.
+        # cache-aside: durable row first; Redis warms on next GET (immutable codes).
         - component: db
           action: "INSERT mapping (code → original URL)."
           requires: [db]
           onlyWhen: { strategy: "cache-aside" }
         - component: cache
-          action: "SET short:{code} after durable insert."
+          action: "No Redis write on create; the next GET /r/{code} miss warms the cache."
           metricsKey: redisAvgLatency
           requires: [cache]
           onlyWhen: { strategy: "cache-aside" }
-        # read-through writes: same order as cache-aside (DB first → cache).
-        - component: db
-          action: "INSERT mapping (code → original URL)."
-          requires: [db]
-          onlyWhen: { strategy: "read-through" }
-        - component: cache
-          action: "SET short:{code} after durable insert (same write shape as cache-aside)."
-          metricsKey: redisAvgLatency
-          requires: [cache]
-          onlyWhen: { strategy: "read-through" }
+          lesson: >-
+            Cache-aside here does not SET on write; codes are immutable, so the first resolve populates Redis.
         # write-through: cache first; proxy persists to Postgres synchronously.
         - component: cache
-          action: "SET short:{code} — caching proxy persists to Postgres before completing the write."
+          action: "SET short:{code}; caching proxy persists to Postgres before completing the write."
           metricsKey: redisAvgLatency
           requires: [cache]
           onlyWhen: { strategy: "write-through" }
           lesson: >-
             Write-through: Redis accepts first; the proxy persists to Postgres before the
-            write completes so later GETs stay warm.
+            write completes so later GETs stay warm. On DB failure the proxy deletes the cache key.
         - component: db
           action: "Row written via caching-proxy after Redis accept."
           requires: [db]
           onlyWhen: { strategy: "write-through" }
         # write-behind: cache first; Postgres updated asynchronously by proxy.
         - component: cache
-          action: "SET short:{code} — proxy acknowledges immediately; durable INSERT is asynchronous."
+          action: "SET short:{code}; proxy acknowledges immediately; durable INSERT is asynchronous."
           metricsKey: redisAvgLatency
           requires: [cache]
           onlyWhen: { strategy: "write-behind" }
@@ -241,17 +236,15 @@ storytelling:
           requires: [db]
           onlyWhen: { strategy: "write-behind" }
       explanation: >-
-        Cache-aside write path: insert into Postgres first, then SET Redis so GET /r/{code} stays fast.
+        Cache-aside write path: insert into Postgres; Redis is populated on the first successful resolve.
       explanationVariants:
         - when: { strategy: "write-through" }
           text: >-
-            Write-through: the app writes to Redis first; the caching-proxy persists to Postgres synchronously before the write completes.
+            Write-through: the app writes to the proxy; Redis is set first and Postgres is persisted
+            synchronously before the write completes (with cache rollback if the DB write fails).
         - when: { strategy: "write-behind" }
           text: >-
             Write-behind: Redis accepts SET immediately for low latency; the proxy flushes the row to Postgres in the background (brief window where Redis is ahead of durable storage).
-        - when: { strategy: "read-through" }
-          text: >-
-            Read-through resolves use the proxy on reads, but writes for this template still follow DB-first then SET so the mapping is durable before it is advertised in Redis.
   narrativeContext:
     db_latency:
       cause: "URL lookups hit Postgres directly on cache miss."

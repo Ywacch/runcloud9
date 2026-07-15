@@ -54,10 +54,7 @@ func StorytellingTopologyFromDesign(d *DeploymentDesign, template string) Storyt
 				t.HasProxyCache = true
 			}
 			if t.CacheStrategy == "" {
-				t.CacheStrategy = configStringFromNodeConfig(n.Config, "strategy")
-			}
-			if t.CacheStrategy == "" {
-				t.CacheStrategy = configStringFromNodeConfig(n.Config, "cacheStrategy")
+				t.CacheStrategy = cacheNodeStrategy(n)
 			}
 		}
 	}

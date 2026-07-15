@@ -20,6 +20,10 @@ func TestCacheImage_UsesTemplateImageTag(t *testing.T) {
 	if got != want {
 		t.Fatalf("cacheImage(write-through): got %q want %q", got, want)
 	}
+	gotRT := cacheImage("read-through")
+	if gotRT != want {
+		t.Fatalf("cacheImage(read-through): got %q want %q (legacy fold)", gotRT, want)
+	}
 }
 
 func TestNewCacheProxyContainer_SetsPullAlways(t *testing.T) {

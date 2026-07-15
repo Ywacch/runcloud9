@@ -79,7 +79,8 @@ func cacheServiceHTTPPort(design map[string]any) int {
 				strategy = s
 			}
 		}
-		switch strategy {
+		// Fold legacy read-through → write-through for port selection.
+		switch strings.ToLower(strings.TrimSpace(strategy)) {
 		case "write-through", "write-behind", "read-through":
 			return 8081
 		default:
@@ -90,7 +91,7 @@ func cacheServiceHTTPPort(design map[string]any) int {
 }
 
 // resolveIntrospectRedisHost returns the in-cluster Service name for Redis introspection.
-// Proxy strategies (write-through, write-behind, read-through) expose HTTP on Service "cache"
+// Proxy strategies (write-through, write-behind; legacy read-through) expose HTTP on Service "cache"
 // and Redis on Service "redis-internal"; cache-aside uses Service "cache" for Redis directly.
 func resolveIntrospectRedisHost(design map[string]any) string {
 	if cacheServiceHTTPPort(design) == 8081 {

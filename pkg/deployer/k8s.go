@@ -343,7 +343,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 		}
 
 		proxyLabels := map[string]string{"app": "cache-proxy", "deployment": cfg.Namespace}
-		proxyStrategy := configString(cfg.Node.Config, "strategy", "write-through")
+		proxyStrategy := cacheNodeStrategy(cfg.Node)
 		proxyEnv := append(
 			envMapToK8s(envVars),
 			corev1.EnvVar{Name: "REDIS_HOST", Value: "redis-internal"},
@@ -770,8 +770,9 @@ func cacheImage(strategy string) string {
 	}
 	tag := templates.ImageTag("caching-proxy")
 	// UNDERSTAND: cache-aside uses plain Redis; proxy strategies use a custom Go service.
-	switch strategy {
-	case "write-through", "write-behind", "read-through":
+	// Canonicalize so legacy strategy=read-through still gets the proxy image.
+	switch CanonicalCacheStrategy(strategy) {
+	case "write-through", "write-behind":
 		return registry + "/caching-proxy:" + tag
 	default:
 		return imageRedis

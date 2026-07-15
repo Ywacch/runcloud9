@@ -5,10 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
+
+// canonicalProxyStrategy folds legacy STRATEGY=read-through to write-through.
+// GET miss-fill (proxyQueries) remains always-on regardless of write strategy.
+func canonicalProxyStrategy(strategy string) string {
+	s := strings.TrimSpace(strategy)
+	if strings.EqualFold(s, "read-through") {
+		return "write-through"
+	}
+	return s
+}
 
 // Sentinel errors so HTTP handlers can map failures without string matching.
 var (

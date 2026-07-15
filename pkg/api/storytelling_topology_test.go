@@ -36,7 +36,11 @@ func TestMetricsTopologyFromDeploymentDesign_ProxyCache(t *testing.T) {
 	}
 	topo := MetricsTopologyFromDeploymentDesign(d, "url-shortener")
 	if !topo.HasProxyCache {
-		t.Fatal("read-through should set HasProxyCache")
+		t.Fatal("legacy read-through should set HasProxyCache")
+	}
+	if topo.CacheStrategy != "write-through" || topo.CacheRole != "write-through" {
+		t.Fatalf("legacy read-through should fold to write-through: strategy=%q role=%q",
+			topo.CacheStrategy, topo.CacheRole)
 	}
 }
 

@@ -732,3 +732,70 @@ func TestDisplayCacheStrategyForApp_NoCacheEdge(t *testing.T) {
 		t.Fatalf("want empty, got %q", got)
 	}
 }
+
+func TestCanonicalCacheStrategy(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in, want string
+	}{
+		{"write-through", "write-through"},
+		{"write-behind", "write-behind"},
+		{"cache-aside", "cache-aside"},
+		{"read-through", "write-through"},
+		{"READ-THROUGH", "write-through"},
+		{"  read-through  ", "write-through"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.in, func(t *testing.T) {
+			t.Parallel()
+			if got := CanonicalCacheStrategy(tc.in); got != tc.want {
+				t.Fatalf("CanonicalCacheStrategy(%q)=%q want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRequiresProxy_ReadThroughLegacy(t *testing.T) {
+	t.Parallel()
+	n := DeploymentNode{
+		Type:   "cache",
+		Config: map[string]any{"strategy": "read-through"},
+	}
+	if !RequiresProxy(n) {
+		t.Fatal("legacy read-through must still require proxy topology")
+	}
+	if got := cacheNodeStrategy(n); got != "write-through" {
+		t.Fatalf("cacheNodeStrategy: got %q want write-through", got)
+	}
+}
+
+func TestDeriveEnvVars_ReadThroughNormalizesSTRATEGY(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "a", Type: "app-server", Name: "API Server"},
+			{ID: "d", Type: "db", Name: "PostgreSQL"},
+			{
+				ID:   "c",
+				Type: "cache",
+				Name: "Redis",
+				Config: map[string]any{
+					"strategy":        "read-through",
+					"cacheTtlSeconds": float64(90),
+				},
+			},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "a", TargetID: "c", Protocol: "TCP"},
+			{SourceID: "c", TargetID: "d", Protocol: "TCP"},
+		},
+	}
+	env := DeriveEnvVars(design.Nodes[2], design)
+	if env["STRATEGY"] != "write-through" {
+		t.Fatalf("STRATEGY: got %q want write-through", env["STRATEGY"])
+	}
+	if got := DisplayCacheStrategyForApp("a", design); got != "write-through" {
+		t.Fatalf("DisplayCacheStrategyForApp: got %q want write-through", got)
+	}
+}
