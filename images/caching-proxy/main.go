@@ -55,7 +55,7 @@ func mustEnv(key string) string {
 func loadConfig() Config {
 	dbHost := mustEnv("DB_HOST")
 	redisHost := mustEnv("REDIS_HOST")
-	strategy := os.Getenv("STRATEGY")
+	strategy := canonicalProxyStrategy(os.Getenv("STRATEGY"))
 	if strategy == "" {
 		slog.Error("required env missing", "key", "STRATEGY")
 		os.Exit(1)
@@ -212,9 +212,9 @@ func (s *Server) handleSet(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	switch s.cfg.Strategy {
-	case "write-through", "read-through":
+	case "write-through":
 		// URLs table persistence only accepts valid URLs (url-shortener). Opaque bodies go to Redis-only paths.
-		// read-through remains accepted as a write strategy until the fold-read-through PR normalizes it away.
+		// Miss-fill on GET (read-through behavior) is always-on for every proxy STRATEGY; it is not a write mode.
 		if _, err := url.ParseRequestURI(req.Value); err != nil {
 			jsonError(w, http.StatusBadRequest, "value is not a valid url")
 			return

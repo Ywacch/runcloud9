@@ -65,6 +65,29 @@ func (f *fakeURLStore) SaveURL(_ context.Context, code, original string) error {
 	return f.err
 }
 
+func TestCanonicalProxyStrategy(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in, want string
+	}{
+		{"write-through", "write-through"},
+		{"write-behind", "write-behind"},
+		{"read-through", "write-through"},
+		{"READ-THROUGH", "write-through"},
+		{"  read-through  ", "write-through"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.in, func(t *testing.T) {
+			t.Parallel()
+			if got := canonicalProxyStrategy(tc.in); got != tc.want {
+				t.Fatalf("canonicalProxyStrategy(%q)=%q want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestWriteThrough(t *testing.T) {
 	t.Parallel()
 

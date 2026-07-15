@@ -88,7 +88,7 @@ type TopologyHint struct {
 	Position [2]float64 `json:"position"` // x, z for 2D preview
 }
 
-// ProxyQueryRule maps cache keys (regex) to SQL for caching-proxy read-through misses.
+// ProxyQueryRule maps cache keys (regex) to SQL for caching-proxy GET miss-fill (always-on in proxy mode).
 // Serialized to queries.yaml in cluster; duplicated struct shape in images/caching-proxy.
 type ProxyQueryRule struct {
 	Pattern string      `json:"-" yaml:"pattern"`

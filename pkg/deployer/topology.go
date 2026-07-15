@@ -4,17 +4,41 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 func requiresProxy(cacheNode DeploymentNode) bool {
 	return RequiresProxy(cacheNode)
 }
 
-// RequiresProxy reports whether the cache node uses proxy strategies (write-through, write-behind, read-through).
+// CanonicalCacheStrategy folds legacy selectable names into teaching-facing strategies.
+// "read-through" is not a distinct write strategy: proxy GET miss-fill (DB → Redis) runs for
+// all proxy modes. Legacy canvases that still store strategy=read-through deploy as write-through.
+func CanonicalCacheStrategy(strategy string) string {
+	s := strings.TrimSpace(strategy)
+	if strings.EqualFold(s, "read-through") {
+		return "write-through"
+	}
+	return s
+}
+
+// cacheNodeStrategy returns the effective cache strategy for a node (canonicalized).
+func cacheNodeStrategy(cacheNode DeploymentNode) string {
+	s := configString(cacheNode.Config, "strategy", "")
+	if s == "" {
+		s = configString(cacheNode.Config, "cacheStrategy", "")
+	}
+	if s == "" {
+		return "cache-aside"
+	}
+	return CanonicalCacheStrategy(s)
+}
+
+// RequiresProxy reports whether the cache node uses a proxy strategy (write-through, write-behind).
+// Legacy strategy "read-through" is treated as write-through (still proxy).
 func RequiresProxy(cacheNode DeploymentNode) bool {
-	strategy := configString(cacheNode.Config, "strategy", "cache-aside")
-	switch strategy {
-	case "write-through", "write-behind", "read-through":
+	switch cacheNodeStrategy(cacheNode) {
+	case "write-through", "write-behind":
 		return true
 	default:
 		return false
@@ -38,7 +62,7 @@ func DisplayCacheStrategyForApp(appServerID string, design DeploymentDesign) str
 			continue
 		}
 		if requiresProxy(target) {
-			return configString(target.Config, "strategy", "write-through")
+			return cacheNodeStrategy(target)
 		}
 		return cacheRedisStrategyForApp(target)
 	}
@@ -96,7 +120,7 @@ func ValidateTopology(design DeploymentDesign) error {
 		}
 
 		if !hasDBConn {
-			strategy := configString(cacheNode.Config, "strategy", "cache-aside")
+			strategy := cacheNodeStrategy(cacheNode)
 			return fmt.Errorf(
 				"cache node %q has strategy %q but is not connected to a db node",
 				cacheNode.Name,
@@ -119,11 +143,11 @@ func ValidateTopology(design DeploymentDesign) error {
 				continue
 			}
 			if target.Type == "db" {
-				strategy := configString(cacheNode.Config, "strategy", "cache-aside")
+				strategy := cacheNodeStrategy(cacheNode)
 				return fmt.Errorf(
 					"cache node %q uses non-proxy strategy %q but is connected to db %q — "+
 						"Non-proxy cache stores do not connect to the database directly; "+
-						"remove the cache -> db edge, or change strategy to write-through/read-through",
+						"remove the cache -> db edge, or change strategy to write-through/write-behind",
 					cacheNode.Name, strategy, target.Name,
 				)
 			}
@@ -512,7 +536,7 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 		env["DB_REPLICATION"] = configString(node.Config, "replicationMode", "none")
 	case "cache":
 		if cacheProxy {
-			env["STRATEGY"] = configString(node.Config, "strategy", "write-through")
+			env["STRATEGY"] = cacheNodeStrategy(node)
 			env["CACHE_TTL"] = configString(node.Config, "cacheTtlSeconds", "300")
 			env["WRITE_BEHIND_INTERVAL"] = configString(node.Config, "writeBehindIntervalSeconds", "30")
 		}

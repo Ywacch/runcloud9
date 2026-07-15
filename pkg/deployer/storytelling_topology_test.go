@@ -62,6 +62,26 @@ func TestStorytellingTopologyFromDesign_CacheAsideNoProxy(t *testing.T) {
 	}
 }
 
+func TestStorytellingTopologyFromDesign_ReadThroughFoldsToWriteThrough(t *testing.T) {
+	t.Parallel()
+	d := &DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{Type: "db"},
+			{Type: "cache", Config: map[string]interface{}{"strategy": "read-through"}},
+		},
+	}
+	got := StorytellingTopologyFromDesign(d, "")
+	if !got.HasProxyCache {
+		t.Fatal("legacy read-through should still be a proxy topology")
+	}
+	if got.CacheStrategy != "write-through" {
+		t.Fatalf("CacheStrategy: want write-through, got %q", got.CacheStrategy)
+	}
+	if got.CacheRole != "write-through" {
+		t.Fatalf("CacheRole: want write-through, got %q", got.CacheRole)
+	}
+}
+
 func TestStorytellingTopologyFromDesign_RedisOnlyPrimary(t *testing.T) {
 	t.Parallel()
 	d := &DeploymentDesign{
