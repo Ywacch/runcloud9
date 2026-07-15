@@ -147,3 +147,58 @@ func TestNormalizeDesign_instanceSizeToResourceProfile(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeDesign_cacheStrategyKeys(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		config map[string]interface{}
+		want   string
+	}{
+		{
+			name:   "strategy wins over conflicting cacheStrategy",
+			config: map[string]interface{}{"strategy": "cache-aside", "cacheStrategy": "write-through"},
+			want:   "cache-aside",
+		},
+		{
+			name:   "cacheStrategy alone",
+			config: map[string]interface{}{"cacheStrategy": "write-behind"},
+			want:   "write-behind",
+		},
+		{
+			name:   "legacy read-through folds to write-through",
+			config: map[string]interface{}{"strategy": "read-through"},
+			want:   "write-through",
+		},
+		{
+			name:   "empty defaults to cache-aside",
+			config: map[string]interface{}{},
+			want:   "cache-aside",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			d := DeploymentDesign{
+				Nodes: []DeploymentNode{{
+					ID:     "c1",
+					Type:   "cache",
+					Name:   "Redis",
+					Config: tt.config,
+				}},
+			}
+			NormalizeDesign(&d)
+			gotStrategy := configString(d.Nodes[0].Config, "strategy", "")
+			gotLegacy := configString(d.Nodes[0].Config, "cacheStrategy", "")
+			if gotStrategy != tt.want {
+				t.Fatalf("strategy: got %q want %q", gotStrategy, tt.want)
+			}
+			if gotLegacy != tt.want {
+				t.Fatalf("cacheStrategy: got %q want %q", gotLegacy, tt.want)
+			}
+		})
+	}
+}

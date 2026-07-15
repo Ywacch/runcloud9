@@ -278,6 +278,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 							{
 								Name:      "redis",
 								Image:     imageRedis,
+								Args:      redisServerArgs(cfg.Node.Config, resources),
 								Ports:     []corev1.ContainerPort{{ContainerPort: 6379}},
 								Resources: resources,
 								ReadinessProbe: &corev1.Probe{
@@ -439,6 +440,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 						{
 							Name:      "redis",
 							Image:     cacheImage("cache-aside"),
+							Args:      redisServerArgs(cfg.Node.Config, resources),
 							Ports:     []corev1.ContainerPort{{ContainerPort: 6379}},
 							Resources: resources,
 							Env:       envMapToK8s(envVars),

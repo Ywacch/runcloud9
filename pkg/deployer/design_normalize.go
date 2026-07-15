@@ -30,6 +30,10 @@ func normalizeNodeConfig(n *DeploymentNode) {
 		}
 	}
 
+	if n.Type == "cache" {
+		normalizeCacheStrategyKeys(n)
+	}
+
 	if n.Type != "lb" {
 		return
 	}
@@ -40,4 +44,25 @@ func normalizeNodeConfig(n *DeploymentNode) {
 		}
 		delete(n.Config, "algorithm")
 	}
+}
+
+// normalizeCacheStrategyKeys keeps strategy and cacheStrategy identical.
+// Prefer strategy when set; otherwise cacheStrategy; default cache-aside.
+// Conflicting values resolve to strategy (after CanonicalCacheStrategy).
+func normalizeCacheStrategyKeys(n *DeploymentNode) {
+	if n.Config == nil {
+		n.Config = map[string]interface{}{}
+	}
+	strat := configString(n.Config, "strategy", "")
+	legacy := configString(n.Config, "cacheStrategy", "")
+	chosen := strat
+	if chosen == "" {
+		chosen = legacy
+	}
+	if chosen == "" {
+		chosen = "cache-aside"
+	}
+	chosen = CanonicalCacheStrategy(chosen)
+	n.Config["strategy"] = chosen
+	n.Config["cacheStrategy"] = chosen
 }

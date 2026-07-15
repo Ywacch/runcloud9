@@ -274,11 +274,7 @@ func TestDeriveEnvVars_AppServerConnectedToDBAndCache(t *testing.T) {
 				},
 			},
 			{ID: "d", Type: "db", Name: "PostgreSQL"},
-			// Cache node uses two different config keys on purpose (see pkg/deployer/topology.go):
-			//   "strategy"       — consumed by requiresProxy: cache-aside => direct Redis, not caching-proxy.
-			//   "cacheStrategy"  — consumed by DeriveEnvVars for app-server CACHE_STRATEGY (url-shortener redis mode).
-			// They are not duplicates: e.g. strategy=cache-aside with cacheStrategy=write-through means
-			// "plain Redis deployment" + "app uses write-through against Redis+DB" — not a mistake.
+			// Prefer strategy when strategy and cacheStrategy disagree (NormalizeDesign syncs both).
 			{
 				ID:   "c",
 				Type: "cache",
@@ -307,8 +303,8 @@ func TestDeriveEnvVars_AppServerConnectedToDBAndCache(t *testing.T) {
 	if env["CACHE_PORT"] != "6379" {
 		t.Fatalf("expected CACHE_PORT=6379, got %q", env["CACHE_PORT"])
 	}
-	if env["CACHE_STRATEGY"] != "write-through" {
-		t.Fatalf("expected CACHE_STRATEGY=write-through from cache node, got %q", env["CACHE_STRATEGY"])
+	if env["CACHE_STRATEGY"] != "cache-aside" {
+		t.Fatalf("expected CACHE_STRATEGY=cache-aside (strategy wins over cacheStrategy), got %q", env["CACHE_STRATEGY"])
 	}
 	if env["CACHE_TTL"] != "60" {
 		t.Fatalf("expected CACHE_TTL=60 from app-server config, got %q", env["CACHE_TTL"])
