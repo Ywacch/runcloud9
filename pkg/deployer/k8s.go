@@ -344,13 +344,14 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 
 		proxyLabels := map[string]string{"app": "cache-proxy", "deployment": cfg.Namespace}
 		proxyStrategy := cacheNodeStrategy(cfg.Node)
+		proxyResources := CacheProxyResources(cfg.Node.Config)
 		proxyEnv := append(
 			envMapToK8s(envVars),
 			corev1.EnvVar{Name: "REDIS_HOST", Value: "redis-internal"},
 			corev1.EnvVar{Name: "REDIS_PORT", Value: "6379"},
 			corev1.EnvVar{Name: "PORT", Value: "8081"},
 		)
-		proxyContainer := newCacheProxyContainer(cacheImage(proxyStrategy), resources, proxyEnv)
+		proxyContainer := newCacheProxyContainer(cacheImage(proxyStrategy), proxyResources, proxyEnv)
 		proxyContainer.VolumeMounts = []corev1.VolumeMount{{
 			Name:      "proxy-queries",
 			MountPath: "/etc/proxy/queries.yaml",

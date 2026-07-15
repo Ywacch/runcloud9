@@ -162,8 +162,30 @@ func TestQuotaResourceLimits_proxyCacheDoublesMainWorkloads(t *testing.T) {
 
 	assertQuantityEqual(t, user.CPU, "375m", "user cpu")
 	assertQuantityEqual(t, SidecarOverhead(design).CPU, "25m", "exporter cpu")
-	assertQuantityEqual(t, ProxyCacheOverhead(design).CPU, "125m", "proxy extra cpu")
-	assertQuantityEqual(t, quota.CPU, "525m", "quota cpu with overhead")
+	// Proxy is sized one tier above redis-internal (default cache small → proxy medium).
+	assertQuantityEqual(t, ProxyCacheOverhead(design).CPU, "250m", "proxy extra cpu")
+	assertQuantityEqual(t, quota.CPU, "650m", "quota cpu with overhead")
+}
+
+func TestProxyCacheOverhead_mediumProfile(t *testing.T) {
+	t.Parallel()
+
+	design := DeploymentDesign{
+		Template: "url-shortener",
+		Nodes: []DeploymentNode{
+			{
+				ID:   "cache-1",
+				Type: "cache",
+				Name: "Redis",
+				Config: map[string]interface{}{
+					"strategy":        "write-through",
+					"resourceProfile": "medium",
+				},
+			},
+		},
+	}
+	NormalizeDesign(&design)
+	assertQuantityEqual(t, ProxyCacheOverhead(design).CPU, "500m", "medium canvas → large proxy")
 }
 
 func TestSidecarOverhead_cacheAsideOnlyOnRedis(t *testing.T) {

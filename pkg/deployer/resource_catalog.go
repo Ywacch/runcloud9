@@ -104,6 +104,33 @@ func ResolveNodeResources(nodeType string, config map[string]interface{}) corev1
 	return ComponentDefaultResources(nodeType)
 }
 
+// cacheProfileName returns the canvas sizing profile for a cache node.
+// Empty config matches ResolveNodeResources(cache) → small.
+func cacheProfileName(config map[string]interface{}) string {
+	if prof := configString(config, "resourceProfile", ""); prof != "" {
+		return prof
+	}
+	return "small"
+}
+
+// CacheProxyResources returns limits for the caching-proxy Deployment given the
+// canvas cache node's profile. One tier above redis-internal: the proxy does
+// HTTP + sync/async DB work while Redis is mostly a backing GET/SET store.
+//
+//	small  → 250m / 512Mi
+//	medium → 500m / 1Gi
+//	large  → 750m / 1536Mi
+func CacheProxyResources(config map[string]interface{}) corev1.ResourceRequirements {
+	switch cacheProfileName(config) {
+	case "large":
+		return resourceRequirements("750m", "1536Mi", "200Mi")
+	case "medium":
+		return resourceRequirements("500m", "1Gi", "200Mi")
+	default: // small, alpha, unknown
+		return resourceRequirements("250m", "512Mi", "100Mi")
+	}
+}
+
 func resourceRequirements(cpu, mem, ephemeral string) corev1.ResourceRequirements {
 	cpuQty := resource.MustParse(cpu)
 	memQty := resource.MustParse(mem)
