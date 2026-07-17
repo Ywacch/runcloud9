@@ -202,3 +202,62 @@ func TestNormalizeDesign_cacheStrategyKeys(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeDesign_proxyInstanceSize(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		config map[string]interface{}
+		want   string
+		set    bool
+	}{
+		{
+			name:   "proxyInstanceSize maps to proxyResourceProfile",
+			config: map[string]interface{}{"proxyInstanceSize": "large"},
+			want:   "large",
+			set:    true,
+		},
+		{
+			name: "proxyResourceProfile wins over proxyInstanceSize",
+			config: map[string]interface{}{
+				"proxyInstanceSize":    "large",
+				"proxyResourceProfile": "small",
+			},
+			want: "small",
+			set:  true,
+		},
+		{
+			name:   "absent proxy size leaves proxyResourceProfile unset",
+			config: map[string]interface{}{"instanceSize": "medium"},
+			set:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			d := DeploymentDesign{
+				Nodes: []DeploymentNode{{
+					ID:     "c1",
+					Type:   "cache",
+					Name:   "Redis",
+					Config: tt.config,
+				}},
+			}
+			NormalizeDesign(&d)
+			got, ok := d.Nodes[0].Config["proxyResourceProfile"]
+			if tt.set {
+				if !ok {
+					t.Fatal("proxyResourceProfile not set")
+				}
+				if got != tt.want {
+					t.Fatalf("proxyResourceProfile: got %v want %q", got, tt.want)
+				}
+			} else if ok {
+				t.Fatalf("proxyResourceProfile should be unset, got %v", got)
+			}
+		})
+	}
+}

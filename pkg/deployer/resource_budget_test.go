@@ -188,6 +188,28 @@ func TestProxyCacheOverhead_mediumProfile(t *testing.T) {
 	assertQuantityEqual(t, ProxyCacheOverhead(design).CPU, "500m", "medium canvas → large proxy")
 }
 
+func TestProxyCacheOverhead_explicitSmallProxy(t *testing.T) {
+	t.Parallel()
+
+	design := DeploymentDesign{
+		Template: "url-shortener",
+		Nodes: []DeploymentNode{
+			{
+				ID:   "cache-1",
+				Type: "cache",
+				Name: "Redis",
+				Config: map[string]interface{}{
+					"strategy":             "write-through",
+					"resourceProfile":      "medium",
+					"proxyResourceProfile": "small",
+				},
+			},
+		},
+	}
+	NormalizeDesign(&design)
+	assertQuantityEqual(t, ProxyCacheOverhead(design).CPU, "250m", "explicit small proxy")
+}
+
 func TestSidecarOverhead_cacheAsideOnlyOnRedis(t *testing.T) {
 	t.Parallel()
 

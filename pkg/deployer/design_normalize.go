@@ -32,6 +32,7 @@ func normalizeNodeConfig(n *DeploymentNode) {
 
 	if n.Type == "cache" {
 		normalizeCacheStrategyKeys(n)
+		normalizeCacheProxySizeKeys(n)
 	}
 
 	if n.Type != "lb" {
@@ -65,4 +66,18 @@ func normalizeCacheStrategyKeys(n *DeploymentNode) {
 	chosen = CanonicalCacheStrategy(chosen)
 	n.Config["strategy"] = chosen
 	n.Config["cacheStrategy"] = chosen
+}
+
+// normalizeCacheProxySizeKeys maps canvas proxyInstanceSize → proxyResourceProfile
+// the same way instanceSize → resourceProfile for Redis.
+func normalizeCacheProxySizeKeys(n *DeploymentNode) {
+	if n.Config == nil {
+		return
+	}
+	if _, has := n.Config["proxyResourceProfile"]; has {
+		return
+	}
+	if size, ok := n.Config["proxyInstanceSize"]; ok && size != nil {
+		n.Config["proxyResourceProfile"] = size
+	}
 }
