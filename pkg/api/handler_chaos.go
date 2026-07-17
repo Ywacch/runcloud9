@@ -100,8 +100,14 @@ func (h *Handler) handleChaos(w http.ResponseWriter, r *http.Request) {
 			Type:        "action",
 			Source:      "chaos",
 			Component:   req.TargetComponent,
+			Kind:        "chaos_inject",
+			Audience:    "both",
 			Title:       scenario.Description(req.TargetComponent),
 			Description: req.Scenario,
+			Detail: map[string]string{
+				"scenario":        req.Scenario,
+				"targetComponent": req.TargetComponent,
+			},
 		})
 	}
 

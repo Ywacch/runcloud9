@@ -17,12 +17,21 @@ type DeploymentMetrics struct {
 	LoadGen         *loadgen.LoadStats          `json:"loadgen,omitempty"`
 }
 
-// Event annotates the metrics timeline (loadgen, thresholds, future cascades).
+// Event annotates the metrics timeline (loadgen, thresholds, cascades, runtime).
+// Type remains "action" | "threshold" | "cascade". Workload anchors (loadgen/chaos)
+// keep Type "action" and set Kind/Detail/Audience for L2 causal evidence.
 type Event struct {
 	Timestamp time.Time `json:"timestamp"`
 	Type      string    `json:"type"` // "action" | "threshold" | "cascade"
 	Source    string    `json:"source"`
 	Component string    `json:"component,omitempty"`
+	// Kind identifies a workload anchor when set (e.g. "loadgen_start", "loadgen_stop", "chaos_inject").
+	// Empty for threshold/cascade/runtime events that are not injected workload actions.
+	Kind string `json:"kind,omitempty"`
+	// Detail carries structured params for workload anchors (rps, template, scenario, …).
+	Detail map[string]string `json:"detail,omitempty"`
+	// Audience selects consumers: "user" | "ai" | "both". Empty means both.
+	Audience string `json:"audience,omitempty"`
 	// RuleID is the stable detector key (e.g. "cache_hit_low", "cascade_cache_db") for UI prediction matching.
 	RuleID      string `json:"ruleId,omitempty"`
 	Title       string `json:"title"`
