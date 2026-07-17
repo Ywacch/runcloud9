@@ -104,7 +104,7 @@ func ResolveNodeResources(nodeType string, config map[string]interface{}) corev1
 	return ComponentDefaultResources(nodeType)
 }
 
-// cacheProfileName returns the canvas sizing profile for a cache node.
+// cacheProfileName returns the canvas sizing profile for a cache node's Redis.
 // Empty config matches ResolveNodeResources(cache) → small.
 func cacheProfileName(config map[string]interface{}) string {
 	if prof := configString(config, "resourceProfile", ""); prof != "" {
@@ -113,15 +113,44 @@ func cacheProfileName(config map[string]interface{}) string {
 	return "small"
 }
 
-// CacheProxyResources returns limits for the caching-proxy Deployment given the
-// canvas cache node's profile. One tier above redis-internal: the proxy does
-// HTTP + sync/async DB work while Redis is mostly a backing GET/SET store.
+// CacheProxyResources returns limits for the caching-proxy Deployment.
+// When proxyResourceProfile is set, that profile selects the proxy size table
+// (independent of Redis). When unset, Redis resourceProfile drives the same
+// table so defaults match C3 (proxy amounts embed one tier above Redis):
 //
-//	small  → 250m / 512Mi
-//	medium → 500m / 1Gi
-//	large  → 750m / 1536Mi
+//	Redis small  → proxy 250m / 512Mi
+//	Redis medium → proxy 500m / 1Gi
+//	Redis large  → proxy 750m / 1536Mi
+//
+// Explicit proxy profiles use the same amount table keyed by proxy size name.
 func CacheProxyResources(config map[string]interface{}) corev1.ResourceRequirements {
-	switch cacheProfileName(config) {
+	if proxyProf := configString(config, "proxyResourceProfile", ""); proxyProf != "" {
+		return proxyResourcesForProfile(proxyProf)
+	}
+	return proxyResourcesForProfile(defaultProxyProfileForRedis(cacheProfileName(config)))
+}
+
+// DefaultProxyResourceProfile returns the proxy size name used when the canvas
+// does not set proxyResourceProfile (aligned with CacheProxyResources defaults).
+func DefaultProxyResourceProfile(redisProfile string) string {
+	return defaultProxyProfileForRedis(redisProfile)
+}
+
+func defaultProxyProfileForRedis(redisProfile string) string {
+	switch redisProfile {
+	case "large":
+		return "large"
+	case "medium":
+		return "medium"
+	default: // small, alpha, unknown
+		return "small"
+	}
+}
+
+// proxyResourcesForProfile maps a proxy size name to cache-proxy limits.
+// Amounts differ from ResourceProfile (Redis) — proxy is sized for HTTP+DB work.
+func proxyResourcesForProfile(profile string) corev1.ResourceRequirements {
+	switch profile {
 	case "large":
 		return resourceRequirements("750m", "1536Mi", "200Mi")
 	case "medium":
