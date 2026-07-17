@@ -93,6 +93,10 @@ func (c *MetricsCollector) collectCacheLayerSplit(ctx context.Context, ns string
 	}
 	out.proxy.MemoryLimit = c.kubeLimitMem(ctx, ns, "cache-proxy.*", "cache-proxy")
 
+	tel := c.fillRedisCacheStoreTelemetry(ctx, ns)
+	out.redis.EvictionsPerSec = tel.EvictionsPerSec
+	out.redis.ExpirationsPerSec = tel.ExpirationsPerSec
+
 	return out
 }
 
@@ -106,6 +110,12 @@ func applyCacheLayers(cm *ComponentMetrics, split cacheLayerSplit) {
 	backing.RedisKeyspaceHits = cm.RedisKeyspaceHits
 	backing.RedisKeyspaceMisses = cm.RedisKeyspaceMisses
 	backing.RedisRejectedRate = cm.RedisRejectedRate
+	if backing.EvictionsPerSec == 0 {
+		backing.EvictionsPerSec = cm.EvictionsPerSec
+	}
+	if backing.ExpirationsPerSec == 0 {
+		backing.ExpirationsPerSec = cm.ExpirationsPerSec
+	}
 	cm.CacheMetricMode = "layered"
 	cm.Layers = []ComponentLayerMetrics{backing, split.proxy}
 }

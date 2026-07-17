@@ -33,6 +33,8 @@ func TestApplyCacheLayers_proxyPresent(t *testing.T) {
 		RedisKeyspaceHits:   800,
 		RedisKeyspaceMisses: 120,
 		RedisRejectedRate:   3,
+		EvictionsPerSec:     4,
+		ExpirationsPerSec:   1.5,
 	}
 	split := cacheLayerSplit{
 		proxyPresent: true,
@@ -68,6 +70,9 @@ func TestApplyCacheLayers_proxyPresent(t *testing.T) {
 	if backing.RedisOpsPerSec != 21000 || backing.RedisKeyspaceHits != 800 ||
 		backing.RedisKeyspaceMisses != 120 || backing.RedisRejectedRate != 3 {
 		t.Fatalf("backing redis metrics not copied: %+v", backing)
+	}
+	if backing.EvictionsPerSec != 4 || backing.ExpirationsPerSec != 1.5 {
+		t.Fatalf("backing store telemetry not copied: %+v", backing)
 	}
 	if backing.CPUUsage != 0.12 || backing.MemoryBytes != int64(200<<20) {
 		t.Fatalf("backing resources: %+v", backing)
@@ -131,6 +136,10 @@ func TestCollectCacheLayerSplit_proxyMetrics(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(promVectorJSON("0.05"))
 		case strings.Contains(q, "redis_memory_used_bytes"):
 			_ = json.NewEncoder(w).Encode(promVectorJSON("134217728"))
+		case strings.Contains(q, "redis_evicted_keys_total"):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("2.5"))
+		case strings.Contains(q, "redis_expired_keys_total"):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.75"))
 		case strings.Contains(q, "process_resident_memory_bytes") && strings.Contains(q, "cache-proxy"):
 			_ = json.NewEncoder(w).Encode(promVectorJSON("67108864"))
 		default:
@@ -155,5 +164,11 @@ func TestCollectCacheLayerSplit_proxyMetrics(t *testing.T) {
 	}
 	if split.proxy.MemoryBytes != 67108864 {
 		t.Fatalf("proxy mem: got %d", split.proxy.MemoryBytes)
+	}
+	if split.redis.EvictionsPerSec != 2.5 {
+		t.Fatalf("redis evictions: want 2.5, got %v", split.redis.EvictionsPerSec)
+	}
+	if split.redis.ExpirationsPerSec != 0.75 {
+		t.Fatalf("redis expirations: want 0.75, got %v", split.redis.ExpirationsPerSec)
 	}
 }

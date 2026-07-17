@@ -806,6 +806,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmCache.RedisKeyspaceMisses = rm
 	rejected, _ := c.query(ctx, fmt.Sprintf(`sum(rate(redis_rejected_connections_total{namespace=%q}%s))`, ns, promRateRange()))
 	cmCache.RedisRejectedRate = rejected
+	applyCacheStoreTelemetry(&cmCache, c.fillRedisCacheStoreTelemetry(ctx, ns))
 	// Redis latency percentiles from histogram buckets (microseconds -> seconds).
 	redisLatCmdPattern := redisLatencyCommandPattern(template)
 	redisLatBucket := fmt.Sprintf(

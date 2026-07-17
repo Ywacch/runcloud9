@@ -150,11 +150,16 @@ type ComponentMetrics struct {
 	RedisKeyspaceMisses float64 `json:"redisKeyspaceMisses,omitempty"`
 	RedisOpsPerSec      float64 `json:"redisOpsPerSec,omitempty"`
 	RedisRejectedRate   float64 `json:"redisRejectedRate,omitempty"`
+	// EvictionsPerSec / ExpirationsPerSec are engine-agnostic cache store rates (L0).
+	// Redis filler uses redis_evicted_keys_total / redis_expired_keys_total today.
+	EvictionsPerSec     float64 `json:"evictionsPerSec,omitempty"`
+	ExpirationsPerSec   float64 `json:"expirationsPerSec,omitempty"`
 	CacheStrategy       string  `json:"cacheStrategy,omitempty"`
 	CacheMetricMode     string  `json:"cacheMetricMode,omitempty"`
 	CacheReadOperation  string  `json:"cacheReadOperation,omitempty"`
 	CacheWriteOperation string  `json:"cacheWriteOperation,omitempty"`
 	// kube_pod_container_resource_limits / redis maxmemory (capacity denominator for UI %).
+	// When redis_exporter reports maxmemory, MemoryLimit is that value (used vs maxmemory for UI %).
 	CPULimit    float64 `json:"cpuLimit,omitempty"`
 	MemoryLimit int64   `json:"memoryLimit,omitempty"`
 	// True when usage came from kube resource requests (no real-time series).
@@ -216,7 +221,10 @@ type ComponentLayerMetrics struct {
 	RedisKeyspaceHits   float64 `json:"redisKeyspaceHits,omitempty"`
 	RedisKeyspaceMisses float64 `json:"redisKeyspaceMisses,omitempty"`
 	RedisRejectedRate   float64 `json:"redisRejectedRate,omitempty"`
-	RestartCount        int32   `json:"restartCount,omitempty"`
+	// Engine-agnostic store rates (backing-store layer).
+	EvictionsPerSec   float64 `json:"evictionsPerSec,omitempty"`
+	ExpirationsPerSec float64 `json:"expirationsPerSec,omitempty"`
+	RestartCount      int32   `json:"restartCount,omitempty"`
 }
 
 // BackendReplicas tracks desired vs ready app-server pods (LB-facing view).
