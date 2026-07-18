@@ -63,10 +63,7 @@ func loadConfig() Config {
 		cacheMode = "redis"
 	}
 
-	ttlSecs, _ := strconv.Atoi(os.Getenv("CACHE_TTL"))
-	if ttlSecs == 0 {
-		ttlSecs = 300
-	}
+	ttlSecs := parseCacheTTLSeconds(os.Getenv("CACHE_TTL"), 300)
 
 	strategy := os.Getenv("CACHE_STRATEGY")
 	if strategy == "" {

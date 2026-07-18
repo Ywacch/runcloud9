@@ -83,16 +83,10 @@ func loadConfig() Config {
 		os.Exit(1)
 	}
 
-	cacheTTL := 30
-	if v := os.Getenv("FEED_CACHE_TTL"); v != "" {
-		if sec, err := strconv.Atoi(v); err == nil && sec > 0 {
-			cacheTTL = sec
-		}
-	} else if v := os.Getenv("CACHE_TTL"); v != "" {
-		if sec, err := strconv.Atoi(v); err == nil && sec > 0 {
-			cacheTTL = sec
-		}
-	}
+	// Default 0 = persistent timelines (the template's historical behavior:
+	// timeline ZSETs never expired). A positive TTL applies EXPIRE after each
+	// fan-out write.
+	cacheTTL := cacheTTLSecondsFromEnv(0, "FEED_CACHE_TTL", "CACHE_TTL")
 
 	pageSize := 20
 	if v := os.Getenv("FEED_PAGE_SIZE"); v != "" {
@@ -257,12 +251,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 		})
 		pipe := s.cache.client.Pipeline()
 		for _, followerID := range followers {
-			key := fmt.Sprintf("timeline:%d", followerID)
-			pipe.ZAdd(ctx, key, redis.Z{
-				Score:  float64(post.CreatedAt.UnixMilli()),
-				Member: string(payload),
-			})
-			pipe.ZRemRangeByRank(ctx, key, 0, -1001)
+			appendTimelineWrite(ctx, pipe, followerID, payload, post.CreatedAt, s.cfg.CacheTTL)
 		}
 		followerCount := len(followers)
 		go func(p redis.Pipeliner, postID int, n int) {

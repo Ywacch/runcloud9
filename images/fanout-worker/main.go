@@ -123,7 +123,7 @@ func classifyFanoutError(err error) string {
 	}
 }
 
-func fanoutPost(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, msg fanoutMessage) error {
+func fanoutPost(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, msg fanoutMessage, timelineTTL time.Duration) error {
 	var username string
 	if err := pool.QueryRow(ctx, `SELECT username FROM users WHERE id = $1`, msg.UserID).Scan(&username); err != nil {
 		return fmt.Errorf("db user lookup: %w", err)
@@ -158,12 +158,7 @@ func fanoutPost(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, msg 
 	})
 	pipe := rdb.Pipeline()
 	for _, followerID := range followers {
-		key := fmt.Sprintf("timeline:%d", followerID)
-		pipe.ZAdd(ctx, key, redis.Z{
-			Score:  float64(msg.CreatedAt.UnixMilli()),
-			Member: string(payload),
-		})
-		pipe.ZRemRangeByRank(ctx, key, 0, -1001)
+		appendTimelineWrite(ctx, pipe, followerID, payload, msg.CreatedAt, timelineTTL)
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("redis timeline pipeline: %w", err)
@@ -171,7 +166,7 @@ func fanoutPost(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, msg 
 	return nil
 }
 
-func processDelivery(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, d amqp.Delivery) uint64 {
+func processDelivery(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, d amqp.Delivery, timelineTTL time.Duration) uint64 {
 	start := time.Now()
 	defer func() {
 		workerProcessingDuration.Observe(time.Since(start).Seconds())
@@ -184,7 +179,7 @@ func processDelivery(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client,
 		return d.DeliveryTag
 	}
 
-	if err := fanoutPost(ctx, pool, rdb, msg); err != nil {
+	if err := fanoutPost(ctx, pool, rdb, msg, timelineTTL); err != nil {
 		reason := classifyFanoutError(err)
 		workerErrorsTotal.WithLabelValues(reason).Inc()
 		slog.Error("fanout failed", "post_id", msg.PostID, "author_id", msg.UserID, "reason", reason, "error", err)
@@ -255,7 +250,10 @@ func main() {
 	mqPort := envOrDefault("MQ_PORT", "5672")
 	cacheHost := requiredEnv("CACHE_HOST", "CACHE_HOST required for worker")
 	cachePort := envOrDefault("CACHE_PORT", "6379")
-	slog.Info("startup config resolved", "mqHost", mqHost, "mqPort", mqPort)
+	// CACHE_TTL comes from the cache node's design config; 0 (or absent)
+	// leaves timelines persistent, matching the app-server's fan-out path.
+	timelineTTL := time.Duration(parseCacheTTLSeconds(os.Getenv("CACHE_TTL"), 0)) * time.Second
+	slog.Info("startup config resolved", "mqHost", mqHost, "mqPort", mqPort, "timelineTTL", timelineTTL)
 
 	// DB connection with retry so worker doesn't crash-loop while dependencies boot.
 	var pool *pgxpool.Pool
@@ -400,7 +398,7 @@ func main() {
 					if !ok {
 						return
 					}
-					tag := processDelivery(ctx, pool, rdb, d)
+					tag := processDelivery(ctx, pool, rdb, d, timelineTTL)
 					select {
 					case ackCh <- tag:
 					case <-ctx.Done():

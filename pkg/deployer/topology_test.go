@@ -282,7 +282,7 @@ func TestDeriveEnvVars_AppServerConnectedToDBAndCache(t *testing.T) {
 				Config: map[string]any{
 					"strategy":        "cache-aside",
 					"cacheStrategy":   "write-through",
-					"cacheTtlSeconds": float64(999), // unused for app env here; app CACHE_TTL comes from app-server config below
+					"cacheTtlSeconds": float64(999), // cache node owns TTL; wins over the app-server's legacy value
 				},
 			},
 		},
@@ -306,8 +306,8 @@ func TestDeriveEnvVars_AppServerConnectedToDBAndCache(t *testing.T) {
 	if env["CACHE_STRATEGY"] != "cache-aside" {
 		t.Fatalf("expected CACHE_STRATEGY=cache-aside (strategy wins over cacheStrategy), got %q", env["CACHE_STRATEGY"])
 	}
-	if env["CACHE_TTL"] != "60" {
-		t.Fatalf("expected CACHE_TTL=60 from app-server config, got %q", env["CACHE_TTL"])
+	if env["CACHE_TTL"] != "999" {
+		t.Fatalf("expected CACHE_TTL=999 from cache-node config (owner), got %q", env["CACHE_TTL"])
 	}
 	if env["STAMPEDE_PROTECTION"] != "true" {
 		t.Fatalf("expected STAMPEDE_PROTECTION=true from app-server config, got %q", env["STAMPEDE_PROTECTION"])

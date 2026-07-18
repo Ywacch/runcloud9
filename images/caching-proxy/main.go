@@ -61,7 +61,7 @@ func loadConfig() Config {
 		os.Exit(1)
 	}
 
-	ttlSecs, _ := strconv.Atoi(envOrDefault("CACHE_TTL", "300"))
+	ttlSecs := parseCacheTTLSeconds(os.Getenv("CACHE_TTL"), 300)
 	wbSecs, _ := strconv.Atoi(envOrDefault("WRITE_BEHIND_INTERVAL", "30"))
 
 	return Config{
