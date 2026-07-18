@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -874,8 +875,15 @@ func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 			Timestamp:   time.Now(),
 			Type:        "action",
 			Source:      "loadgen",
+			Kind:        "loadgen_start",
+			Audience:    "both",
 			Title:       "Load generator started",
 			Description: fmt.Sprintf("template=%s rps=%d durationSeconds=%d", profile.Template, profile.RPS, profile.DurationSeconds),
+			Detail: map[string]string{
+				"template":        profile.Template,
+				"rps":             strconv.Itoa(profile.RPS),
+				"durationSeconds": strconv.FormatInt(profile.DurationSeconds, 10),
+			},
 		})
 	}
 
@@ -912,6 +920,8 @@ func (h *Handler) handleStopLoadGen(w http.ResponseWriter, r *http.Request) {
 			Timestamp:   time.Now(),
 			Type:        "action",
 			Source:      "loadgen",
+			Kind:        "loadgen_stop",
+			Audience:    "both",
 			Title:       "Load generator stopped",
 			Description: "Traffic generation halted for this deployment",
 		})
@@ -952,25 +962,11 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 		topo := MetricsTopologyFromDeploymentDesign(design, tpl)
 		dm, err := h.metricsCollector.Collect(r.Context(), namespace, tpl, topo)
 		if err == nil && dm != nil {
-			summary := make(map[string]any)
-			if rowErr == nil && row.MetricsSummary != nil {
-				for k, v := range row.MetricsSummary {
-					summary[k] = v
-				}
+			var base map[string]any
+			if rowErr == nil {
+				base = row.MetricsSummary
 			}
-			for k, v := range h.metricsCollector.PeakSummaryForNamespace(namespace, dm) {
-				summary[k] = v
-			}
-			if rb := h.metricsCollector.RingBufferFor(namespace); rb != nil && rb.Len() > 0 {
-				summary["steady_state"] = metrics.SteadyStateSummary(rb)
-			}
-			if hist := h.metricsCollector.DownsampledSessionHistory(namespace); len(hist) > 0 {
-				summary["session_history"] = hist
-				summary["events_summary"] = metrics.BuildEventsSummary(hist, 10)
-			}
-			if clh := h.metricsCollector.ClientLatencyHistoryFor(namespace); len(clh) > 0 {
-				summary["client_latency_history"] = clh
-			}
+			summary := h.metricsCollector.SessionSummary(namespace, base, dm)
 			summary["terminated_at"] = time.Now().Format(time.RFC3339)
 			if rowErr == nil {
 				summary["actual_duration_seconds"] = int(time.Since(row.CreatedAt).Seconds())

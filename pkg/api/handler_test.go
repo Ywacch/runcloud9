@@ -15,6 +15,7 @@ import (
 
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/loadgen"
+	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/store"
 	"github.com/ywacch/cloud9/pkg/templates"
 )
@@ -612,11 +613,12 @@ func TestHandleStartLoadGen_UnsupportedTemplate(t *testing.T) {
 func TestHandleStartLoadGen_URLShortenerOK(t *testing.T) {
 	t.Parallel()
 	lg := loadgen.NewLoadGenerator()
-	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, lg, nil)
+	bus := metrics.NewEventBus()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, lg, bus)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	body := `{"template":"url-shortener","rps":5}`
+	body := `{"template":"url-shortener","rps":5,"durationSeconds":30}`
 	req := httptest.NewRequest(http.MethodPost, "/deployments/ns-ok/loadgen", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -634,6 +636,16 @@ func TestHandleStartLoadGen_URLShortenerOK(t *testing.T) {
 	}
 	if out.Status != "started" || out.Template != "url-shortener" {
 		t.Fatalf("response: %+v", out)
+	}
+	events := bus.Drain("ns-ok")
+	if len(events) != 1 {
+		t.Fatalf("events: %+v", events)
+	}
+	if events[0].Kind != "loadgen_start" || events[0].Source != "loadgen" {
+		t.Fatalf("event: %+v", events[0])
+	}
+	if events[0].Detail["template"] != "url-shortener" || events[0].Detail["rps"] != "5" {
+		t.Fatalf("detail: %+v", events[0].Detail)
 	}
 	_ = lg.Stop(context.Background(), "ns-ok")
 }

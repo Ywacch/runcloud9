@@ -38,14 +38,32 @@ func TestRingBuffer_DownsampledHistory_KeepsEvents(t *testing.T) {
 		rb.Add(dm)
 	}
 	ds := rb.DownsampledHistory()
-	// indices 0,1,2,3,4,5,6,7 → keep 0,1,2,3,4,5,6,7 with i%4==0 → 0,4 and i==1 has events
-	// 0,1,4,5 — also 5? 5%4=1 not 0, no events unless we added - only i=1 has events
-	// So: 0, 1 (events), 4, 5 — wait 5%4=1, no events on 5. So 0,1,4
 	want := 3
 	if len(ds) != want {
 		t.Fatalf("downsampled len: want %d, got %d (%v)", want, len(ds), len(ds))
 	}
 	if ds[1].Events[0].Title != "x" {
 		t.Fatalf("event snapshot preserved")
+	}
+}
+
+func TestRingBuffer_ConcurrentAddAll(t *testing.T) {
+	t.Parallel()
+	var rb RingBuffer
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 500; i++ {
+			rb.Add(DeploymentMetrics{Timestamp: time.Unix(int64(i), 0)})
+		}
+	}()
+	for i := 0; i < 500; i++ {
+		_ = rb.All()
+		_ = rb.Len()
+		_ = rb.DownsampledHistory()
+	}
+	<-done
+	if rb.Len() != 300 {
+		t.Fatalf("after concurrent writes: want Len 300, got %d", rb.Len())
 	}
 }

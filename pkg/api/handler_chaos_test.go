@@ -129,6 +129,15 @@ func TestHandleChaos_PodKillOK(t *testing.T) {
 	if len(events) != 1 || events[0].Source != "chaos" {
 		t.Fatalf("events: %+v", events)
 	}
+	if events[0].Kind != "chaos_inject" {
+		t.Fatalf("kind: want chaos_inject, got %q", events[0].Kind)
+	}
+	if events[0].Detail["scenario"] != "pod_kill" || events[0].Detail["targetComponent"] != "app-server" {
+		t.Fatalf("detail: %+v", events[0].Detail)
+	}
+	if events[0].Audience != "both" {
+		t.Fatalf("audience: %q", events[0].Audience)
+	}
 
 	_, err := client.CoreV1().Pods(ns).Get(context.Background(), pod.Name, metav1.GetOptions{})
 	if err == nil {

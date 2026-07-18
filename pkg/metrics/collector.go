@@ -170,6 +170,44 @@ func (c *MetricsCollector) DownsampledSessionHistory(namespace string) []Deploym
 	return rb.DownsampledHistory()
 }
 
+// SessionSummary merges peak, steady-state, history, events, workload anchors, and
+// trajectories into base for metrics_summary persistence. base may be nil; existing
+// keys (e.g. seeded) are preserved. Caller still sets terminated_at / duration.
+func (c *MetricsCollector) SessionSummary(namespace string, base map[string]any, dm *DeploymentMetrics) map[string]any {
+	summary := make(map[string]any, len(base)+8)
+	for k, v := range base {
+		summary[k] = v
+	}
+	if c == nil {
+		if dm != nil {
+			for k, v := range PeakSummary(dm) {
+				summary[k] = v
+			}
+		}
+		return summary
+	}
+	for k, v := range c.PeakSummaryForNamespace(namespace, dm) {
+		summary[k] = v
+	}
+	if rb := c.RingBufferFor(namespace); rb != nil && rb.Len() > 0 {
+		summary["steady_state"] = SteadyStateSummary(rb)
+	}
+	if hist := c.DownsampledSessionHistory(namespace); len(hist) > 0 {
+		summary["session_history"] = hist
+		summary["events_summary"] = BuildEventsSummary(hist, 10)
+		if we := BuildWorkloadEventsSummary(hist, 20); len(we) > 0 {
+			summary["workload_events"] = we
+		}
+		if traj := BuildTrajectories(hist); len(traj) > 0 {
+			summary["trajectories"] = traj
+		}
+	}
+	if clh := c.ClientLatencyHistoryFor(namespace); len(clh) > 0 {
+		summary["client_latency_history"] = clh
+	}
+	return summary
+}
+
 // prometheusResponse is the minimal shape of a Prometheus instant query response.
 type prometheusResponse struct {
 	Status string `json:"status"`
