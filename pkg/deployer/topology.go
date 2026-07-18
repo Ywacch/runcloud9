@@ -497,6 +497,11 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 				if node.Type == "worker" {
 					env["CACHE_HOST"] = "cache"
 					env["CACHE_PORT"] = "6379"
+					// Workers write timeline entries, so they honor the same
+					// cache-node-owned TTL as every other cache writer.
+					if ttl, ok := normalizeCacheTTLSeconds(target.Config); ok {
+						env["CACHE_TTL"] = ttl
+					}
 				}
 				continue
 			}
@@ -528,9 +533,24 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 			} else {
 				env["CACHE_STRATEGY"] = "cache-aside"
 			}
-			env["CACHE_TTL"] = configString(node.Config, "cacheTtlSeconds", "300")
+			// cacheTtlSeconds is owned by the cache node (app node is a legacy
+			// fallback). Unset/invalid leaves CACHE_TTL out so the image's
+			// template default applies.
+			if ttl, ok := cacheAsideTTL(node, design, nodeMap); ok {
+				env["CACHE_TTL"] = ttl
+			}
 			// WRITE_BEHIND_INTERVAL is only for caching-proxy (canonical write-behind), not url-shortener.
 			env["STAMPEDE_PROTECTION"] = configString(node.Config, "stampedeProtection", "false")
+		}
+		if hasProxyCacheConn {
+			// App-driven proxy writes carry a TTL in the request body; keep it
+			// on the same cache-node value as proxy miss-fill so the two paths
+			// can never diverge.
+			if cacheNode, ok := firstProxyCacheFromApp(node.ID, design, nodeMap); ok {
+				if ttl, valid := normalizeCacheTTLSeconds(cacheNode.Config); valid {
+					env["CACHE_TTL"] = ttl
+				}
+			}
 		}
 	case "db":
 		env["DB_ENGINE"] = configString(node.Config, "engine", "postgresql")
@@ -538,7 +558,9 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 	case "cache":
 		if cacheProxy {
 			env["STRATEGY"] = cacheNodeStrategy(node)
-			env["CACHE_TTL"] = configString(node.Config, "cacheTtlSeconds", "300")
+			if ttl, ok := normalizeCacheTTLSeconds(node.Config); ok {
+				env["CACHE_TTL"] = ttl
+			}
 			env["WRITE_BEHIND_INTERVAL"] = configString(node.Config, "writeBehindIntervalSeconds", "30")
 		}
 	case "worker":

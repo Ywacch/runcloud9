@@ -75,16 +75,7 @@ func loadConfig() Config {
 		os.Exit(1)
 	}
 
-	cacheTTL := 60
-	if v := os.Getenv("CATALOG_CACHE_TTL"); v != "" {
-		if sec, err := strconv.Atoi(v); err == nil && sec > 0 {
-			cacheTTL = sec
-		}
-	} else if v := os.Getenv("CACHE_TTL"); v != "" {
-		if sec, err := strconv.Atoi(v); err == nil && sec > 0 {
-			cacheTTL = sec
-		}
-	}
+	cacheTTL := cacheTTLSecondsFromEnv(60, "CATALOG_CACHE_TTL", "CACHE_TTL")
 
 	cacheStrategy := os.Getenv("CACHE_STRATEGY")
 	if cacheStrategy == "" {
