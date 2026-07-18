@@ -50,6 +50,7 @@ type Handler struct {
 
 type deploymentStore interface {
 	ListActiveDeployments(ctx context.Context, userID string) ([]store.ActiveDeploymentRow, error)
+	ListUserDeploymentHistory(ctx context.Context, userID string, limit int) ([]store.DeploymentHistoryRow, error)
 	CreateDeployment(ctx context.Context, params store.CreateDeploymentParams) (string, error)
 	UpdateStatus(ctx context.Context, namespace, status string) error
 	UpdateExpiresAt(ctx context.Context, namespace string, expiresAt time.Time) error
@@ -113,6 +114,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	mux.Handle("POST /deployments", routeAuthExpensive(auth, rl, http.HandlerFunc(h.handleCreateDeployment)))
 	mux.Handle("GET /deployments", routeAuth(auth, rl, http.HandlerFunc(h.handleListDeployments)))
+	mux.Handle("GET /deployments/history", routeAuth(auth, rl, http.HandlerFunc(h.handleListDeploymentHistory)))
 	mux.Handle("GET /me", routeAuth(auth, rl, http.HandlerFunc(h.handleGetCurrentUser)))
 	mux.Handle("GET /deployments/{id}", routeAuth(auth, rl, http.HandlerFunc(h.handleGetDeployment)))
 	mux.Handle("DELETE /deployments/{id}", routeAuth(auth, rl, http.HandlerFunc(h.handleDeleteDeployment)))

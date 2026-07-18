@@ -183,9 +183,9 @@ func TestHandleCreateDeployment_TierTopologyForbidden(t *testing.T) {
 		Nodes: []deployer.DeploymentNode{
 			{ID: "lb-1", Type: "lb", Name: "Load Balancer"},
 			{
-				ID:   "app-1",
-				Type: "app-server",
-				Name: "App Server",
+				ID:     "app-1",
+				Type:   "app-server",
+				Name:   "App Server",
 				Config: map[string]interface{}{"replicas": 1, "instanceSize": "small"},
 			},
 			{ID: "cache-1", Type: "cache", Name: "Redis", Config: map[string]interface{}{"strategy": "cache-aside"}},
@@ -842,12 +842,16 @@ func TestDeleteDuringProvision_StaysTerminated(t *testing.T) {
 }
 
 type fakeDeploymentStore struct {
-	mu          sync.Mutex
-	byNS        map[string]store.DeploymentRow
-	active      []store.ActiveDeploymentRow
-	nextSeq     int
-	users       map[string]store.UserRecord
-	defaultUser store.UserRecord
+	mu           sync.Mutex
+	byNS         map[string]store.DeploymentRow
+	active       []store.ActiveDeploymentRow
+	history      []store.DeploymentHistoryRow
+	historyErr   error
+	historyUser  string
+	historyLimit int
+	nextSeq      int
+	users        map[string]store.UserRecord
+	defaultUser  store.UserRecord
 }
 
 func newFakeDeploymentStore() *fakeDeploymentStore {
@@ -871,6 +875,19 @@ func (f *fakeDeploymentStore) ListActiveDeployments(_ context.Context, userID st
 			out = append(out, r)
 		}
 	}
+	return out, nil
+}
+
+func (f *fakeDeploymentStore) ListUserDeploymentHistory(_ context.Context, userID string, limit int) ([]store.DeploymentHistoryRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.historyUser = userID
+	f.historyLimit = limit
+	if f.historyErr != nil {
+		return nil, f.historyErr
+	}
+	out := make([]store.DeploymentHistoryRow, len(f.history))
+	copy(out, f.history)
 	return out, nil
 }
 

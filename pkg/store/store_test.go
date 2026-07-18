@@ -2,6 +2,9 @@ package store
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -48,5 +51,74 @@ func TestCreateAndUpdateDeployment(t *testing.T) {
 	}
 	if row.Status != "running" {
 		t.Errorf("expected status running, got %s", row.Status)
+	}
+}
+
+func TestListUserDeploymentHistory_requiresUser(t *testing.T) {
+	t.Parallel()
+
+	s := &DeploymentStore{}
+	if _, err := s.ListUserDeploymentHistory(context.Background(), " ", 20); err == nil {
+		t.Fatal("expected empty user ID to fail")
+	}
+}
+
+func TestListUserDeploymentHistory(t *testing.T) {
+	t.Parallel()
+
+	createdAt := time.Date(2026, time.July, 18, 10, 0, 0, 0, time.UTC)
+	expiresAt := createdAt.Add(10 * time.Minute)
+	queryValues := make(chan map[string][]string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/v1/cloud_deployments" {
+			t.Errorf("path = %q, want /rest/v1/cloud_deployments", r.URL.Path)
+		}
+		queryValues <- r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]DeploymentHistoryRow{
+			{
+				ID:        "dep-1",
+				Namespace: "cloud9-user-1",
+				Template:  "url-shortener",
+				Archetype: "browse-heavy",
+				Status:    "terminated",
+				MetricsSummary: map[string]any{
+					"peak_rps": 1200.0,
+				},
+				ExpiresAt: expiresAt,
+				CreatedAt: createdAt,
+			},
+		})
+	}))
+	defer server.Close()
+
+	s, err := NewDeploymentStore(server.URL, "service-key")
+	if err != nil {
+		t.Fatalf("NewDeploymentStore: %v", err)
+	}
+
+	rows, err := s.ListUserDeploymentHistory(context.Background(), "user-1", 500)
+	if err != nil {
+		t.Fatalf("ListUserDeploymentHistory: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != "dep-1" {
+		t.Fatalf("rows = %#v", rows)
+	}
+
+	query := <-queryValues
+	assertQueryValue(t, query, "user_id", "eq.user-1")
+	assertQueryValue(t, query, "status", "in.(terminated,failed)")
+	assertQueryValue(t, query, "order", "created_at.desc.nullslast")
+	assertQueryValue(t, query, "limit", "50")
+}
+
+func assertQueryValue(t *testing.T, values map[string][]string, key, want string) {
+	t.Helper()
+	got := ""
+	if entries := values[key]; len(entries) > 0 {
+		got = entries[0]
+	}
+	if got != want {
+		t.Fatalf("query %s = %q, want %q", key, got, want)
 	}
 }

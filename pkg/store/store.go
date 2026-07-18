@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
+	postgrest "github.com/supabase-community/postgrest-go"
 	"github.com/supabase-community/supabase-go"
 )
 
@@ -23,6 +25,20 @@ type ActiveDeploymentRow struct {
 	Status    string    `json:"status"`
 	ExpiresAt time.Time `json:"expires_at"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// DeploymentHistoryRow is a lightweight completed-deployment view for profile history.
+// MetricsSummary is included so the API can expose selected summary scalars without
+// returning the full session history.
+type DeploymentHistoryRow struct {
+	ID             string         `json:"id"`
+	Namespace      string         `json:"namespace"`
+	Template       string         `json:"template"`
+	Archetype      string         `json:"archetype"`
+	Status         string         `json:"status"`
+	MetricsSummary map[string]any `json:"metrics_summary"`
+	ExpiresAt      time.Time      `json:"expires_at"`
+	CreatedAt      time.Time      `json:"created_at"`
 }
 
 // CreateDeploymentParams are the inputs for creating a deployment row.
@@ -203,5 +219,37 @@ func (s *DeploymentStore) ListActiveDeployments(ctx context.Context, userID stri
 		return nil, fmt.Errorf("store.ListActiveDeployments: parse: %w", err)
 	}
 
+	return rows, nil
+}
+
+// ListUserDeploymentHistory returns a user's terminated and failed deployments,
+// newest first. It rejects an empty user ID so this history query can never
+// accidentally become an unscoped service-role query.
+func (s *DeploymentStore) ListUserDeploymentHistory(ctx context.Context, userID string, limit int) ([]DeploymentHistoryRow, error) {
+	if strings.TrimSpace(userID) == "" {
+		return nil, fmt.Errorf("store.ListUserDeploymentHistory: user ID is required")
+	}
+	if limit < 1 {
+		limit = 20
+	}
+	if limit > 50 {
+		limit = 50
+	}
+
+	data, _, err := s.client.From("cloud_deployments").
+		Select("id,namespace,template,archetype,status,metrics_summary,expires_at,created_at", "exact", false).
+		Eq("user_id", userID).
+		In("status", []string{"terminated", "failed"}).
+		Order("created_at", &postgrest.OrderOpts{Ascending: false}).
+		Limit(limit, "").
+		Execute()
+	if err != nil {
+		return nil, fmt.Errorf("store.ListUserDeploymentHistory: %w", err)
+	}
+
+	var rows []DeploymentHistoryRow
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return nil, fmt.Errorf("store.ListUserDeploymentHistory: parse: %w", err)
+	}
 	return rows, nil
 }

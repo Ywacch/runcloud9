@@ -17,6 +17,9 @@ type stubUserStore struct {
 func (s *stubUserStore) ListActiveDeployments(context.Context, string) ([]store.ActiveDeploymentRow, error) {
 	return nil, nil
 }
+func (s *stubUserStore) ListUserDeploymentHistory(context.Context, string, int) ([]store.DeploymentHistoryRow, error) {
+	return nil, nil
+}
 func (s *stubUserStore) CreateDeployment(context.Context, store.CreateDeploymentParams) (string, error) {
 	return "", nil
 }
