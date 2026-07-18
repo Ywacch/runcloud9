@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -62,7 +61,7 @@ func loadConfig() Config {
 	}
 
 	ttlSecs := parseCacheTTLSeconds(os.Getenv("CACHE_TTL"), 300)
-	wbSecs, _ := strconv.Atoi(envOrDefault("WRITE_BEHIND_INTERVAL", "30"))
+	wbSecs := parseWriteBehindIntervalSeconds(os.Getenv("WRITE_BEHIND_INTERVAL"))
 
 	return Config{
 		DBHost:              dbHost,
@@ -237,8 +236,8 @@ func (s *Server) handleSet(w http.ResponseWriter, r *http.Request) {
 		if err := s.redis.Set(ctx, code, req.Value, ttl).Err(); err != nil {
 			slog.Warn("redis SET failed", "code", code, "error", err)
 		}
-		// Store pending write under wb:{code}.
-		if err := s.redis.Set(ctx, "wb:"+code, req.Value, ttl).Err(); err != nil {
+		// Pending durable writes must not share the cache-entry TTL.
+		if err := storePendingWrite(ctx, s.redis, code, req.Value); err != nil {
 			slog.Warn("redis SET wb failed", "code", code, "error", err)
 		}
 		// DB write happens in background.
@@ -410,45 +409,11 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeBehindFlusher(ctx context.Context) {
-	interval := s.cfg.WriteBehindInterval
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			s.flushPendingWrites(ctx)
-		case <-ctx.Done():
-			return
-		}
-	}
+	runWriteBehindFlusher(ctx, s.cfg.WriteBehindInterval, s.flushPendingWrites)
 }
 
 func (s *Server) flushPendingWrites(ctx context.Context) {
-	var cursor uint64
-	for {
-		keys, nextCursor, err := s.redis.Scan(ctx, cursor, "wb:*", 100).Result()
-		if err != nil {
-			slog.Error("write-behind scan failed", "error", err)
-			return
-		}
-		for _, key := range keys {
-			code := strings.TrimPrefix(key, "wb:")
-			original, err := s.redis.Get(ctx, key).Result()
-			if err != nil {
-				continue
-			}
-			if err := s.db.SaveURL(ctx, code, original); err != nil {
-				slog.Error("write-behind flush failed", "code", code, "error", err)
-				continue
-			}
-			_ = s.redis.Del(ctx, key).Err()
-		}
-		cursor = nextCursor
-		if cursor == 0 {
-			break
-		}
-	}
+	flushPendingWrites(ctx, s.redis, s.db)
 }
 
 func main() {
@@ -506,7 +471,7 @@ func main() {
 	}
 
 	// Write-behind background flusher.
-	if cfg.Strategy == "write-behind" {
+	if shouldStartWriteBehindFlusher(cfg.Strategy) {
 		go s.writeBehindFlusher(ctx)
 	}
 
