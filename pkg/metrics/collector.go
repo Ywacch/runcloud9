@@ -1042,6 +1042,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		syncCacheLayerRestarts(&cm)
 		dm.Components["cache"] = cm
 	}
+	// All components and layers are final here; tag per-signal-group freshness.
+	annotateFreshness(dm)
 
 	// Attach load generator stats to the metrics snapshot.
 	// UNDERSTAND: load stats are embedded in the existing metrics stream
