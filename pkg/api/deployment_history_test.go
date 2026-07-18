@@ -90,10 +90,10 @@ func TestHandleListDeploymentHistory_success(t *testing.T) {
 			Archetype: "browse-heavy",
 			Status:    "terminated",
 			MetricsSummary: map[string]any{
-				"terminated_at":          "2026-07-18T10:09:00Z",
+				"terminated_at":           "2026-07-18T10:09:00Z",
 				"actual_duration_seconds": 540,
-				"peak_rps":               1200.5,
-				"peak_p99_ms":            json.Number("42.25"),
+				"peak_rps":                1200.5,
+				"peak_p99_ms":             json.Number("42.25"),
 			},
 			ExpiresAt: expiresAt,
 			CreatedAt: createdAt,

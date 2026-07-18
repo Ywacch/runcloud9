@@ -183,9 +183,9 @@ func TestHandleCreateDeployment_TierTopologyForbidden(t *testing.T) {
 		Nodes: []deployer.DeploymentNode{
 			{ID: "lb-1", Type: "lb", Name: "Load Balancer"},
 			{
-				ID:   "app-1",
-				Type: "app-server",
-				Name: "App Server",
+				ID:     "app-1",
+				Type:   "app-server",
+				Name:   "App Server",
 				Config: map[string]interface{}{"replicas": 1, "instanceSize": "small"},
 			},
 			{ID: "cache-1", Type: "cache", Name: "Redis", Config: map[string]interface{}{"strategy": "cache-aside"}},
@@ -842,16 +842,16 @@ func TestDeleteDuringProvision_StaysTerminated(t *testing.T) {
 }
 
 type fakeDeploymentStore struct {
-	mu          sync.Mutex
-	byNS        map[string]store.DeploymentRow
-	active      []store.ActiveDeploymentRow
-	history     []store.DeploymentHistoryRow
-	historyErr  error
-	historyUser string
+	mu           sync.Mutex
+	byNS         map[string]store.DeploymentRow
+	active       []store.ActiveDeploymentRow
+	history      []store.DeploymentHistoryRow
+	historyErr   error
+	historyUser  string
 	historyLimit int
-	nextSeq     int
-	users       map[string]store.UserRecord
-	defaultUser store.UserRecord
+	nextSeq      int
+	users        map[string]store.UserRecord
+	defaultUser  store.UserRecord
 }
 
 func newFakeDeploymentStore() *fakeDeploymentStore {
