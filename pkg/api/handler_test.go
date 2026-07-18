@@ -426,6 +426,22 @@ func TestHandleCreateDeployment_ConcurrentLimit_InternalTier(t *testing.T) {
 	s.users = map[string]store.UserRecord{
 		"dev-user": {IsInternal: true},
 	}
+	limit := store.GetTierLimits(store.TierInternal).MaxConcurrent
+	for i := 0; i < limit-1; i++ {
+		namespace := fmt.Sprintf("existing-internal-%d", i)
+		s.byNS[namespace] = store.DeploymentRow{
+			ID:        fmt.Sprintf("existing-%d", i),
+			UserID:    "dev-user",
+			Namespace: namespace,
+			Status:    "running",
+		}
+		s.active = append(s.active, store.ActiveDeploymentRow{
+			ID:        fmt.Sprintf("existing-%d", i),
+			Namespace: namespace,
+			Status:    "running",
+		})
+	}
+
 	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -443,22 +459,20 @@ func TestHandleCreateDeployment_ConcurrentLimit_InternalTier(t *testing.T) {
 	}
 	raw, _ := json.Marshal(body)
 
-	for i := 0; i < 10; i++ {
-		req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
-		req.Header.Set("Content-Type", "application/json")
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
-		if rec.Code != http.StatusCreated {
-			t.Fatalf("create %d: want 201, got %d body=%s", i+1, rec.Code, rec.Body.String())
-		}
+	atLimitReq := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	atLimitReq.Header.Set("Content-Type", "application/json")
+	atLimitRec := httptest.NewRecorder()
+	mux.ServeHTTP(atLimitRec, atLimitReq)
+	if atLimitRec.Code != http.StatusCreated {
+		t.Fatalf("%dth create: want 201, got %d body=%s", limit, atLimitRec.Code, atLimitRec.Body.String())
 	}
 
-	req11 := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
-	req11.Header.Set("Content-Type", "application/json")
-	rec11 := httptest.NewRecorder()
-	mux.ServeHTTP(rec11, req11)
-	if rec11.Code != http.StatusTooManyRequests {
-		t.Fatalf("11th create: want 429, got %d body=%s", rec11.Code, rec11.Body.String())
+	overLimitReq := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	overLimitReq.Header.Set("Content-Type", "application/json")
+	overLimitRec := httptest.NewRecorder()
+	mux.ServeHTTP(overLimitRec, overLimitReq)
+	if overLimitRec.Code != http.StatusTooManyRequests {
+		t.Fatalf("%dth create: want 429, got %d body=%s", limit+1, overLimitRec.Code, overLimitRec.Body.String())
 	}
 }
 

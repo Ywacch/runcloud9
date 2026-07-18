@@ -54,7 +54,9 @@ func GetTierLimits(tier string) TierLimits {
 	switch strings.ToLower(strings.TrimSpace(tier)) {
 	case TierInternal:
 		return TierLimits{
-			MaxConcurrent:        10,
+			// Raised for capacity-measurement campaigns (bouncer Phase 0).
+			// This is an authorization ceiling, not a cluster admission budget.
+			MaxConcurrent:        40,
 			SessionDefaultMins:   9,
 			SessionCapMins:       30,
 			AllTemplates:         true,

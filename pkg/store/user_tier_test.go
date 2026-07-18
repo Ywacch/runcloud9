@@ -71,7 +71,7 @@ func TestGetTierLimits(t *testing.T) {
 			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
 		},
 		{
-			tier: TierInternal, wantConcurrent: 10, wantSessionCap: 30, wantAllTemplates: true,
+			tier: TierInternal, wantConcurrent: 40, wantSessionCap: 30, wantAllTemplates: true,
 			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
 		},
 	}
