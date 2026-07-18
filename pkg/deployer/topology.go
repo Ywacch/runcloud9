@@ -561,7 +561,7 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 			if ttl, ok := normalizeCacheTTLSeconds(node.Config); ok {
 				env["CACHE_TTL"] = ttl
 			}
-			env["WRITE_BEHIND_INTERVAL"] = configString(node.Config, "writeBehindIntervalSeconds", "30")
+			env["WRITE_BEHIND_INTERVAL"] = normalizeWriteBehindIntervalSeconds(node.Config)
 		}
 	case "worker":
 		if prefetch := configString(node.Config, "workerPrefetch", ""); prefetch != "" {
