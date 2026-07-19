@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -147,6 +148,8 @@ func peakSimultaneous(intervals []timeInterval) int {
 	return peak
 }
 
+// percentile returns the nearest-rank percentile (NIST):
+// rank = ceil(p/100 * n), then sorted[rank-1].
 func percentile(values []int64, p int) int64 {
 	if len(values) == 0 {
 		return 0
@@ -159,8 +162,14 @@ func percentile(values []int64, p int) int64 {
 	if p >= 100 {
 		return sorted[len(sorted)-1]
 	}
-	idx := (p * (len(sorted) - 1)) / 100
-	return sorted[idx]
+	rank := int(math.Ceil(float64(p) / 100 * float64(len(sorted))))
+	if rank < 1 {
+		rank = 1
+	}
+	if rank > len(sorted) {
+		rank = len(sorted)
+	}
+	return sorted[rank-1]
 }
 
 func writeJSONReport(path string, report CampaignReport) error {
