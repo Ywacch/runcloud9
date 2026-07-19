@@ -1,0 +1,34 @@
+name: homogeneous-url-shortener
+tier: internal
+cooldown_seconds: 120
+waves:
+  - name: wave-5
+    mode: burst
+    groups:
+      - count: 5
+        design: url-shortener-small
+  - name: wave-10
+    mode: burst
+    groups:
+      - count: 10
+        design: url-shortener-small
+  - name: wave-15
+    mode: burst
+    groups:
+      - count: 15
+        design: url-shortener-small
+  - name: wave-20
+    mode: burst
+    groups:
+      - count: 20
+        design: url-shortener-small
+  - name: wave-25
+    mode: burst
+    groups:
+      - count: 25
+        design: url-shortener-small
+  - name: wave-30
+    mode: burst
+    groups:
+      - count: 30
+        design: url-shortener-small

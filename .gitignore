@@ -108,3 +108,6 @@ pytestdebug.log
 # Jupyter Notebook (if you ever use them for exploring your data/API)
 .ipynb_checkpoints
 k8s/base/cloud9-api-secrets.local.yaml
+
+# Capacity probe campaign outputs (account/quota-specific)
+capacity-probe-results/

@@ -81,3 +81,65 @@ Example output keys:
 - `unsafe_threshold`: first overlap level where failures become frequent.
 
 Use this report as an operational baseline and update it after infrastructure/resource changes.
+
+## Active Capacity Probe
+
+`cmd/capacity-probe` measures live cluster capacity by firing controlled concurrent
+deployments. Use it before configuring the admission bouncer (`CLUSTER_DEPLOY_BUDGET_*`
+and `MAX_CONCURRENT_PROVISIONS`). Results are valid only for the current GCP account
+and quota; rerun after material quota changes or account migration.
+
+### Safety
+
+- Unit tests never call the API.
+- Real runs require `-confirm`.
+- Auth token must come from env (`CAPACITY_PROBE_TOKEN`), not from checked-in fixtures.
+- Reports land in `capacity-probe-results/` (gitignored).
+
+### Prerequisites
+
+1. Deploy an API build where the internal tier allows enough concurrent deployments
+   (currently 40).
+2. Temporarily raise expensive-route rate limits so the create burst is not rejected
+   before it reaches the cluster, for example:
+   - `API_RATE_LIMIT_EXPENSIVE_BURST=50`
+   - `API_RATE_LIMIT_EXPENSIVE_RPM=3000`
+3. Confirm `GET /me` returns `maxConcurrent: 40` for the internal test account.
+4. Restore normal rate-limit env values immediately after the campaign.
+
+### Dry-run (no cluster cost)
+
+```bash
+go run ./cmd/capacity-probe \
+  -manifest ./cmd/capacity-probe/testdata/waves/homogeneous-url-shortener.yaml \
+  -dry-run
+```
+
+### Live campaign
+
+```bash
+export CAPACITY_PROBE_API_URL="https://<cloud9-api-host>"
+export CAPACITY_PROBE_TOKEN="<internal-account-jwt>"
+
+go run ./cmd/capacity-probe \
+  -manifest ./cmd/capacity-probe/testdata/waves/homogeneous-url-shortener.yaml \
+  -confirm \
+  -sample-cluster \
+  -out ./capacity-probe-results
+```
+
+Other fixtures:
+
+- `testdata/waves/mixed-sizes.yaml` — lean vs fat deployments
+- `testdata/waves/paced-vs-burst.yaml` — same count, burst vs paced admission
+
+### Choosing bouncer numbers
+
+From the CSV/JSON wave summaries:
+
+- **Room budget** (`CLUSTER_DEPLOY_BUDGET_CPU` / `CLUSTER_DEPLOY_BUDGET_MEMORY`):
+  highest total successful weighted occupancy with a strong success rate.
+- **Doorway width** (`MAX_CONCURRENT_PROVISIONS`):
+  highest stable `peak_simultaneous_provisions` before success collapses.
+
+Prefer the last fully healthy wave, not the first wave that fails.
