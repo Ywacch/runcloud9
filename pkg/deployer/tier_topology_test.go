@@ -50,8 +50,8 @@ func TestValidateTierTopology(t *testing.T) {
 			wantErr: "message queues and workers",
 		},
 		{
-			name:    "proxy cache blocked on free tier",
-			limits:  free,
+			name:   "proxy cache blocked on free tier",
+			limits: free,
 			design: func() DeploymentDesign {
 				d := urlShortenerLiteDesign()
 				d.Nodes[1].Config["strategy"] = "write-through"

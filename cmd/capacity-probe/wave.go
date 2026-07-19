@@ -134,6 +134,12 @@ func createAndWait(ctx context.Context, client *apiClient, tracker *deploymentTr
 	}
 	created, status, err := client.CreateDeployment(ctx, p.body)
 	res.HTTPStatus = status
+	if isAuthFailure(status) {
+		res.FailureReason = "authentication failed (token expired or forbidden)"
+		res.CreateStatus = "rejected"
+		res.TerminalAt = time.Now().UTC()
+		return res
+	}
 	if err != nil {
 		res.FailureReason = err.Error()
 		res.CreateStatus = "rejected"
@@ -189,6 +195,13 @@ func createAndWait(ctx context.Context, client *apiClient, tracker *deploymentTr
 		case <-time.After(pollEvery):
 		}
 		st, code, err := client.GetDeployment(ctx, created.DeploymentID)
+		if isAuthFailure(code) {
+			res.TerminalStatus = "failed"
+			res.FailureReason = "authentication failed (token expired or forbidden)"
+			res.TerminalAt = time.Now().UTC()
+			res.ProvisionPhases = phaseList(phases)
+			return res
+		}
 		if err != nil {
 			if code == http.StatusNotFound {
 				res.TerminalStatus = "terminated"
@@ -223,6 +236,10 @@ func createAndWait(ctx context.Context, client *apiClient, tracker *deploymentTr
 			return res
 		}
 	}
+}
+
+func isAuthFailure(status int) bool {
+	return status == http.StatusUnauthorized || status == http.StatusForbidden
 }
 
 func cleanupTracked(ctx context.Context, client *apiClient, tracker *deploymentTracker) {

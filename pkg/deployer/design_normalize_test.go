@@ -82,11 +82,11 @@ func TestNormalizeDesign_instanceSizeToResourceProfile(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name              string
-		config            map[string]interface{}
-		wantResourceProf  string
-		wantResourceSet   bool
-		wantInstanceKept  bool
+		name             string
+		config           map[string]interface{}
+		wantResourceProf string
+		wantResourceSet  bool
+		wantInstanceKept bool
 	}{
 		{
 			name:             "instanceSize maps to resourceProfile",

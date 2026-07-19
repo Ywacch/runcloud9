@@ -148,11 +148,11 @@ func buildLBConfigMap(in lbConfigInput) (*corev1.ConfigMap, error) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: lbConfigMapName,
 			Annotations: map[string]string{
-				"cloud9.io/lb-algorithm":       in.algo,
-				"cloud9.io/lb-backends":        strings.Join(in.logicalBackends, ","),
-				"cloud9.io/lb-endpoints":       string(endpointsJSON),
-				"cloud9.io/lb-app-replicas":    strconv.FormatInt(int64(in.appReplicas), 10),
-				lbUpstreamFallbackAnnotation:   fallback,
+				"cloud9.io/lb-algorithm":     in.algo,
+				"cloud9.io/lb-backends":      strings.Join(in.logicalBackends, ","),
+				"cloud9.io/lb-endpoints":     string(endpointsJSON),
+				"cloud9.io/lb-app-replicas":  strconv.FormatInt(int64(in.appReplicas), 10),
+				lbUpstreamFallbackAnnotation: fallback,
 			},
 		},
 		Data: map[string]string{"nginx.conf": in.nginxConf},

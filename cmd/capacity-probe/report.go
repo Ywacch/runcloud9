@@ -102,11 +102,15 @@ func summarizeWave(name, mode string, results []DeploymentResult, samples []Clus
 			if r.TimeToRunningMS > 0 {
 				durations = append(durations, r.TimeToRunningMS)
 			}
-		case "failed":
+		case "failed", "terminated":
 			rep.FailedCount++
 			reason := r.FailureReason
 			if reason == "" {
-				reason = "failed"
+				if r.TerminalStatus == "terminated" {
+					reason = "terminated"
+				} else {
+					reason = "failed"
+				}
 			}
 			rep.FailureBreakdown[reason]++
 		}

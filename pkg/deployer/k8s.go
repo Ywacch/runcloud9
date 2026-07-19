@@ -29,6 +29,7 @@ import (
 const (
 	waitReadyCrashLoopDebounce          = 45 * time.Second
 	waitReadyRestartFailThreshold int32 = 3
+	waitReadyPollInterval               = 500 * time.Millisecond
 )
 
 // templateHTTPProbe builds an HTTP GET probe at path on port with the given timings.
@@ -181,65 +182,70 @@ func podConditionReady(pod *corev1.Pod) bool {
 	return false
 }
 
+// waitForReady polls pod readiness until desiredReplicas are Ready or ctx ends.
+// UNDERSTAND: a List-then-Watch without resourceVersion races when pods become Ready
+// between the two calls; concurrent provisions hit that often. Re-listing each tick
+// cannot miss a Ready transition that already happened.
 func (k *K8sDeployer) waitForReady(ctx context.Context, namespace string, appLabel string, desiredReplicas int32) error {
 	if desiredReplicas <= 0 {
 		desiredReplicas = 1
 	}
 
 	labelSelector := "deployment=" + namespace + ",app=" + appLabel
-	readyPods := make(map[types.UID]struct{})
-
-	existing, err := k.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
-	if err != nil {
-		return fmt.Errorf("list pods for %s: %w", appLabel, err)
-	}
-	for i := range existing.Items {
-		if podConditionReady(&existing.Items[i]) {
-			readyPods[existing.Items[i].UID] = struct{}{}
-		}
-	}
-	if int32(len(readyPods)) >= desiredReplicas {
-		return nil
-	}
-
-	watcher, err := k.clientset.CoreV1().Pods(namespace).Watch(ctx, metav1.ListOptions{
-		LabelSelector: labelSelector,
-	})
-	if err != nil {
-		return fmt.Errorf("watch pods: %w", err)
-	}
-	defer watcher.Stop()
-
 	crashLoopSince := make(map[types.UID]time.Time)
+	readyCount := 0
 
-	for {
-		select {
-		case event, ok := <-watcher.ResultChan():
-			if !ok {
-				return fmt.Errorf("watch channel closed unexpectedly")
-			}
-			pod, ok := event.Object.(*corev1.Pod)
-			if !ok {
-				continue
-			}
+	check := func() error {
+		list, err := k.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+		if err != nil {
+			return fmt.Errorf("list pods for %s: %w", appLabel, err)
+		}
+		readyPods := make(map[types.UID]struct{})
+		seen := make(map[types.UID]struct{}, len(list.Items))
+		for i := range list.Items {
+			pod := &list.Items[i]
+			seen[pod.UID] = struct{}{}
 			if pod.DeletionTimestamp != nil {
-				delete(readyPods, pod.UID)
 				continue
-			}
-			if podConditionReady(pod) {
-				readyPods[pod.UID] = struct{}{}
-				if int32(len(readyPods)) >= desiredReplicas {
-					return nil
-				}
-			} else {
-				delete(readyPods, pod.UID)
 			}
 			if err := detectWaitReadyFailure(pod, appLabel, crashLoopSince); err != nil {
 				return fmt.Errorf("waiting for %s ready: %w", appLabel, err)
 			}
+			if podConditionReady(pod) {
+				readyPods[pod.UID] = struct{}{}
+			}
+		}
+		for uid := range crashLoopSince {
+			if _, ok := seen[uid]; !ok {
+				delete(crashLoopSince, uid)
+			}
+		}
+		readyCount = len(readyPods)
+		return nil
+	}
+
+	if err := check(); err != nil {
+		return err
+	}
+	if int32(readyCount) >= desiredReplicas {
+		return nil
+	}
+
+	ticker := time.NewTicker(waitReadyPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
 		case <-ctx.Done():
 			return fmt.Errorf("timed out waiting for %d %s pod(s) ready (have %d): %w",
-				desiredReplicas, appLabel, len(readyPods), ctx.Err())
+				desiredReplicas, appLabel, readyCount, ctx.Err())
+		case <-ticker.C:
+			if err := check(); err != nil {
+				return err
+			}
+			if int32(readyCount) >= desiredReplicas {
+				return nil
+			}
 		}
 	}
 }
@@ -743,6 +749,9 @@ func (k *K8sDeployer) Teardown(ctx context.Context, namespace string) error {
 	// Background deletion returns immediately but resources linger briefly.
 	// Foreground gives us a clean "it's really gone" guarantee.
 	if err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
 		return err
 	}
 	return nil

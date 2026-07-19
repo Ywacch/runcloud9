@@ -195,7 +195,7 @@ func TestK8sDeployer_Teardown_DeletesNamespace(t *testing.T) {
 	}
 }
 
-func TestWaitForReady_SingleReplicaFromList(t *testing.T) {
+func TestWaitForReady_AlreadyReady(t *testing.T) {
 	ns := "cloud9-test-one"
 	labels := map[string]string{"app": "app-server", "deployment": ns}
 	fakeClient := fake.NewSimpleClientset()
@@ -215,6 +215,75 @@ func TestWaitForReady_SingleReplicaFromList(t *testing.T) {
 	defer cancel()
 	if err := d.waitForReady(waitCtx, ns, "app-server", 1); err != nil {
 		t.Fatalf("waitForReady(1): %v", err)
+	}
+}
+
+func TestWaitForReady_BecomesReadyOnLaterPoll(t *testing.T) {
+	ns := "cloud9-test-poll-ready"
+	labels := map[string]string{"app": "app-server", "deployment": ns}
+	fakeClient := fake.NewSimpleClientset()
+	ctx := context.Background()
+	pod, err := fakeClient.CoreV1().Pods(ns).Create(ctx, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-server-0", Namespace: ns, Labels: labels},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+
+	d := NewK8sDeployer(fakeClient, "db")
+	waitCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- d.waitForReady(waitCtx, ns, "app-server", 1)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+	if _, err := fakeClient.CoreV1().Pods(ns).UpdateStatus(ctx, pod, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("update status: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("waitForReady: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("waitForReady did not return after pod became Ready")
+	}
+}
+
+func TestWaitForReady_Timeout(t *testing.T) {
+	t.Parallel()
+	ns := "cloud9-test-timeout"
+	labels := map[string]string{"app": "app-server", "deployment": ns}
+	fakeClient := fake.NewSimpleClientset()
+	ctx := context.Background()
+	if _, err := fakeClient.CoreV1().Pods(ns).Create(ctx, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-server-0", Namespace: ns, Labels: labels},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+	d := NewK8sDeployer(fakeClient, "db")
+	waitCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	err := d.waitForReady(waitCtx, ns, "app-server", 1)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded, got %v", err)
+	}
+}
+
+func TestTeardown_NotFoundIsIdempotent(t *testing.T) {
+	t.Parallel()
+	fakeClient := fake.NewSimpleClientset()
+	d := NewK8sDeployer(fakeClient, "db")
+	if err := d.Teardown(context.Background(), "missing-ns"); err != nil {
+		t.Fatalf("Teardown missing namespace: %v", err)
 	}
 }
 
