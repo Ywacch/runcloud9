@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -51,15 +53,50 @@ func TestSummarizeWave(t *testing.T) {
 			HTTPStatus: 201, DeploymentID: "c", CreateStatus: "provisioning", TerminalStatus: "failed",
 			FailureReason: "timeout", CreatedAt: now, TerminalAt: now.Add(time.Second),
 		},
+		{
+			Index: 3, Design: "url-shortener-small", Weight: DeploymentWeight{CPUMillicores: 100, MemoryMi: 200},
+			HTTPStatus: 201, DeploymentID: "d", CreateStatus: "provisioning", TerminalStatus: "terminated",
+			FailureReason: "terminated before running", CreatedAt: now, TerminalAt: now.Add(time.Second),
+		},
 	}
 	rep := summarizeWave("w", "burst", results, nil)
-	if rep.RequestedCount != 3 || rep.AdmittedCount != 2 || rep.SuccessCount != 1 || rep.FailedCount != 1 || rep.RejectedCount != 1 {
+	if rep.RequestedCount != 4 || rep.AdmittedCount != 3 || rep.SuccessCount != 1 || rep.FailedCount != 2 || rep.RejectedCount != 1 {
 		t.Fatalf("counts: %+v", rep)
 	}
 	if rep.SuccessfulWeight.CPUMillicores != 100 {
 		t.Fatalf("successful weight: %+v", rep.SuccessfulWeight)
 	}
-	if rep.FailureBreakdown["active deployment"] != 1 || rep.FailureBreakdown["timeout"] != 1 {
+	if rep.FailureBreakdown["active deployment"] != 1 ||
+		rep.FailureBreakdown["timeout"] != 1 ||
+		rep.FailureBreakdown["terminated before running"] != 1 {
 		t.Fatalf("breakdown: %+v", rep.FailureBreakdown)
 	}
+}
+
+func TestIsAuthFailure(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		status int
+		want   bool
+	}{
+		{200, false},
+		{201, false},
+		{401, true},
+		{403, true},
+		{404, false},
+		{500, false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(http.StatusText(tc.status)+"_"+itoa(tc.status), func(t *testing.T) {
+			t.Parallel()
+			if got := isAuthFailure(tc.status); got != tc.want {
+				t.Fatalf("isAuthFailure(%d)=%v want %v", tc.status, got, tc.want)
+			}
+		})
+	}
+}
+
+func itoa(n int) string {
+	return strconv.Itoa(n)
 }
