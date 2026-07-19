@@ -1,0 +1,15 @@
+name: paced-vs-burst
+tier: internal
+cooldown_seconds: 120
+waves:
+  - name: burst-15
+    mode: burst
+    groups:
+      - count: 15
+        design: url-shortener-small
+  - name: paced-15
+    mode: paced
+    pace_ms: 500
+    groups:
+      - count: 15
+        design: url-shortener-small

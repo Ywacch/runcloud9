@@ -1,0 +1,22 @@
+name: mixed-sizes
+tier: internal
+cooldown_seconds: 120
+waves:
+  # Similar total weight, different person sizes.
+  - name: lean-only
+    mode: burst
+    groups:
+      - count: 10
+        design: url-shortener-small
+  - name: fat-only
+    mode: burst
+    groups:
+      - count: 4
+        design: url-shortener-large
+  - name: mixed
+    mode: burst
+    groups:
+      - count: 6
+        design: url-shortener-small
+      - count: 2
+        design: url-shortener-large
