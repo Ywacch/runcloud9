@@ -27,6 +27,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/store"
 	"github.com/ywacch/cloud9/pkg/teardown"
 	"github.com/ywacch/cloud9/pkg/templates"
+	"golang.org/x/sync/semaphore"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -46,6 +47,7 @@ type Handler struct {
 	eventBus         *metrics.EventBus
 	provisionMu      sync.Mutex
 	provisionCancel  map[string]context.CancelFunc
+	provisionSem     *semaphore.Weighted
 }
 
 type deploymentStore interface {
@@ -89,6 +91,16 @@ func NewHandler(
 	if seed != nil {
 		seedSvc = seed
 	}
+
+	var provisionSem *semaphore.Weighted
+	if raw := strings.TrimSpace(os.Getenv("MAX_CONCURRENT_PROVISIONS")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			provisionSem = semaphore.NewWeighted(int64(n))
+		} else {
+			log.Printf("MAX_CONCURRENT_PROVISIONS invalid %q: %v (disabling doorway)", raw, err)
+		}
+	}
+
 	return &Handler{
 		deployers:        deployers,
 		store:            store,
@@ -100,6 +112,7 @@ func NewHandler(
 		loadgen:          lg,
 		eventBus:         eventBus,
 		provisionCancel:  make(map[string]context.CancelFunc),
+		provisionSem:     provisionSem,
 	}
 }
 
@@ -451,7 +464,25 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		h.setProvisionCancel(namespace, cancel)
 		defer h.clearProvisionCancel(namespace)
 
-		result, err := h.orchestrate(ctx, design, namespace, quotaTier)
+		var (
+			result *deployer.DeploymentResult
+			err    error
+		)
+
+		if h.provisionSem != nil {
+			start := time.Now()
+			err = h.provisionSem.Acquire(ctx, 1)
+			if err != nil {
+				log.Printf("provision semaphore acquire failed namespace=%s waited=%s: %v", namespace, time.Since(start), err)
+			} else {
+				log.Printf("provision semaphore acquired namespace=%s waited=%s", namespace, time.Since(start))
+				defer h.provisionSem.Release(1)
+			}
+		}
+
+		if err == nil {
+			result, err = h.orchestrate(ctx, design, namespace, quotaTier)
+		}
 		if err != nil {
 			if errors.Is(err, context.Canceled) || h.isDeploymentStatus(namespace, "terminated") {
 				log.Printf("orchestration canceled for namespace=%s", namespace)
