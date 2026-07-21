@@ -360,6 +360,7 @@ func main() {
 	handler.RegisterRoutes(mux)
 
 	recoverDeployments(context.Background(), deploymentStore, scheduler)
+	handler.StartDeployQueue(context.Background())
 
 	port := "8080"
 	if len(os.Args) > 1 {

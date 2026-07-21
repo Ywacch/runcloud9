@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -419,12 +420,13 @@ func TestHandleCreateDeployment_ConcurrentLimit_RejectsSecondActive(t *testing.T
 	}
 }
 
-func TestHandleCreateDeployment_RoomBudget_RejectsWhenFull(t *testing.T) {
+func TestHandleCreateDeployment_RoomBudget_EnqueuesWhenFull(t *testing.T) {
 	t.Setenv("ENV", "development")
 	t.Setenv("SUPABASE_JWT_SECRET", "")
 	t.Setenv("SUPABASE_URL", "")
 	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "100m")
 	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "100Mi")
+	t.Setenv("MAX_DEPLOY_QUEUE", "20")
 
 	s := newFakeDeploymentStore()
 	s.users = map[string]store.UserRecord{"dev-user": {IsInternal: true}}
@@ -451,18 +453,100 @@ func TestHandleCreateDeployment_RoomBudget_RejectsWhenFull(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("want 429, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Status              string `json:"status"`
+		QueuePosition       int    `json:"queuePosition"`
+		EstimatedWaitSeconds int   `json:"estimatedWaitSeconds"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Status != "queued" {
+		t.Fatalf("status = %q, want queued body=%s", out.Status, rec.Body.String())
+	}
+	if out.QueuePosition != 1 {
+		t.Fatalf("queuePosition = %d, want 1", out.QueuePosition)
+	}
+	if out.EstimatedWaitSeconds <= 0 {
+		t.Fatalf("estimatedWaitSeconds = %d, want > 0", out.EstimatedWaitSeconds)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.active) != 1 || s.active[0].Status != "queued" {
+		t.Fatalf("active = %+v, want one queued", s.active)
+	}
+}
+
+func TestHandleCreateDeployment_RoomBudget_QueueFull(t *testing.T) {
+	t.Setenv("ENV", "development")
+	t.Setenv("SUPABASE_JWT_SECRET", "")
+	t.Setenv("SUPABASE_URL", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "100m")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "100Mi")
+	t.Setenv("MAX_DEPLOY_QUEUE", "1")
+
+	s := newFakeDeploymentStore()
+	s.users = map[string]store.UserRecord{"dev-user": {IsInternal: true}}
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "standard",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app", Type: "app-server", Name: "app", Config: map[string]interface{}{}},
+			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app", TargetID: "db"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+
+	req1 := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req1.Header.Set("Content-Type", "application/json")
+	rec1 := httptest.NewRecorder()
+	mux.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusCreated {
+		t.Fatalf("first create: want 201, got %d body=%s", rec1.Code, rec1.Body.String())
+	}
+
+	// Free the per-user slot so we hit queue_full, not user capacity.
+	// Keep one queued row owned by another user to fill MAX_DEPLOY_QUEUE=1.
+	s.mu.Lock()
+	for _, a := range s.active {
+		row := s.byNS[a.Namespace]
+		row.Status = "terminated"
+		s.byNS[a.Namespace] = row
+	}
+	s.active = []store.ActiveDeploymentRow{{
+		ID: "other", Namespace: "other-ns", Template: "url-shortener", Status: "queued",
+		CreatedAt: time.Now().Add(-time.Minute), ExpiresAt: time.Now().Add(time.Hour),
+	}}
+	s.byNS["other-ns"] = store.DeploymentRow{
+		ID: "other", UserID: "other-user", Namespace: "other-ns", Status: "queued",
+		CreatedAt: time.Now().Add(-time.Minute), ExpiresAt: time.Now().Add(time.Hour),
+	}
+	s.admittedByNS["other-ns"] = store.AdmissionOccupancy{CPUMillicores: 900, MemoryMi: 2000}
+	s.mu.Unlock()
+
+	req2 := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req2.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+	mux.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("second create: want 429, got %d body=%s", rec2.Code, rec2.Body.String())
 	}
 	var er struct {
 		Reason string `json:"reason"`
 	}
-	_ = json.Unmarshal(rec.Body.Bytes(), &er)
-	if er.Reason != "cluster_busy" {
-		t.Fatalf("reason = %q, want cluster_busy body=%s", er.Reason, rec.Body.String())
-	}
-	if rec.Header().Get("Retry-After") == "" {
-		t.Fatal("expected Retry-After header")
+	_ = json.Unmarshal(rec2.Body.Bytes(), &er)
+	if er.Reason != "queue_full" {
+		t.Fatalf("reason = %q, want queue_full body=%s", er.Reason, rec2.Body.String())
 	}
 }
 
@@ -1047,13 +1131,17 @@ func (f *fakeDeploymentStore) CreateDeployment(_ context.Context, params store.C
 	defer f.mu.Unlock()
 	f.nextSeq++
 	id := fmt.Sprintf("dep-%d", f.nextSeq)
+	status := params.Status
+	if status == "" {
+		status = "provisioning"
+	}
 	row := store.DeploymentRow{
 		ID:        id,
 		UserID:    params.UserID,
 		Namespace: params.Namespace,
 		Template:  params.Template,
 		Archetype: params.Archetype,
-		Status:    "provisioning",
+		Status:    status,
 		Design:    params.Design,
 		ExpiresAt: params.ExpiresAt,
 		CreatedAt: time.Now(),
@@ -1063,15 +1151,72 @@ func (f *fakeDeploymentStore) CreateDeployment(_ context.Context, params store.C
 		CPUMillicores: params.AdmittedCPUm,
 		MemoryMi:      params.AdmittedMemMi,
 	}
-	f.active = append(f.active, store.ActiveDeploymentRow{
-		ID:        id,
-		Namespace: params.Namespace,
-		Template:  params.Template,
-		Status:    "provisioning",
-		ExpiresAt: params.ExpiresAt,
-		CreatedAt: row.CreatedAt,
-	})
+	if status == "running" || status == "provisioning" || status == "queued" {
+		f.active = append(f.active, store.ActiveDeploymentRow{
+			ID:        id,
+			Namespace: params.Namespace,
+			Template:  params.Template,
+			Status:    status,
+			ExpiresAt: params.ExpiresAt,
+			CreatedAt: row.CreatedAt,
+		})
+	}
 	return id, nil
+}
+
+func (f *fakeDeploymentStore) ListQueuedDeployments(_ context.Context) ([]store.QueuedDeploymentRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]store.QueuedDeploymentRow, 0)
+	for _, r := range f.active {
+		if r.Status != "queued" {
+			continue
+		}
+		row := f.byNS[r.Namespace]
+		w := f.admittedByNS[r.Namespace]
+		cpu := w.CPUMillicores
+		mem := w.MemoryMi
+		out = append(out, store.QueuedDeploymentRow{
+			ID:            row.ID,
+			UserID:        row.UserID,
+			Namespace:     r.Namespace,
+			Template:      r.Template,
+			Status:        r.Status,
+			ExpiresAt:     r.ExpiresAt,
+			CreatedAt:     r.CreatedAt,
+			AdmittedCPUm:  &cpu,
+			AdmittedMemMi: &mem,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+func (f *fakeDeploymentStore) CountQueuedDeployments(ctx context.Context) (int, error) {
+	rows, err := f.ListQueuedDeployments(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return len(rows), nil
+}
+
+func (f *fakeDeploymentStore) ClaimQueued(_ context.Context, namespace string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	row, ok := f.byNS[namespace]
+	if !ok || row.Status != "queued" {
+		return false, nil
+	}
+	row.Status = "provisioning"
+	f.byNS[namespace] = row
+	for i := range f.active {
+		if f.active[i].Namespace == namespace {
+			f.active[i].Status = "provisioning"
+		}
+	}
+	return true, nil
 }
 
 func (f *fakeDeploymentStore) UpdateStatus(_ context.Context, namespace, status string) error {
@@ -1086,7 +1231,7 @@ func (f *fakeDeploymentStore) UpdateStatus(_ context.Context, namespace, status 
 	active := make([]store.ActiveDeploymentRow, 0, len(f.active))
 	for _, r := range f.active {
 		if r.Namespace == namespace {
-			if status == "running" || status == "provisioning" {
+			if status == "running" || status == "provisioning" || status == "queued" {
 				r.Status = status
 				active = append(active, r)
 			}
@@ -1096,7 +1241,11 @@ func (f *fakeDeploymentStore) UpdateStatus(_ context.Context, namespace, status 
 	}
 	f.active = active
 	if status != "running" && status != "provisioning" {
-		delete(f.admittedByNS, namespace)
+		// Queued still holds weight columns but does not occupy the room;
+		// only drop admitted map when leaving room-relevant statuses.
+		if status != "queued" {
+			delete(f.admittedByNS, namespace)
+		}
 	}
 	return nil
 }
@@ -1112,6 +1261,9 @@ func (f *fakeDeploymentStore) SumActiveAdmissionWeights(_ context.Context) (stor
 	}
 	var occ store.AdmissionOccupancy
 	for _, r := range f.active {
+		if r.Status != "running" && r.Status != "provisioning" {
+			continue
+		}
 		w := f.admittedByNS[r.Namespace]
 		occ.CPUMillicores += w.CPUMillicores
 		occ.MemoryMi += w.MemoryMi

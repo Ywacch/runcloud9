@@ -21,6 +21,9 @@ Use this doc as the source of truth for required/optional environment variables 
 | `MAX_CONCURRENT_PROVISIONS` | No | unset (unlimited) | Doorway: max in-flight orchestrations per API process (`replicas: 1` only). |
 | `CLUSTER_DEPLOY_BUDGET_CPU` | No | unset (gate off) | Room budget CPU (k8s Quantity, e.g. `18500m`). Set **with** memory or leave both unset. |
 | `CLUSTER_DEPLOY_BUDGET_MEMORY` | No | unset (gate off) | Room budget memory (e.g. `49920Mi`). Measured Jul 2026 wave-20 for this GCP account. |
+| `MAX_DEPLOY_QUEUE` | No | `20` | Max global `queued` deployments when the room is full; over → 429 `reason=queue_full`. |
+| `DEPLOY_QUEUE_TTL_SECONDS` | No | `900` | Max time a deploy may sit `queued` before auto-terminate (15m). |
+| `PROVISION_ETA_SECONDS` | No | `240` | Fallback per-slot provision time for `estimatedWaitSeconds` until a rolling average exists. |
 | `API_RATE_LIMIT_ENABLED` | No | `true` when `ENV=production`, else `false` | Enable HTTP rate limiting on the API. |
 | `API_RATE_LIMIT_BACKEND` | No | `memory` | `memory` (per-pod; use at `replicas: 1`) or `redis` (not implemented). |
 | `API_RATE_LIMIT_RPS` | No | `30` | Per-user sustained rate for standard authenticated routes. |
@@ -58,6 +61,7 @@ Optional keys:
 - Rotate `supabase-service-key` and `supabase-jwt-secret` on a schedule.
 - For local development, prefer environment variables from a local `.env` file (not committed).
 - For Kubernetes, prefer `Secret` resources and avoid plain values in Deployment manifests.
-- Keep `cloud9-api` at **`replicas: 1`** while doorway (`MAX_CONCURRENT_PROVISIONS`) and room (`CLUSTER_DEPLOY_BUDGET_*`) use in-process mutex/semaphore. Scale only after DB-atomic admission exists.
-- SQL for weight columns: [`docs/sql/admitted_weights.sql`](sql/admitted_weights.sql).
+- Keep `cloud9-api` at **`replicas: 1`** while doorway (`MAX_CONCURRENT_PROVISIONS`), room (`CLUSTER_DEPLOY_BUDGET_*`), and deploy queue (in-process FIFO) use in-process mutex/semaphore. Scale only after DB-atomic admission exists.
+- SQL for weight columns: [`docs/sql/admitted_weights.sql`](sql/admitted_weights.sql). Status `queued` needs no schema change (`status` is unconstrained text).
+- When the room is full, creates return **201** with `status=queued`, `queuePosition`, and `estimatedWaitSeconds`. Overflow past `MAX_DEPLOY_QUEUE` returns **429** `reason=queue_full`.
 

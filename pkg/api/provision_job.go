@@ -76,6 +76,7 @@ func (h *Handler) runBackgroundProvision(
 	if err != nil {
 		if errors.Is(err, context.Canceled) || h.isDeploymentStatus(namespace, "terminated") {
 			log.Printf("orchestration canceled for namespace=%s", namespace)
+			h.wakeDeployQueue()
 			return
 		}
 		h.failProvision(design, namespace, userID, err)
@@ -88,6 +89,7 @@ func (h *Handler) runBackgroundProvision(
 	if err != nil {
 		if errors.Is(err, context.Canceled) || h.isDeploymentStatus(namespace, "terminated") {
 			log.Printf("orchestration canceled for namespace=%s", namespace)
+			h.wakeDeployQueue()
 			return
 		}
 		h.failProvision(design, namespace, userID, err)
@@ -97,6 +99,8 @@ func (h *Handler) runBackgroundProvision(
 	runExpiresAt := time.Now().Add(time.Duration(sessionMins) * time.Minute)
 	if h.isDeploymentStatus(namespace, "terminated") {
 		log.Printf("skip final running status for terminated namespace=%s", namespace)
+		h.provisionETA.Observe(time.Since(start))
+		h.wakeDeployQueue()
 		return
 	}
 	if h.store != nil {
@@ -110,6 +114,8 @@ func (h *Handler) runBackgroundProvision(
 	if h.scheduler != nil {
 		h.scheduler.Schedule(namespace, runExpiresAt)
 	}
+	h.provisionETA.Observe(time.Since(start))
+	h.wakeDeployQueue()
 }
 
 func (h *Handler) failProvision(design deployer.DeploymentDesign, namespace, userID string, err error) {
@@ -125,6 +131,7 @@ func (h *Handler) failProvision(design deployer.DeploymentDesign, namespace, use
 	if h.store != nil {
 		_ = h.store.UpdateStatus(context.Background(), namespace, "failed")
 	}
+	h.wakeDeployQueue()
 	if h.diagnostics != nil {
 		var createdAt string
 		var runningAt string

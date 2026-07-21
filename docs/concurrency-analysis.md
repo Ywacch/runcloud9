@@ -158,6 +158,6 @@ Unset both budget vars to leave the room gate off.
 
 **Analogies:** the **room** is steady-state weighted occupancy; the **door** is concurrent orchestrations; **person size** is `QuotaResourceLimits` for that design. A jam at the door (too many simultaneous provisions) fails more deployments than the room can hold once people enter in paced batches.
 
-**Ops:** apply [`docs/sql/admitted_weights.sql`](sql/admitted_weights.sql) before enabling the room gate. Keep `cloud9-api` at `replicas: 1` until admission is DB-atomic (in-process mutex + doorway semaphore). Phase 1 returns HTTP **429** `reason=cluster_busy` when the room is full.
+**Ops:** apply [`docs/sql/admitted_weights.sql`](sql/admitted_weights.sql) before enabling the room gate. Keep `cloud9-api` at `replicas: 1` until admission is DB-atomic (in-process mutex + doorway semaphore + deploy queue). Phase 2: room full → **201** `status=queued` (FIFO); queue overflow → **429** `reason=queue_full`. Defaults: `MAX_DEPLOY_QUEUE=20`, `DEPLOY_QUEUE_TTL_SECONDS=900`, `PROVISION_ETA_SECONDS=240`.
 
 Narrative copy also lives in local `ganymede_appendix.md` §G / §H.10 (that file is gitignored via `*_appendix.md`).
