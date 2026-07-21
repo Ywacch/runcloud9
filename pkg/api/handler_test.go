@@ -374,6 +374,8 @@ func TestHandleCreateDeployment_ConcurrentLimit_RejectsSecondActive(t *testing.T
 	t.Setenv("ENV", "development")
 	t.Setenv("SUPABASE_JWT_SECRET", "")
 	t.Setenv("SUPABASE_URL", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "")
 
 	s := newFakeDeploymentStore()
 	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
@@ -417,10 +419,141 @@ func TestHandleCreateDeployment_ConcurrentLimit_RejectsSecondActive(t *testing.T
 	}
 }
 
+func TestHandleCreateDeployment_RoomBudget_RejectsWhenFull(t *testing.T) {
+	t.Setenv("ENV", "development")
+	t.Setenv("SUPABASE_JWT_SECRET", "")
+	t.Setenv("SUPABASE_URL", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "100m")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "100Mi")
+
+	s := newFakeDeploymentStore()
+	s.users = map[string]store.UserRecord{"dev-user": {IsInternal: true}}
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
+	if h.roomBudget == nil {
+		t.Fatal("expected room budget config from env")
+	}
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "standard",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app", Type: "app-server", Name: "app", Config: map[string]interface{}{}},
+			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app", TargetID: "db"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("want 429, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var er struct {
+		Reason string `json:"reason"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &er)
+	if er.Reason != "cluster_busy" {
+		t.Fatalf("reason = %q, want cluster_busy body=%s", er.Reason, rec.Body.String())
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Fatal("expected Retry-After header")
+	}
+}
+
+func TestHandleCreateDeployment_RoomBudget_AdmitsWhenFits(t *testing.T) {
+	t.Setenv("ENV", "development")
+	t.Setenv("SUPABASE_JWT_SECRET", "")
+	t.Setenv("SUPABASE_URL", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "100000m")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "200000Mi")
+
+	s := newFakeDeploymentStore()
+	s.users = map[string]store.UserRecord{"dev-user": {IsInternal: true}}
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "standard",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app", Type: "app-server", Name: "app", Config: map[string]interface{}{}},
+			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app", TargetID: "db"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.active) != 1 {
+		t.Fatalf("active = %d, want 1", len(s.active))
+	}
+	w := s.admittedByNS[s.active[0].Namespace]
+	if w.CPUMillicores <= 0 || w.MemoryMi <= 0 {
+		t.Fatalf("expected persisted admitted weights, got %+v", w)
+	}
+}
+
+func TestHandleCreateDeployment_RoomBudget_UnsetSkipsGate(t *testing.T) {
+	t.Setenv("ENV", "development")
+	t.Setenv("SUPABASE_JWT_SECRET", "")
+	t.Setenv("SUPABASE_URL", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "")
+
+	s := newFakeDeploymentStore()
+	full := store.AdmissionOccupancy{CPUMillicores: 1e9, MemoryMi: 1e9}
+	s.forcedOccupancy = &full
+	s.users = map[string]store.UserRecord{"dev-user": {IsInternal: true}}
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
+	if h.roomBudget != nil {
+		t.Fatal("expected room gate off when budget env unset")
+	}
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "standard",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app", Type: "app-server", Name: "app", Config: map[string]interface{}{}},
+			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app", TargetID: "db"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201 with gate off, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleCreateDeployment_ConcurrentLimit_InternalTier(t *testing.T) {
 	t.Setenv("ENV", "development")
 	t.Setenv("SUPABASE_JWT_SECRET", "")
 	t.Setenv("SUPABASE_URL", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "")
 
 	s := newFakeDeploymentStore()
 	s.users = map[string]store.UserRecord{
@@ -856,22 +989,26 @@ func TestDeleteDuringProvision_StaysTerminated(t *testing.T) {
 }
 
 type fakeDeploymentStore struct {
-	mu           sync.Mutex
-	byNS         map[string]store.DeploymentRow
-	active       []store.ActiveDeploymentRow
-	history      []store.DeploymentHistoryRow
-	historyErr   error
-	historyUser  string
-	historyLimit int
-	nextSeq      int
-	users        map[string]store.UserRecord
-	defaultUser  store.UserRecord
+	mu              sync.Mutex
+	byNS            map[string]store.DeploymentRow
+	active          []store.ActiveDeploymentRow
+	history         []store.DeploymentHistoryRow
+	historyErr      error
+	historyUser     string
+	historyLimit    int
+	nextSeq         int
+	users           map[string]store.UserRecord
+	defaultUser     store.UserRecord
+	admittedByNS    map[string]store.AdmissionOccupancy
+	forcedOccupancy *store.AdmissionOccupancy
+	sumOccErr       error
 }
 
 func newFakeDeploymentStore() *fakeDeploymentStore {
 	return &fakeDeploymentStore{
-		byNS:   make(map[string]store.DeploymentRow),
-		active: make([]store.ActiveDeploymentRow, 0),
+		byNS:         make(map[string]store.DeploymentRow),
+		active:       make([]store.ActiveDeploymentRow, 0),
+		admittedByNS: make(map[string]store.AdmissionOccupancy),
 	}
 }
 
@@ -922,6 +1059,10 @@ func (f *fakeDeploymentStore) CreateDeployment(_ context.Context, params store.C
 		CreatedAt: time.Now(),
 	}
 	f.byNS[params.Namespace] = row
+	f.admittedByNS[params.Namespace] = store.AdmissionOccupancy{
+		CPUMillicores: params.AdmittedCPUm,
+		MemoryMi:      params.AdmittedMemMi,
+	}
 	f.active = append(f.active, store.ActiveDeploymentRow{
 		ID:        id,
 		Namespace: params.Namespace,
@@ -954,7 +1095,28 @@ func (f *fakeDeploymentStore) UpdateStatus(_ context.Context, namespace, status 
 		active = append(active, r)
 	}
 	f.active = active
+	if status != "running" && status != "provisioning" {
+		delete(f.admittedByNS, namespace)
+	}
 	return nil
+}
+
+func (f *fakeDeploymentStore) SumActiveAdmissionWeights(_ context.Context) (store.AdmissionOccupancy, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.sumOccErr != nil {
+		return store.AdmissionOccupancy{}, f.sumOccErr
+	}
+	if f.forcedOccupancy != nil {
+		return *f.forcedOccupancy, nil
+	}
+	var occ store.AdmissionOccupancy
+	for _, r := range f.active {
+		w := f.admittedByNS[r.Namespace]
+		occ.CPUMillicores += w.CPUMillicores
+		occ.MemoryMi += w.MemoryMi
+	}
+	return occ, nil
 }
 
 func (f *fakeDeploymentStore) UpdateExpiresAt(_ context.Context, namespace string, expiresAt time.Time) error {

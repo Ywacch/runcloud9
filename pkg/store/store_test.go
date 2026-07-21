@@ -122,3 +122,95 @@ func assertQueryValue(t *testing.T, values map[string][]string, key, want string
 		t.Fatalf("query %s = %q, want %q", key, got, want)
 	}
 }
+
+func TestSumActiveAdmissionWeights(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/v1/cloud_deployments" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		q := r.URL.Query()
+		if got := q.Get("status"); got != "in.(running,provisioning)" {
+			t.Errorf("status filter = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		cpuA, cpuB := int64(100), int64(200)
+		memA := int64(10)
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"admitted_cpu_m": cpuA, "admitted_mem_mi": memA},
+			{"admitted_cpu_m": cpuB, "admitted_mem_mi": nil},
+			{"admitted_cpu_m": nil, "admitted_mem_mi": nil},
+		})
+	}))
+	defer server.Close()
+
+	s, err := NewDeploymentStore(server.URL, "service-key")
+	if err != nil {
+		t.Fatalf("NewDeploymentStore: %v", err)
+	}
+	occ, err := s.SumActiveAdmissionWeights(context.Background())
+	if err != nil {
+		t.Fatalf("SumActiveAdmissionWeights: %v", err)
+	}
+	if occ.CPUMillicores != 300 || occ.MemoryMi != 10 {
+		t.Fatalf("occupancy = %+v, want cpu=300 mem=10", occ)
+	}
+}
+
+func TestCreateDeployment_IncludesAdmittedWeights(t *testing.T) {
+	t.Parallel()
+
+	var inserted []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&inserted); err != nil {
+			t.Fatalf("decode insert body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]map[string]string{{"id": "dep-1"}})
+	}))
+	defer server.Close()
+
+	s, err := NewDeploymentStore(server.URL, "service-key")
+	if err != nil {
+		t.Fatalf("NewDeploymentStore: %v", err)
+	}
+	_, err = s.CreateDeployment(context.Background(), CreateDeploymentParams{
+		Namespace:     "ns-1",
+		Template:      "url-shortener",
+		Archetype:     "standard",
+		Design:        map[string]any{},
+		ExpiresAt:     time.Now().Add(time.Hour),
+		AdmittedCPUm:  925,
+		AdmittedMemMi: 2496,
+	})
+	if err != nil {
+		t.Fatalf("CreateDeployment: %v", err)
+	}
+	if len(inserted) != 1 {
+		t.Fatalf("inserted rows = %d", len(inserted))
+	}
+	assertJSONInt64(t, inserted[0]["admitted_cpu_m"], 925)
+	assertJSONInt64(t, inserted[0]["admitted_mem_mi"], 2496)
+}
+
+func assertJSONInt64(t *testing.T, v any, want int64) {
+	t.Helper()
+	switch n := v.(type) {
+	case float64:
+		if int64(n) != want {
+			t.Fatalf("got %v want %d", n, want)
+		}
+	case int64:
+		if n != want {
+			t.Fatalf("got %d want %d", n, want)
+		}
+	case json.Number:
+		i, err := n.Int64()
+		if err != nil || i != want {
+			t.Fatalf("got %v want %d err=%v", n, want, err)
+		}
+	default:
+		t.Fatalf("unexpected type %T = %v", v, v)
+	}
+}

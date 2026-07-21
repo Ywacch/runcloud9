@@ -43,12 +43,20 @@ type DeploymentHistoryRow struct {
 
 // CreateDeploymentParams are the inputs for creating a deployment row.
 type CreateDeploymentParams struct {
-	Namespace string
-	Template  string
-	Archetype string
-	Design    map[string]any
-	ExpiresAt time.Time
-	UserID    string
+	Namespace     string
+	Template      string
+	Archetype     string
+	Design        map[string]any
+	ExpiresAt     time.Time
+	UserID        string
+	AdmittedCPUm  int64 // cluster admission weight; 0 allowed
+	AdmittedMemMi int64
+}
+
+// AdmissionOccupancy is the summed admitted weight of active deployments.
+type AdmissionOccupancy struct {
+	CPUMillicores int64
+	MemoryMi      int64
 }
 
 // DeploymentRow represents a row from cloud_deployments (subset of columns).
@@ -89,13 +97,15 @@ func (s *DeploymentStore) CreateDeployment(ctx context.Context, params CreateDep
 		userIDVal = nil
 	}
 	row := map[string]any{
-		"namespace":  params.Namespace,
-		"template":   params.Template,
-		"archetype":  params.Archetype,
-		"status":     "provisioning",
-		"design":     params.Design,
-		"expires_at": params.ExpiresAt.Format(time.RFC3339),
-		"user_id":    userIDVal,
+		"namespace":       params.Namespace,
+		"template":        params.Template,
+		"archetype":       params.Archetype,
+		"status":          "provisioning",
+		"design":          params.Design,
+		"expires_at":      params.ExpiresAt.Format(time.RFC3339),
+		"user_id":         userIDVal,
+		"admitted_cpu_m":  params.AdmittedCPUm,
+		"admitted_mem_mi": params.AdmittedMemMi,
 	}
 	data, _, err := s.client.From("cloud_deployments").Insert([]map[string]any{row}, false, "", "representation", "exact").Execute()
 	if err != nil {
@@ -220,6 +230,35 @@ func (s *DeploymentStore) ListActiveDeployments(ctx context.Context, userID stri
 	}
 
 	return rows, nil
+}
+
+// SumActiveAdmissionWeights sums admitted_cpu_m / admitted_mem_mi for rows with
+// status IN ('provisioning','running'). NULL weights count as 0.
+func (s *DeploymentStore) SumActiveAdmissionWeights(ctx context.Context) (AdmissionOccupancy, error) {
+	data, _, err := s.client.From("cloud_deployments").
+		Select("admitted_cpu_m,admitted_mem_mi", "exact", false).
+		In("status", []string{"running", "provisioning"}).
+		Execute()
+	if err != nil {
+		return AdmissionOccupancy{}, fmt.Errorf("store.SumActiveAdmissionWeights: %w", err)
+	}
+	var rows []struct {
+		AdmittedCPUm  *int64 `json:"admitted_cpu_m"`
+		AdmittedMemMi *int64 `json:"admitted_mem_mi"`
+	}
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return AdmissionOccupancy{}, fmt.Errorf("store.SumActiveAdmissionWeights: parse: %w", err)
+	}
+	var occ AdmissionOccupancy
+	for _, r := range rows {
+		if r.AdmittedCPUm != nil {
+			occ.CPUMillicores += *r.AdmittedCPUm
+		}
+		if r.AdmittedMemMi != nil {
+			occ.MemoryMi += *r.AdmittedMemMi
+		}
+	}
+	return occ, nil
 }
 
 // ListUserDeploymentHistory returns a user's terminated and failed deployments,
