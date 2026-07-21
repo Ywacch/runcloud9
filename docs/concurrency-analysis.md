@@ -143,3 +143,21 @@ From the CSV/JSON wave summaries:
   highest stable `peak_simultaneous_provisions` before success collapses.
 
 Prefer the last fully healthy wave, not the first wave that fails.
+
+### Measured defaults (GCP account as of 2026-07-21)
+
+Homogeneous `url-shortener-small` campaign `homogeneous-url-shortener-20260721-091047`:
+
+| Knob | Value | Basis |
+|------|-------|--------|
+| Doorway | `MAX_CONCURRENT_PROVISIONS=5` | Stable orchestration pace after timeout-after-door fix |
+| Room CPU | `CLUSTER_DEPLOY_BUDGET_CPU=18500m` | wave-20 successful weight (20/20) |
+| Room memory | `CLUSTER_DEPLOY_BUDGET_MEMORY=49920Mi` | wave-20 successful weight (20/20) |
+
+Unset both budget vars to leave the room gate off.
+
+**Analogies:** the **room** is steady-state weighted occupancy; the **door** is concurrent orchestrations; **person size** is `QuotaResourceLimits` for that design. A jam at the door (too many simultaneous provisions) fails more deployments than the room can hold once people enter in paced batches.
+
+**Ops:** apply [`docs/sql/admitted_weights.sql`](sql/admitted_weights.sql) before enabling the room gate. Keep `cloud9-api` at `replicas: 1` until admission is DB-atomic (in-process mutex + doorway semaphore). Phase 1 returns HTTP **429** `reason=cluster_busy` when the room is full.
+
+Narrative copy also lives in local `ganymede_appendix.md` §G / §H.10 (that file is gitignored via `*_appendix.md`).

@@ -23,6 +23,9 @@ func (s *stubUserStore) ListUserDeploymentHistory(context.Context, string, int) 
 func (s *stubUserStore) CreateDeployment(context.Context, store.CreateDeploymentParams) (string, error) {
 	return "", nil
 }
+func (s *stubUserStore) SumActiveAdmissionWeights(context.Context) (store.AdmissionOccupancy, error) {
+	return store.AdmissionOccupancy{}, nil
+}
 func (s *stubUserStore) UpdateStatus(context.Context, string, string) error { return nil }
 func (s *stubUserStore) UpdateExpiresAt(context.Context, string, time.Time) error {
 	return nil

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/ywacch/cloud9/pkg/admission"
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/diagnostics"
 	"github.com/ywacch/cloud9/pkg/loadgen"
@@ -46,12 +47,15 @@ type Handler struct {
 	provisionMu      sync.Mutex
 	provisionCancel  map[string]context.CancelFunc
 	provisionSem     *semaphore.Weighted
+	admitMu          sync.Mutex
+	roomBudget       *admission.Config
 }
 
 type deploymentStore interface {
 	ListActiveDeployments(ctx context.Context, userID string) ([]store.ActiveDeploymentRow, error)
 	ListUserDeploymentHistory(ctx context.Context, userID string, limit int) ([]store.DeploymentHistoryRow, error)
 	CreateDeployment(ctx context.Context, params store.CreateDeploymentParams) (string, error)
+	SumActiveAdmissionWeights(ctx context.Context) (store.AdmissionOccupancy, error)
 	UpdateStatus(ctx context.Context, namespace, status string) error
 	UpdateExpiresAt(ctx context.Context, namespace string, expiresAt time.Time) error
 	UpdateMetricsSummary(ctx context.Context, namespace string, patch map[string]any) error
@@ -111,6 +115,7 @@ func NewHandler(
 		eventBus:         eventBus,
 		provisionCancel:  make(map[string]context.CancelFunc),
 		provisionSem:     provisionSem,
+		roomBudget:       admission.ConfigFromEnv(),
 	}
 }
 
@@ -401,35 +406,12 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 	expiresAt := time.Now().Add(time.Duration(sessionMinutes) * time.Minute)
 
 	if h.store != nil {
-		active, err := h.store.ListActiveDeployments(r.Context(), userID)
+		h.admitMu.Lock()
+		err := h.admitAndCreate(r.Context(), userID, limits.MaxConcurrent, design, resourceQuotaTier, namespace, expiresAt)
+		h.admitMu.Unlock()
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to check active deployments")
-			return
-		}
-		if len(active) >= limits.MaxConcurrent {
-			writeError(w, http.StatusTooManyRequests, "you already have an active deployment — end it before creating another")
-			return
-		}
-
-		var designMap map[string]any
-		if b, err := json.Marshal(design); err != nil {
-			writeError(w, http.StatusInternalServerError, "invalid design")
-			return
-		} else if err := json.Unmarshal(b, &designMap); err != nil {
-			writeError(w, http.StatusInternalServerError, "invalid design")
-			return
-		}
-		_, err = h.store.CreateDeployment(r.Context(), store.CreateDeploymentParams{
-			Namespace: namespace,
-			Template:  design.Template,
-			Archetype: design.Archetype,
-			Design:    designMap,
-			ExpiresAt: expiresAt,
-			UserID:    userID,
-		})
-		if err != nil {
-			log.Printf("create deployment record: %v", err)
-			writeError(w, http.StatusInternalServerError, "failed to create deployment record")
+			log.Printf("admit create deployment: %v", err)
+			writeAdmitError(w, err)
 			return
 		}
 	}

@@ -17,7 +17,10 @@ Use this doc as the source of truth for required/optional environment variables 
 | `PROMETHEUS_URL` | No | Empty | Prometheus base URL for metrics collection. |
 | `SEED_BUCKET_NAME` | No | `cloud9-seed-data` | Bucket used by seeder for prebuilt DB dumps. |
 | `DDC_BUCKET` | No | Empty | Bucket for diagnostics collector artifact uploads. |
-| `MAX_ACTIVE_DEPLOYMENTS_PER_USER` | No | `1` | Per-user active deployment limit. |
+| `MAX_ACTIVE_DEPLOYMENTS_PER_USER` | No | `1` | Documented legacy name; per-user active limit is enforced via tier `MaxConcurrent` in code, not this env. |
+| `MAX_CONCURRENT_PROVISIONS` | No | unset (unlimited) | Doorway: max in-flight orchestrations per API process (`replicas: 1` only). |
+| `CLUSTER_DEPLOY_BUDGET_CPU` | No | unset (gate off) | Room budget CPU (k8s Quantity, e.g. `18500m`). Set **with** memory or leave both unset. |
+| `CLUSTER_DEPLOY_BUDGET_MEMORY` | No | unset (gate off) | Room budget memory (e.g. `49920Mi`). Measured Jul 2026 wave-20 for this GCP account. |
 | `API_RATE_LIMIT_ENABLED` | No | `true` when `ENV=production`, else `false` | Enable HTTP rate limiting on the API. |
 | `API_RATE_LIMIT_BACKEND` | No | `memory` | `memory` (per-pod; use at `replicas: 1`) or `redis` (not implemented). |
 | `API_RATE_LIMIT_RPS` | No | `30` | Per-user sustained rate for standard authenticated routes. |
@@ -55,4 +58,6 @@ Optional keys:
 - Rotate `supabase-service-key` and `supabase-jwt-secret` on a schedule.
 - For local development, prefer environment variables from a local `.env` file (not committed).
 - For Kubernetes, prefer `Secret` resources and avoid plain values in Deployment manifests.
+- Keep `cloud9-api` at **`replicas: 1`** while doorway (`MAX_CONCURRENT_PROVISIONS`) and room (`CLUSTER_DEPLOY_BUDGET_*`) use in-process mutex/semaphore. Scale only after DB-atomic admission exists.
+- SQL for weight columns: [`docs/sql/admitted_weights.sql`](sql/admitted_weights.sql).
 
