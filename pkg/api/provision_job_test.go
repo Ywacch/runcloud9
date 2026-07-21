@@ -53,7 +53,7 @@ func TestBeginProvisionWork_DeadlineStartsAfterAcquire(t *testing.T) {
 
 	go func() {
 		start := time.Now()
-		workCtx, cancel, release, err := beginProvisionWork(lifeCtx, sem, 200*time.Millisecond)
+		workCtx, cancel, release, err := beginProvisionWork(lifeCtx, sem, 200*time.Millisecond, nil)
 		waited := time.Since(start)
 		if err != nil {
 			done <- outcome{waited: waited, err: err}
@@ -109,7 +109,7 @@ func TestBeginProvisionWork_CancelDuringQueue(t *testing.T) {
 	lifeCtx, lifeCancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, cancel, release, err := beginProvisionWork(lifeCtx, sem, time.Minute)
+		_, cancel, release, err := beginProvisionWork(lifeCtx, sem, time.Minute, nil)
 		if err == nil {
 			release()
 			cancel()
@@ -130,11 +130,74 @@ func TestBeginProvisionWork_CancelDuringQueue(t *testing.T) {
 	}
 }
 
+func TestBeginProvisionWork_CallsOnWaitingWhenDoorFull(t *testing.T) {
+	t.Parallel()
+
+	sem := semaphore.NewWeighted(1)
+	if err := sem.Acquire(context.Background(), 1); err != nil {
+		t.Fatalf("hold door: %v", err)
+	}
+
+	lifeCtx, lifeCancel := context.WithCancel(context.Background())
+	defer lifeCancel()
+
+	waiting := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() {
+		_, cancel, release, err := beginProvisionWork(lifeCtx, sem, time.Minute, func() {
+			select {
+			case waiting <- struct{}{}:
+			default:
+			}
+		})
+		if err == nil {
+			release()
+			cancel()
+		}
+		done <- err
+	}()
+
+	select {
+	case <-waiting:
+	case <-time.After(2 * time.Second):
+		t.Fatal("onWaiting was not called while door was full")
+	}
+
+	sem.Release(1)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("beginProvisionWork: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for acquire after release")
+	}
+}
+
+func TestBeginProvisionWork_SkipsOnWaitingWhenDoorFree(t *testing.T) {
+	t.Parallel()
+
+	sem := semaphore.NewWeighted(1)
+	called := false
+	_, cancel, release, err := beginProvisionWork(context.Background(), sem, time.Minute, func() {
+		called = true
+	})
+	if err != nil {
+		t.Fatalf("beginProvisionWork: %v", err)
+	}
+	release()
+	cancel()
+	if called {
+		t.Fatal("onWaiting must not run when TryAcquire succeeds")
+	}
+}
+
 func TestBeginProvisionWork_NilSemaphore(t *testing.T) {
 	t.Parallel()
 
 	lifeCtx := context.Background()
-	workCtx, cancel, release, err := beginProvisionWork(lifeCtx, nil, 150*time.Millisecond)
+	workCtx, cancel, release, err := beginProvisionWork(lifeCtx, nil, 150*time.Millisecond, nil)
 	if err != nil {
 		t.Fatalf("beginProvisionWork: %v", err)
 	}

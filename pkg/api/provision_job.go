@@ -25,17 +25,25 @@ func provisionOrchestrationTimeout(deployerEnv string) time.Duration {
 
 // beginProvisionWork acquires one doorway slot (if sem != nil) under lifeCtx,
 // then returns a child context whose deadline starts only after the slot is held.
+// If the door is already full, onWaiting is invoked once before blocking on Acquire
+// so callers can surface "waiting for a provision slot" to the client.
 // lifeCtx cancellation (e.g. DELETE) aborts both the wait and the work context.
 // Caller must invoke cancel and release (in any order) when finished.
 func beginProvisionWork(
 	lifeCtx context.Context,
 	sem *semaphore.Weighted,
 	timeout time.Duration,
+	onWaiting func(),
 ) (workCtx context.Context, cancel context.CancelFunc, release func(), err error) {
 	release = func() {}
 	if sem != nil {
-		if err := sem.Acquire(lifeCtx, 1); err != nil {
-			return nil, nil, nil, err
+		if !sem.TryAcquire(1) {
+			if onWaiting != nil {
+				onWaiting()
+			}
+			if err := sem.Acquire(lifeCtx, 1); err != nil {
+				return nil, nil, nil, err
+			}
 		}
 		release = func() { sem.Release(1) }
 	}
@@ -65,6 +73,15 @@ func (h *Handler) runBackgroundProvision(
 		lifeCtx,
 		h.provisionSem,
 		provisionOrchestrationTimeout(os.Getenv("DEPLOYER")),
+		func() {
+			h.emitProvisionStatus(
+				namespace,
+				"waiting_for_provision_slot",
+				map[string]string{},
+				"pending",
+				loadgenStatusPending(h.clientset),
+			)
+		},
 	)
 	if h.provisionSem != nil {
 		if err != nil {
