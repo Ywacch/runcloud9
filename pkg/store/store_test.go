@@ -183,6 +183,7 @@ func TestCreateDeployment_IncludesAdmittedWeights(t *testing.T) {
 		ExpiresAt:     time.Now().Add(time.Hour),
 		AdmittedCPUm:  925,
 		AdmittedMemMi: 2496,
+		Status:        "queued",
 	})
 	if err != nil {
 		t.Fatalf("CreateDeployment: %v", err)
@@ -192,6 +193,32 @@ func TestCreateDeployment_IncludesAdmittedWeights(t *testing.T) {
 	}
 	assertJSONInt64(t, inserted[0]["admitted_cpu_m"], 925)
 	assertJSONInt64(t, inserted[0]["admitted_mem_mi"], 2496)
+	if inserted[0]["status"] != "queued" {
+		t.Fatalf("status = %v, want queued", inserted[0]["status"])
+	}
+}
+
+func TestListActiveDeployments_IncludesQueued(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if got := q.Get("status"); got != "in.(running,provisioning,queued)" {
+			t.Errorf("status filter = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]map[string]any{})
+	}))
+	defer server.Close()
+
+	s, err := NewDeploymentStore(server.URL, "service-key")
+	if err != nil {
+		t.Fatalf("NewDeploymentStore: %v", err)
+	}
+	_, err = s.ListActiveDeployments(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("ListActiveDeployments: %v", err)
+	}
 }
 
 func assertJSONInt64(t *testing.T, v any, want int64) {

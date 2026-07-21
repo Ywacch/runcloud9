@@ -20,6 +20,11 @@ func (s *stubUserStore) ListActiveDeployments(context.Context, string) ([]store.
 func (s *stubUserStore) ListUserDeploymentHistory(context.Context, string, int) ([]store.DeploymentHistoryRow, error) {
 	return nil, nil
 }
+func (s *stubUserStore) ListQueuedDeployments(context.Context) ([]store.QueuedDeploymentRow, error) {
+	return nil, nil
+}
+func (s *stubUserStore) CountQueuedDeployments(context.Context) (int, error) { return 0, nil }
+func (s *stubUserStore) ClaimQueued(context.Context, string) (bool, error)  { return false, nil }
 func (s *stubUserStore) CreateDeployment(context.Context, store.CreateDeploymentParams) (string, error) {
 	return "", nil
 }

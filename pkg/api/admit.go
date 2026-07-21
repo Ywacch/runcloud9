@@ -13,20 +13,30 @@ import (
 	"github.com/ywacch/cloud9/pkg/store"
 )
 
-const clusterBusyRetryAfterSeconds = 45
+const (
+	clusterBusyRetryAfterSeconds = 45
+	queueFullRetryAfterSeconds   = 45
+
+	statusProvisioning = "provisioning"
+	statusQueued       = "queued"
+)
 
 var (
 	errUserAtCapacity = errors.New("user at concurrent deployment capacity")
 	errClusterBusy    = errors.New("cluster deploy budget full")
+	errQueueFull      = errors.New("deploy queue full")
 	errListActive     = errors.New("list active deployments")
 	errSumOccupancy   = errors.New("sum admission occupancy")
+	errCountQueued    = errors.New("count queued deployments")
 	errDesignEncode   = errors.New("encode design")
 	errCreateRow      = errors.New("create deployment row")
 )
 
 // admitAndCreate enforces per-user concurrency and optional room budget, then
-// inserts the deployment row. Caller must hold h.admitMu for the duration on a
-// single-replica API (see package admission docs).
+// inserts the deployment row as provisioning or queued. Caller must hold
+// h.admitMu for the duration on a single-replica API.
+//
+// Returns the persisted status ("provisioning" or "queued").
 func (h *Handler) admitAndCreate(
 	ctx context.Context,
 	userID string,
@@ -34,39 +44,50 @@ func (h *Handler) admitAndCreate(
 	design deployer.DeploymentDesign,
 	resourceQuotaTier string,
 	namespace string,
-	expiresAt time.Time,
-) error {
+	sessionExpiresAt time.Time,
+) (string, error) {
 	if h.store == nil {
-		return nil
+		return statusProvisioning, nil
 	}
 
 	active, err := h.store.ListActiveDeployments(ctx, userID)
 	if err != nil {
-		return fmt.Errorf("%w: %w", errListActive, err)
+		return "", fmt.Errorf("%w: %w", errListActive, err)
 	}
 	if len(active) >= maxConcurrent {
-		return errUserAtCapacity
+		return "", errUserAtCapacity
 	}
 
 	weight := admission.WeightFromBudget(deployer.QuotaResourceLimits(design, resourceQuotaTier))
 
+	status := statusProvisioning
+	expiresAt := sessionExpiresAt
+
 	if h.roomBudget != nil {
 		occRow, err := h.store.SumActiveAdmissionWeights(ctx)
 		if err != nil {
-			return fmt.Errorf("%w: %w", errSumOccupancy, err)
+			return "", fmt.Errorf("%w: %w", errSumOccupancy, err)
 		}
 		occ := admission.Occupancy{
 			CPUMillicores: occRow.CPUMillicores,
 			MemoryMi:      occRow.MemoryMi,
 		}
 		if !admission.Fits(h.roomBudget, occ, weight) {
-			return errClusterBusy
+			n, err := h.store.CountQueuedDeployments(ctx)
+			if err != nil {
+				return "", fmt.Errorf("%w: %w", errCountQueued, err)
+			}
+			if n >= h.maxDeployQueue {
+				return "", errQueueFull
+			}
+			status = statusQueued
+			expiresAt = time.Now().Add(h.queueTTL)
 		}
 	}
 
 	designMap, err := designToMap(design)
 	if err != nil {
-		return fmt.Errorf("%w: %w", errDesignEncode, err)
+		return "", fmt.Errorf("%w: %w", errDesignEncode, err)
 	}
 
 	_, err = h.store.CreateDeployment(ctx, store.CreateDeploymentParams{
@@ -78,11 +99,12 @@ func (h *Handler) admitAndCreate(
 		UserID:        userID,
 		AdmittedCPUm:  weight.CPUMillicores,
 		AdmittedMemMi: weight.MemoryMi,
+		Status:        status,
 	})
 	if err != nil {
-		return fmt.Errorf("%w: %w", errCreateRow, err)
+		return "", fmt.Errorf("%w: %w", errCreateRow, err)
 	}
-	return nil
+	return status, nil
 }
 
 func designToMap(design deployer.DeploymentDesign) (map[string]any, error) {
@@ -108,16 +130,31 @@ func writeClusterBusy(w http.ResponseWriter) {
 	})
 }
 
+func writeQueueFull(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprintf("%d", queueFullRetryAfterSeconds))
+	w.WriteHeader(http.StatusTooManyRequests)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error":             "deploy queue is full — try again shortly",
+		"reason":            "queue_full",
+		"retryAfterSeconds": queueFullRetryAfterSeconds,
+	})
+}
+
 func writeAdmitError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errUserAtCapacity):
 		writeError(w, http.StatusTooManyRequests, "you already have an active deployment — end it before creating another")
+	case errors.Is(err, errQueueFull):
+		writeQueueFull(w)
 	case errors.Is(err, errClusterBusy):
 		writeClusterBusy(w)
 	case errors.Is(err, errListActive):
 		writeError(w, http.StatusInternalServerError, "failed to check active deployments")
 	case errors.Is(err, errSumOccupancy):
 		writeError(w, http.StatusInternalServerError, "failed to check cluster capacity")
+	case errors.Is(err, errCountQueued):
+		writeError(w, http.StatusInternalServerError, "failed to check deploy queue")
 	case errors.Is(err, errDesignEncode):
 		writeError(w, http.StatusInternalServerError, "invalid design")
 	default:

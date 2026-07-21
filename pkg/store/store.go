@@ -51,6 +51,21 @@ type CreateDeploymentParams struct {
 	UserID        string
 	AdmittedCPUm  int64 // cluster admission weight; 0 allowed
 	AdmittedMemMi int64
+	// Status defaults to "provisioning" when empty. Use "queued" for the deploy queue.
+	Status string
+}
+
+// QueuedDeploymentRow is a FIFO queue entry with persisted admission weights.
+type QueuedDeploymentRow struct {
+	ID            string    `json:"id"`
+	UserID        string    `json:"user_id"`
+	Namespace     string    `json:"namespace"`
+	Template      string    `json:"template"`
+	Status        string    `json:"status"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	CreatedAt     time.Time `json:"created_at"`
+	AdmittedCPUm  *int64    `json:"admitted_cpu_m"`
+	AdmittedMemMi *int64    `json:"admitted_mem_mi"`
 }
 
 // AdmissionOccupancy is the summed admitted weight of active deployments.
@@ -90,17 +105,22 @@ func (s *DeploymentStore) SupabaseClient() *supabase.Client {
 	return s.client
 }
 
-// CreateDeployment inserts a new row with status='provisioning' and returns the new row ID.
+// CreateDeployment inserts a new deployment row and returns the new row ID.
+// Status defaults to "provisioning" when params.Status is empty.
 func (s *DeploymentStore) CreateDeployment(ctx context.Context, params CreateDeploymentParams) (string, error) {
 	userIDVal := any(params.UserID)
 	if params.UserID == "" {
 		userIDVal = nil
 	}
+	status := params.Status
+	if status == "" {
+		status = "provisioning"
+	}
 	row := map[string]any{
 		"namespace":       params.Namespace,
 		"template":        params.Template,
 		"archetype":       params.Archetype,
-		"status":          "provisioning",
+		"status":          status,
 		"design":          params.Design,
 		"expires_at":      params.ExpiresAt.Format(time.RFC3339),
 		"user_id":         userIDVal,
@@ -208,12 +228,13 @@ func (s *DeploymentStore) GetDeployment(ctx context.Context, namespace string) (
 	return rows[0], nil
 }
 
-// ListActiveDeployments returns deployments with status IN ('running','provisioning').
+// ListActiveDeployments returns deployments with status IN ('running','provisioning','queued').
+// Queued counts toward per-user concurrency so users cannot stuff the queue.
 // If userID is non-empty, it filters by user_id.
 func (s *DeploymentStore) ListActiveDeployments(ctx context.Context, userID string) ([]ActiveDeploymentRow, error) {
 	q := s.client.From("cloud_deployments").
 		Select("id,namespace,template,status,expires_at,created_at", "exact", false).
-		In("status", []string{"running", "provisioning"})
+		In("status", []string{"running", "provisioning", "queued"})
 
 	if userID != "" {
 		q = q.Eq("user_id", userID)
@@ -230,6 +251,55 @@ func (s *DeploymentStore) ListActiveDeployments(ctx context.Context, userID stri
 	}
 
 	return rows, nil
+}
+
+// ListQueuedDeployments returns all queued rows oldest-first (global FIFO).
+func (s *DeploymentStore) ListQueuedDeployments(ctx context.Context) ([]QueuedDeploymentRow, error) {
+	data, _, err := s.client.From("cloud_deployments").
+		Select("id,user_id,namespace,template,status,expires_at,created_at,admitted_cpu_m,admitted_mem_mi", "exact", false).
+		Eq("status", "queued").
+		Order("created_at", &postgrest.OrderOpts{Ascending: true}).
+		Execute()
+	if err != nil {
+		return nil, fmt.Errorf("store.ListQueuedDeployments: %w", err)
+	}
+	var rows []QueuedDeploymentRow
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return nil, fmt.Errorf("store.ListQueuedDeployments: parse: %w", err)
+	}
+	return rows, nil
+}
+
+// ClaimQueued promotes a row from queued → provisioning when it is still queued.
+// Returns true if this caller claimed the row.
+func (s *DeploymentStore) ClaimQueued(ctx context.Context, namespace string) (bool, error) {
+	data, _, err := s.client.From("cloud_deployments").
+		Update(map[string]any{"status": "provisioning"}, "representation", "").
+		Eq("namespace", namespace).
+		Eq("status", "queued").
+		Execute()
+	if err != nil {
+		return false, fmt.Errorf("store.ClaimQueued: %w", err)
+	}
+	var rows []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return false, fmt.Errorf("store.ClaimQueued: parse: %w", err)
+	}
+	return len(rows) > 0, nil
+}
+
+// CountQueuedDeployments returns the number of rows with status=queued.
+func (s *DeploymentStore) CountQueuedDeployments(ctx context.Context) (int, error) {
+	_, count, err := s.client.From("cloud_deployments").
+		Select("id", "exact", true).
+		Eq("status", "queued").
+		Execute()
+	if err != nil {
+		return 0, fmt.Errorf("store.CountQueuedDeployments: %w", err)
+	}
+	return int(count), nil
 }
 
 // SumActiveAdmissionWeights sums admitted_cpu_m / admitted_mem_mi for rows with

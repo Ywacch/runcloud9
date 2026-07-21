@@ -49,11 +49,18 @@ type Handler struct {
 	provisionSem     *semaphore.Weighted
 	admitMu          sync.Mutex
 	roomBudget       *admission.Config
+	maxDeployQueue   int
+	queueTTL         time.Duration
+	queueWake        chan struct{}
+	provisionETA     *provisionETA
 }
 
 type deploymentStore interface {
 	ListActiveDeployments(ctx context.Context, userID string) ([]store.ActiveDeploymentRow, error)
 	ListUserDeploymentHistory(ctx context.Context, userID string, limit int) ([]store.DeploymentHistoryRow, error)
+	ListQueuedDeployments(ctx context.Context) ([]store.QueuedDeploymentRow, error)
+	CountQueuedDeployments(ctx context.Context) (int, error)
+	ClaimQueued(ctx context.Context, namespace string) (bool, error)
 	CreateDeployment(ctx context.Context, params store.CreateDeploymentParams) (string, error)
 	SumActiveAdmissionWeights(ctx context.Context) (store.AdmissionOccupancy, error)
 	UpdateStatus(ctx context.Context, namespace, status string) error
@@ -103,6 +110,8 @@ func NewHandler(
 		}
 	}
 
+	maxQueue, queueTTL, etaSec := queueConfigFromEnv()
+
 	return &Handler{
 		deployers:        deployers,
 		store:            store,
@@ -116,6 +125,10 @@ func NewHandler(
 		provisionCancel:  make(map[string]context.CancelFunc),
 		provisionSem:     provisionSem,
 		roomBudget:       admission.ConfigFromEnv(),
+		maxDeployQueue:   maxQueue,
+		queueTTL:         queueTTL,
+		queueWake:        make(chan struct{}, 1),
+		provisionETA:     newProvisionETA(etaSec),
 	}
 }
 
@@ -210,6 +223,12 @@ func (h *Handler) handleGetDeployment(w http.ResponseWriter, r *http.Request) {
 		"createdAt":      row.CreatedAt.UTC().Format(time.RFC3339),
 		"metricsSummary": row.MetricsSummary,
 		"design":         row.Design,
+	}
+	if row.Status == statusQueued {
+		if pos, eta, ok := h.queuePositionAndETA(r.Context(), namespace); ok {
+			resp["queuePosition"] = pos
+			resp["estimatedWaitSeconds"] = eta
+		}
 	}
 	if row.MetricsSummary != nil {
 		if seeded, ok := row.MetricsSummary["seeded"].(bool); ok {
@@ -403,30 +422,45 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 	}
 
 	namespace := generateNamespace(design.Template, userID)
-	expiresAt := time.Now().Add(time.Duration(sessionMinutes) * time.Minute)
+	sessionExpiresAt := time.Now().Add(time.Duration(sessionMinutes) * time.Minute)
 
+	status := statusProvisioning
 	if h.store != nil {
 		h.admitMu.Lock()
-		err := h.admitAndCreate(r.Context(), userID, limits.MaxConcurrent, design, resourceQuotaTier, namespace, expiresAt)
+		var admitErr error
+		status, admitErr = h.admitAndCreate(r.Context(), userID, limits.MaxConcurrent, design, resourceQuotaTier, namespace, sessionExpiresAt)
 		h.admitMu.Unlock()
-		if err != nil {
-			log.Printf("admit create deployment: %v", err)
-			writeAdmitError(w, err)
+		if admitErr != nil {
+			log.Printf("admit create deployment: %v", admitErr)
+			writeAdmitError(w, admitErr)
 			return
+		}
+	}
+
+	resp := map[string]any{
+		"deploymentId": namespace,
+		"namespace":    namespace,
+		"status":       status,
+		"assessment": map[string]any{
+			"verdict":     assessment.Verdict,
+			"explanation": assessment.Explanation,
+		},
+	}
+	if status == statusQueued {
+		if pos, eta, ok := h.queuePositionAndETA(r.Context(), namespace); ok {
+			resp["queuePosition"] = pos
+			resp["estimatedWaitSeconds"] = eta
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"deploymentId": namespace,
-		"namespace":    namespace,
-		"status":       "provisioning",
-		"assessment": map[string]any{
-			"verdict":     assessment.Verdict,
-			"explanation": assessment.Explanation,
-		},
-	})
+	_ = json.NewEncoder(w).Encode(resp)
+
+	if status == statusQueued {
+		h.wakeDeployQueue()
+		return
+	}
 
 	// Continue orchestration in the background after returning the response.
 	go h.runBackgroundProvision(design, namespace, userID, resourceQuotaTier, sessionMinutes)
@@ -831,9 +865,25 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "missing deployment id")
 		return
 	}
-	if h.requireOwnership(w, r, namespace) == nil {
+	owned := h.requireOwnership(w, r, namespace)
+	if owned == nil {
 		return
 	}
+
+	// Queued rows never reached K8s — cancel without teardown and wake the queue.
+	if owned.Status == statusQueued {
+		if h.store != nil {
+			_ = h.store.UpdateMetricsSummary(r.Context(), namespace, map[string]any{
+				"terminated_at": time.Now().UTC().Format(time.RFC3339),
+				"reason":        "user_cancel_queued",
+			})
+			_ = h.store.UpdateStatus(context.Background(), namespace, "terminated")
+		}
+		h.wakeDeployQueue()
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	h.cancelProvision(namespace)
 	// Stop load generator if running (prevents requests to a dying namespace)
 	if h.loadgen != nil {
@@ -910,6 +960,7 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 	if h.store != nil {
 		_ = h.store.UpdateStatus(context.Background(), namespace, "terminated")
 	}
+	h.wakeDeployQueue()
 	w.WriteHeader(http.StatusNoContent)
 }
 
