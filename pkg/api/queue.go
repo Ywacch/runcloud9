@@ -95,7 +95,7 @@ func queueConfigFromEnv() (maxQueue int, ttl time.Duration, etaSeconds float64) 
 	return maxQueue, time.Duration(ttlSec) * time.Second, etaSeconds
 }
 
-// StartDeployQueue runs the FIFO promote/expire loop until ctx is cancelled.
+// StartDeployQueue runs the first-fit promote/expire loop until ctx is cancelled.
 // Safe to call once after NewHandler; no-op when store is nil.
 func (h *Handler) StartDeployQueue(ctx context.Context) {
 	if h == nil || h.store == nil {
@@ -131,8 +131,8 @@ func (h *Handler) deployQueueLoop(ctx context.Context) {
 	}
 }
 
-// drainDeployQueue expires TTL'd heads and promotes as many consecutive
-// head-of-line entries as currently fit (strict FIFO: stop on first that does not).
+// drainDeployQueue expires TTL'd entries, clears poison (ExceedsRoom) heads, and
+// promotes with first-fit over one queued snapshot (skips blocked heads).
 func (h *Handler) drainDeployQueue(ctx context.Context) {
 	if h.store == nil {
 		return
@@ -141,60 +141,71 @@ func (h *Handler) drainDeployQueue(ctx context.Context) {
 	h.admitMu.Lock()
 	defer h.admitMu.Unlock()
 
-	for {
-		queued, err := h.store.ListQueuedDeployments(ctx)
-		if err != nil {
-			log.Printf("deploy queue: list queued: %v", err)
-			return
-		}
-		if len(queued) == 0 {
-			return
-		}
+	queued, err := h.store.ListQueuedDeployments(ctx)
+	if err != nil {
+		log.Printf("deploy queue: list queued: %v", err)
+		return
+	}
+	if len(queued) == 0 {
+		return
+	}
 
-		head := queued[0]
-		if !head.ExpiresAt.IsZero() && time.Now().After(head.ExpiresAt) {
-			h.expireQueuedLocked(ctx, head.Namespace)
+	var occ admission.Occupancy
+	if h.roomBudget != nil {
+		occRow, err := h.store.SumActiveAdmissionWeights(ctx)
+		if err != nil {
+			log.Printf("deploy queue: sum occupancy: %v", err)
+			return
+		}
+		occ = admission.Occupancy{
+			CPUMillicores: occRow.CPUMillicores,
+			MemoryMi:      occRow.MemoryMi,
+		}
+	}
+
+	for _, row := range queued {
+		if !row.ExpiresAt.IsZero() && time.Now().After(row.ExpiresAt) {
+			h.terminateQueuedLocked(ctx, row.Namespace, "queue_ttl", true)
 			continue
 		}
 
 		if h.roomBudget == nil {
-			// Room gate off: promote head immediately (should be rare for queued rows).
-			if !h.promoteQueuedLocked(ctx, head) {
+			if !h.promoteQueuedLocked(ctx, row) {
 				return
 			}
 			continue
 		}
 
 		weight := admission.Weight{
-			CPUMillicores: derefInt64(head.AdmittedCPUm),
-			MemoryMi:      derefInt64(head.AdmittedMemMi),
+			CPUMillicores: derefInt64(row.AdmittedCPUm),
+			MemoryMi:      derefInt64(row.AdmittedMemMi),
 		}
-		occRow, err := h.store.SumActiveAdmissionWeights(ctx)
-		if err != nil {
-			log.Printf("deploy queue: sum occupancy: %v", err)
-			return
-		}
-		occ := admission.Occupancy{
-			CPUMillicores: occRow.CPUMillicores,
-			MemoryMi:      occRow.MemoryMi,
+		if admission.ExceedsRoom(h.roomBudget, weight) {
+			h.terminateQueuedLocked(ctx, row.Namespace, "design_exceeds_cluster_capacity", false)
+			continue
 		}
 		if !admission.Fits(h.roomBudget, occ, weight) {
+			continue
+		}
+		if !h.promoteQueuedLocked(ctx, row) {
 			return
 		}
-		if !h.promoteQueuedLocked(ctx, head) {
-			return
-		}
+		occ.CPUMillicores += weight.CPUMillicores
+		occ.MemoryMi += weight.MemoryMi
 	}
 }
 
-func (h *Handler) expireQueuedLocked(ctx context.Context, namespace string) {
-	log.Printf("deploy queue: expiring queued namespace=%s", namespace)
+func (h *Handler) terminateQueuedLocked(ctx context.Context, namespace, reason string, queueExpired bool) {
+	log.Printf("deploy queue: terminating queued namespace=%s reason=%s", namespace, reason)
 	_ = h.store.UpdateStatus(ctx, namespace, "terminated")
-	_ = h.store.UpdateMetricsSummary(ctx, namespace, map[string]any{
-		"queue_expired": true,
+	summary := map[string]any{
 		"terminated_at": time.Now().UTC().Format(time.RFC3339),
-		"reason":        "queue_ttl",
-	})
+		"reason":        reason,
+	}
+	if queueExpired {
+		summary["queue_expired"] = true
+	}
+	_ = h.store.UpdateMetricsSummary(ctx, namespace, summary)
 }
 
 // promoteQueuedLocked claims the head and starts background provision.

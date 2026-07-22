@@ -22,15 +22,18 @@ const (
 )
 
 var (
-	errUserAtCapacity = errors.New("user at concurrent deployment capacity")
-	errClusterBusy    = errors.New("cluster deploy budget full")
-	errQueueFull      = errors.New("deploy queue full")
-	errListActive     = errors.New("list active deployments")
-	errSumOccupancy   = errors.New("sum admission occupancy")
-	errCountQueued    = errors.New("count queued deployments")
-	errDesignEncode   = errors.New("encode design")
-	errCreateRow      = errors.New("create deployment row")
+	errUserAtCapacity       = errors.New("user at concurrent deployment capacity")
+	errClusterBusy          = errors.New("cluster deploy budget full")
+	errQueueFull            = errors.New("deploy queue full")
+	errDesignExceedsCluster = errors.New("design exceeds cluster capacity")
+	errListActive           = errors.New("list active deployments")
+	errSumOccupancy         = errors.New("sum admission occupancy")
+	errCountQueued          = errors.New("count queued deployments")
+	errDesignEncode         = errors.New("encode design")
+	errCreateRow            = errors.New("create deployment row")
 )
+
+const designExceedsClusterMessage = "this design needs more CPU or memory than the cluster provides"
 
 // admitAndCreate enforces per-user concurrency and optional room budget, then
 // inserts the deployment row as provisioning or queued. Caller must hold
@@ -64,6 +67,9 @@ func (h *Handler) admitAndCreate(
 	expiresAt := sessionExpiresAt
 
 	if h.roomBudget != nil {
+		if admission.ExceedsRoom(h.roomBudget, weight) {
+			return "", errDesignExceedsCluster
+		}
 		occRow, err := h.store.SumActiveAdmissionWeights(ctx)
 		if err != nil {
 			return "", fmt.Errorf("%w: %w", errSumOccupancy, err)
@@ -141,10 +147,21 @@ func writeQueueFull(w http.ResponseWriter) {
 	})
 }
 
+func writeDesignExceedsCluster(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnprocessableEntity)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error":  designExceedsClusterMessage,
+		"reason": "design_exceeds_cluster_capacity",
+	})
+}
+
 func writeAdmitError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errUserAtCapacity):
 		writeError(w, http.StatusTooManyRequests, "you already have an active deployment — end it before creating another")
+	case errors.Is(err, errDesignExceedsCluster):
+		writeDesignExceedsCluster(w)
 	case errors.Is(err, errQueueFull):
 		writeQueueFull(w)
 	case errors.Is(err, errClusterBusy):
