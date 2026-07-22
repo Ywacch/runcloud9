@@ -107,19 +107,28 @@ func TestDrainDeployQueue_PromotesWhenFits(t *testing.T) {
 	}
 }
 
-func TestDrainDeployQueue_StrictFIFOBlocksHeavyHead(t *testing.T) {
+func TestDrainDeployQueue_FirstFitPromotesLightBehindHeavy(t *testing.T) {
 	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "1000m")
 	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "3000Mi")
 
 	s := newFakeDeploymentStore()
-	// Occupancy nearly full: head needs 900m and will not fit; lighter tail must wait.
+	s.users = map[string]store.UserRecord{"u1": {IsInternal: true}}
+	// Occupancy nearly full: head needs 900m and will not fit; lighter tail can.
 	s.forcedOccupancy = &store.AdmissionOccupancy{CPUMillicores: 200, MemoryMi: 500}
 
 	mk := func(ns string, cpu, mem int64, created time.Time) {
 		s.byNS[ns] = store.DeploymentRow{
 			ID: ns, UserID: "u1", Namespace: ns, Template: "url-shortener",
 			Status: "queued", CreatedAt: created, ExpiresAt: time.Now().Add(time.Hour),
-			Design: map[string]any{"template": "url-shortener", "nodes": []any{}},
+			Design: map[string]any{
+				"template":  "url-shortener",
+				"archetype": "standard",
+				"nodes": []any{
+					map[string]any{"id": "app", "type": "app-server", "name": "app", "config": map[string]any{}},
+					map[string]any{"id": "db", "type": "db", "name": "db", "config": map[string]any{}},
+				},
+				"connections": []any{map[string]any{"sourceId": "app", "targetId": "db"}},
+			},
 		}
 		s.active = append(s.active, store.ActiveDeploymentRow{
 			ID: ns, Namespace: ns, Template: "url-shortener", Status: "queued",
@@ -139,7 +148,56 @@ func TestDrainDeployQueue_StrictFIFOBlocksHeavyHead(t *testing.T) {
 	if heavy.Status != "queued" {
 		t.Fatalf("heavy status = %q, want queued (blocked)", heavy.Status)
 	}
-	if light.Status != "queued" {
-		t.Fatalf("light status = %q, want queued (strict FIFO)", light.Status)
+	if light.Status != "provisioning" {
+		t.Fatalf("light status = %q, want provisioning (first-fit)", light.Status)
+	}
+}
+
+func TestDrainDeployQueue_ClearsPoisonHeadThenPromotes(t *testing.T) {
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "1000m")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "3000Mi")
+
+	s := newFakeDeploymentStore()
+	s.users = map[string]store.UserRecord{"u1": {IsInternal: true}}
+	s.forcedOccupancy = &store.AdmissionOccupancy{CPUMillicores: 0, MemoryMi: 0}
+
+	mk := func(ns string, cpu, mem int64, created time.Time) {
+		s.byNS[ns] = store.DeploymentRow{
+			ID: ns, UserID: "u1", Namespace: ns, Template: "url-shortener",
+			Status: "queued", CreatedAt: created, ExpiresAt: time.Now().Add(time.Hour),
+			Design: map[string]any{
+				"template":  "url-shortener",
+				"archetype": "standard",
+				"nodes": []any{
+					map[string]any{"id": "app", "type": "app-server", "name": "app", "config": map[string]any{}},
+					map[string]any{"id": "db", "type": "db", "name": "db", "config": map[string]any{}},
+				},
+				"connections": []any{map[string]any{"sourceId": "app", "targetId": "db"}},
+			},
+		}
+		s.active = append(s.active, store.ActiveDeploymentRow{
+			ID: ns, Namespace: ns, Template: "url-shortener", Status: "queued",
+			CreatedAt: created, ExpiresAt: time.Now().Add(time.Hour),
+		})
+		s.admittedByNS[ns] = store.AdmissionOccupancy{CPUMillicores: cpu, MemoryMi: mem}
+	}
+	// Poison: larger than empty room. Fit: fits empty and current occ.
+	mk("poison", 2000, 100, time.Now().Add(-2*time.Minute))
+	mk("ok", 100, 100, time.Now().Add(-time.Minute))
+
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
+	h.roomBudget = &admission.Config{CPUMillicores: 1000, MemoryMi: 3000}
+	h.drainDeployQueue(context.Background())
+
+	poison, _ := s.GetDeployment(context.Background(), "poison")
+	ok, _ := s.GetDeployment(context.Background(), "ok")
+	if poison.Status != "terminated" {
+		t.Fatalf("poison status = %q, want terminated", poison.Status)
+	}
+	if reason, _ := poison.MetricsSummary["reason"].(string); reason != "design_exceeds_cluster_capacity" {
+		t.Fatalf("poison reason = %v, want design_exceeds_cluster_capacity summary=%v", reason, poison.MetricsSummary)
+	}
+	if ok.Status != "provisioning" {
+		t.Fatalf("ok status = %q, want provisioning", ok.Status)
 	}
 }

@@ -73,6 +73,33 @@ func TestFits(t *testing.T) {
 	}
 }
 
+func TestExceedsRoom(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{CPUMillicores: 1000, MemoryMi: 2000}
+	tests := []struct {
+		name string
+		cfg  *Config
+		w    Weight
+		want bool
+	}{
+		{name: "nil cfg", cfg: nil, w: Weight{9e6, 9e6}, want: false},
+		{name: "under", cfg: cfg, w: Weight{500, 1000}, want: false},
+		{name: "exact", cfg: cfg, w: Weight{1000, 2000}, want: false},
+		{name: "over cpu", cfg: cfg, w: Weight{1001, 0}, want: true},
+		{name: "over mem", cfg: cfg, w: Weight{0, 2001}, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ExceedsRoom(tt.cfg, tt.w); got != tt.want {
+				t.Fatalf("ExceedsRoom() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWeightFromBudget(t *testing.T) {
 	t.Parallel()
 	b := deployer.ResourceBudget{

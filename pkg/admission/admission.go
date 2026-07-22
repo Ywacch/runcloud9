@@ -76,6 +76,15 @@ func Fits(cfg *Config, occ Occupancy, w Weight) bool {
 		occ.MemoryMi+w.MemoryMi <= cfg.MemoryMi
 }
 
+// ExceedsRoom reports whether weight alone cannot fit an empty room.
+// A nil Config means the gate is off → never exceeds.
+func ExceedsRoom(cfg *Config, w Weight) bool {
+	if cfg == nil {
+		return false
+	}
+	return !Fits(cfg, Occupancy{}, w)
+}
+
 // WeightFromBudget converts a QuotaResourceLimits (or similar) budget into Weight.
 func WeightFromBudget(b deployer.ResourceBudget) Weight {
 	return Weight{

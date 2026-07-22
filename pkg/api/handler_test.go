@@ -424,11 +424,13 @@ func TestHandleCreateDeployment_RoomBudget_EnqueuesWhenFull(t *testing.T) {
 	t.Setenv("ENV", "development")
 	t.Setenv("SUPABASE_JWT_SECRET", "")
 	t.Setenv("SUPABASE_URL", "")
-	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "100m")
-	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "100Mi")
+	// Room is large enough for one url-shortener, but forced occupancy fills it.
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "5000m")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "15000Mi")
 	t.Setenv("MAX_DEPLOY_QUEUE", "20")
 
 	s := newFakeDeploymentStore()
+	s.forcedOccupancy = &store.AdmissionOccupancy{CPUMillicores: 5000, MemoryMi: 15000}
 	s.users = map[string]store.UserRecord{"dev-user": {IsInternal: true}}
 	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
 	if h.roomBudget == nil {
@@ -457,9 +459,9 @@ func TestHandleCreateDeployment_RoomBudget_EnqueuesWhenFull(t *testing.T) {
 		t.Fatalf("want 201, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	var out struct {
-		Status              string `json:"status"`
-		QueuePosition       int    `json:"queuePosition"`
-		EstimatedWaitSeconds int   `json:"estimatedWaitSeconds"`
+		Status               string `json:"status"`
+		QueuePosition        int    `json:"queuePosition"`
+		EstimatedWaitSeconds int    `json:"estimatedWaitSeconds"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
 		t.Fatal(err)
@@ -480,15 +482,68 @@ func TestHandleCreateDeployment_RoomBudget_EnqueuesWhenFull(t *testing.T) {
 	}
 }
 
-func TestHandleCreateDeployment_RoomBudget_QueueFull(t *testing.T) {
+func TestHandleCreateDeployment_RoomBudget_RejectsWhenExceedsEmptyRoom(t *testing.T) {
 	t.Setenv("ENV", "development")
 	t.Setenv("SUPABASE_JWT_SECRET", "")
 	t.Setenv("SUPABASE_URL", "")
 	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "100m")
 	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "100Mi")
+
+	s := newFakeDeploymentStore()
+	s.users = map[string]store.UserRecord{"dev-user": {IsInternal: true}}
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "standard",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app", Type: "app-server", Name: "app", Config: map[string]interface{}{}},
+			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app", TargetID: "db"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var er struct {
+		Error  string `json:"error"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &er); err != nil {
+		t.Fatal(err)
+	}
+	if er.Reason != "design_exceeds_cluster_capacity" {
+		t.Fatalf("reason = %q, want design_exceeds_cluster_capacity body=%s", er.Reason, rec.Body.String())
+	}
+	if er.Error != designExceedsClusterMessage {
+		t.Fatalf("error = %q, want %q", er.Error, designExceedsClusterMessage)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.active) != 0 || len(s.byNS) != 0 {
+		t.Fatalf("want zero rows, got active=%d byNS=%d", len(s.active), len(s.byNS))
+	}
+}
+
+func TestHandleCreateDeployment_RoomBudget_QueueFull(t *testing.T) {
+	t.Setenv("ENV", "development")
+	t.Setenv("SUPABASE_JWT_SECRET", "")
+	t.Setenv("SUPABASE_URL", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "5000m")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "15000Mi")
 	t.Setenv("MAX_DEPLOY_QUEUE", "1")
 
 	s := newFakeDeploymentStore()
+	s.forcedOccupancy = &store.AdmissionOccupancy{CPUMillicores: 5000, MemoryMi: 15000}
 	s.users = map[string]store.UserRecord{"dev-user": {IsInternal: true}}
 	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
 	mux := http.NewServeMux()
