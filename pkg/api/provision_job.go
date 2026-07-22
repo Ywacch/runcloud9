@@ -11,7 +11,6 @@ import (
 	"github.com/getsentry/sentry-go"
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/diagnostics"
-	"golang.org/x/sync/semaphore"
 )
 
 // provisionOrchestrationTimeout is how long Deploy/seed may run once a doorway
@@ -21,34 +20,6 @@ func provisionOrchestrationTimeout(deployerEnv string) time.Duration {
 		return 5 * time.Minute
 	}
 	return 2 * time.Minute
-}
-
-// beginProvisionWork acquires one doorway slot (if sem != nil) under lifeCtx,
-// then returns a child context whose deadline starts only after the slot is held.
-// If the door is already full, onWaiting is invoked once before blocking on Acquire
-// so callers can surface "waiting for a provision slot" to the client.
-// lifeCtx cancellation (e.g. DELETE) aborts both the wait and the work context.
-// Caller must invoke cancel and release (in any order) when finished.
-func beginProvisionWork(
-	lifeCtx context.Context,
-	sem *semaphore.Weighted,
-	timeout time.Duration,
-	onWaiting func(),
-) (workCtx context.Context, cancel context.CancelFunc, release func(), err error) {
-	release = func() {}
-	if sem != nil {
-		if !sem.TryAcquire(1) {
-			if onWaiting != nil {
-				onWaiting()
-			}
-			if err := sem.Acquire(lifeCtx, 1); err != nil {
-				return nil, nil, nil, err
-			}
-		}
-		release = func() { sem.Release(1) }
-	}
-	workCtx, cancel = context.WithTimeout(lifeCtx, timeout)
-	return workCtx, cancel, release, nil
 }
 
 // runBackgroundProvision finishes create-deployment after the HTTP response:
@@ -71,7 +42,8 @@ func (h *Handler) runBackgroundProvision(
 	start := time.Now()
 	workCtx, cancel, release, err := beginProvisionWork(
 		lifeCtx,
-		h.provisionSem,
+		h.door,
+		namespace,
 		provisionOrchestrationTimeout(os.Getenv("DEPLOYER")),
 		func() {
 			h.emitProvisionStatus(
@@ -83,11 +55,11 @@ func (h *Handler) runBackgroundProvision(
 			)
 		},
 	)
-	if h.provisionSem != nil {
+	if h.door != nil {
 		if err != nil {
-			log.Printf("provision semaphore acquire failed namespace=%s waited=%s: %v", namespace, time.Since(start), err)
+			log.Printf("provision door acquire failed namespace=%s waited=%s: %v", namespace, time.Since(start), err)
 		} else {
-			log.Printf("provision semaphore acquired namespace=%s waited=%s", namespace, time.Since(start))
+			log.Printf("provision door acquired namespace=%s waited=%s", namespace, time.Since(start))
 		}
 	}
 	if err != nil {
@@ -99,8 +71,12 @@ func (h *Handler) runBackgroundProvision(
 		h.failProvision(design, namespace, userID, err)
 		return
 	}
-	defer release()
-	defer cancel()
+	holdStart := time.Now()
+	defer func() {
+		h.door.ObserveHold(time.Since(holdStart))
+		release()
+		cancel()
+	}()
 
 	result, err := h.orchestrate(workCtx, design, namespace, quotaTier)
 	if err != nil {
@@ -197,4 +173,20 @@ func (h *Handler) failProvision(design deployer.DeploymentDesign, namespace, use
 			log.Printf("failed deployment teardown failed for namespace=%s: %v", ns, tdErr)
 		}
 	}(namespace)
+}
+
+// attachWaitFields sets queuePosition and estimatedWaitSeconds for room queue
+// or doorway waiters. Live compute only — not persisted to metrics_summary.
+func (h *Handler) attachWaitFields(resp map[string]any, ctx context.Context, namespace, status string) {
+	if status == statusQueued {
+		if pos, eta, ok := h.queuePositionAndETA(ctx, namespace); ok {
+			resp["queuePosition"] = pos
+			resp["estimatedWaitSeconds"] = eta
+		}
+		return
+	}
+	if pos, eta, ok := h.door.Estimate(namespace); ok {
+		resp["queuePosition"] = pos
+		resp["estimatedWaitSeconds"] = eta
+	}
 }
