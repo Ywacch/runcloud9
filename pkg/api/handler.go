@@ -26,7 +26,6 @@ import (
 	"github.com/ywacch/cloud9/pkg/store"
 	"github.com/ywacch/cloud9/pkg/teardown"
 	"github.com/ywacch/cloud9/pkg/templates"
-	"golang.org/x/sync/semaphore"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -46,7 +45,7 @@ type Handler struct {
 	eventBus         *metrics.EventBus
 	provisionMu      sync.Mutex
 	provisionCancel  map[string]context.CancelFunc
-	provisionSem     *semaphore.Weighted
+	door             *provisionDoor
 	admitMu          sync.Mutex
 	roomBudget       *admission.Config
 	maxDeployQueue   int
@@ -101,16 +100,16 @@ func NewHandler(
 		seedSvc = seed
 	}
 
-	var provisionSem *semaphore.Weighted
+	maxQueue, queueTTL, etaSec := queueConfigFromEnv()
+
+	var door *provisionDoor
 	if raw := strings.TrimSpace(os.Getenv("MAX_CONCURRENT_PROVISIONS")); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-			provisionSem = semaphore.NewWeighted(int64(n))
+			door = newProvisionDoor(n, etaSec)
 		} else {
 			log.Printf("MAX_CONCURRENT_PROVISIONS invalid %q: %v (disabling doorway)", raw, err)
 		}
 	}
-
-	maxQueue, queueTTL, etaSec := queueConfigFromEnv()
 
 	return &Handler{
 		deployers:        deployers,
@@ -123,7 +122,7 @@ func NewHandler(
 		loadgen:          lg,
 		eventBus:         eventBus,
 		provisionCancel:  make(map[string]context.CancelFunc),
-		provisionSem:     provisionSem,
+		door:             door,
 		roomBudget:       admission.ConfigFromEnv(),
 		maxDeployQueue:   maxQueue,
 		queueTTL:         queueTTL,
@@ -224,12 +223,7 @@ func (h *Handler) handleGetDeployment(w http.ResponseWriter, r *http.Request) {
 		"metricsSummary": row.MetricsSummary,
 		"design":         row.Design,
 	}
-	if row.Status == statusQueued {
-		if pos, eta, ok := h.queuePositionAndETA(r.Context(), namespace); ok {
-			resp["queuePosition"] = pos
-			resp["estimatedWaitSeconds"] = eta
-		}
-	}
+	h.attachWaitFields(resp, r.Context(), namespace, row.Status)
 	if row.MetricsSummary != nil {
 		if seeded, ok := row.MetricsSummary["seeded"].(bool); ok {
 			resp["seeded"] = seeded
@@ -446,11 +440,8 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 			"explanation": assessment.Explanation,
 		},
 	}
-	if status == statusQueued {
-		if pos, eta, ok := h.queuePositionAndETA(r.Context(), namespace); ok {
-			resp["queuePosition"] = pos
-			resp["estimatedWaitSeconds"] = eta
-		}
+	if status == statusQueued || status == statusProvisioning {
+		h.attachWaitFields(resp, r.Context(), namespace, status)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
