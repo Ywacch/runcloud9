@@ -89,7 +89,7 @@ func TestHandleGetCurrentUser(t *testing.T) {
 			t.Setenv("SUPABASE_JWT_SECRET", "")
 			t.Setenv("SUPABASE_URL", "")
 
-			s := &stubUserStore{user: tt.user, err: tt.userErr}
+			s := &stubUserStore{user: tt.user, err: tt.userErr, monthlyUsed: 2}
 			h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
 			mux := http.NewServeMux()
 			h.RegisterRoutes(mux)
@@ -127,6 +127,35 @@ func TestHandleGetCurrentUser(t *testing.T) {
 			if out.Limits.MaxAppServerReplicas != tt.wantMaxRep {
 				t.Fatalf("maxAppServerReplicas: got %d want %d", out.Limits.MaxAppServerReplicas, tt.wantMaxRep)
 			}
+			switch tt.wantTier {
+			case store.TierFree:
+				if out.Limits.MaxSessionsPerMonth == nil || *out.Limits.MaxSessionsPerMonth != 5 {
+					t.Fatalf("maxSessionsPerMonth: got %v want 5", out.Limits.MaxSessionsPerMonth)
+				}
+				if out.SessionsUsedThisMonth != 2 {
+					t.Fatalf("sessionsUsedThisMonth: got %d want 2", out.SessionsUsedThisMonth)
+				}
+				if out.SessionsRemainingThisMonth == nil || *out.SessionsRemainingThisMonth != 3 {
+					t.Fatalf("sessionsRemainingThisMonth: got %v want 3", out.SessionsRemainingThisMonth)
+				}
+			case store.TierEngineer:
+				if out.Limits.MaxSessionsPerMonth == nil || *out.Limits.MaxSessionsPerMonth != 20 {
+					t.Fatalf("maxSessionsPerMonth: got %v want 20", out.Limits.MaxSessionsPerMonth)
+				}
+				if out.SessionsUsedThisMonth != 2 {
+					t.Fatalf("sessionsUsedThisMonth: got %d want 2", out.SessionsUsedThisMonth)
+				}
+				if out.SessionsRemainingThisMonth == nil || *out.SessionsRemainingThisMonth != 18 {
+					t.Fatalf("sessionsRemainingThisMonth: got %v want 18", out.SessionsRemainingThisMonth)
+				}
+			case store.TierInternal:
+				if out.Limits.MaxSessionsPerMonth != nil {
+					t.Fatalf("maxSessionsPerMonth: got %v want null", out.Limits.MaxSessionsPerMonth)
+				}
+				if out.SessionsRemainingThisMonth != nil {
+					t.Fatalf("sessionsRemainingThisMonth: got %v want null", out.SessionsRemainingThisMonth)
+				}
+			}
 			if tt.user.IsPremium {
 				if out.PremiumExpiresAt == nil || *out.PremiumExpiresAt != futureRFC {
 					t.Fatalf("premiumExpiresAt: got %v want %q", out.PremiumExpiresAt, futureRFC)
@@ -143,7 +172,7 @@ func TestBuildCurrentUserResponse_PremiumExpired(t *testing.T) {
 	resp := buildCurrentUserResponse("user-1", store.UserRecord{
 		IsPremium:        true,
 		PremiumExpiresAt: &past,
-	})
+	}, 0)
 	if resp.EffectiveTier != store.TierFree {
 		t.Fatalf("effectiveTier: got %q want %q", resp.EffectiveTier, store.TierFree)
 	}

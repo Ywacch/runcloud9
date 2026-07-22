@@ -23,27 +23,33 @@ const (
 
 var (
 	errUserAtCapacity       = errors.New("user at concurrent deployment capacity")
+	errMonthlySessionLimit  = errors.New("monthly session limit reached")
 	errClusterBusy          = errors.New("cluster deploy budget full")
 	errQueueFull            = errors.New("deploy queue full")
 	errDesignExceedsCluster = errors.New("design exceeds cluster capacity")
 	errListActive           = errors.New("list active deployments")
 	errSumOccupancy         = errors.New("sum admission occupancy")
 	errCountQueued          = errors.New("count queued deployments")
+	errCountMonthlySessions = errors.New("count monthly sessions")
 	errDesignEncode         = errors.New("encode design")
 	errCreateRow            = errors.New("create deployment row")
 )
 
-const designExceedsClusterMessage = "this design needs more CPU or memory than the cluster provides"
+const (
+	designExceedsClusterMessage = "this design needs more CPU or memory than the cluster provides"
+	monthlySessionLimitMessage  = "monthly session limit reached — upgrade or wait until next month"
+)
 
-// admitAndCreate enforces per-user concurrency and optional room budget, then
-// inserts the deployment row as provisioning or queued. Caller must hold
-// h.admitMu for the duration on a single-replica API.
+// admitAndCreate enforces per-user concurrency, monthly session caps, and optional
+// room budget, then inserts the deployment row as provisioning or queued.
+// Caller must hold h.admitMu for the duration on a single-replica API.
 //
 // Returns the persisted status ("provisioning" or "queued").
 func (h *Handler) admitAndCreate(
 	ctx context.Context,
 	userID string,
 	maxConcurrent int,
+	maxSessionsPerMonth int,
 	design deployer.DeploymentDesign,
 	resourceQuotaTier string,
 	namespace string,
@@ -59,6 +65,16 @@ func (h *Handler) admitAndCreate(
 	}
 	if len(active) >= maxConcurrent {
 		return "", errUserAtCapacity
+	}
+
+	if maxSessionsPerMonth > 0 {
+		n, err := h.store.CountUserDeploymentsSince(ctx, userID, store.StartOfUTCMonth(time.Now()))
+		if err != nil {
+			return "", fmt.Errorf("%w: %w", errCountMonthlySessions, err)
+		}
+		if n >= maxSessionsPerMonth {
+			return "", errMonthlySessionLimit
+		}
 	}
 
 	weight := admission.WeightFromBudget(deployer.QuotaResourceLimits(design, resourceQuotaTier))
@@ -156,10 +172,21 @@ func writeDesignExceedsCluster(w http.ResponseWriter) {
 	})
 }
 
+func writeMonthlySessionLimit(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusTooManyRequests)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error":  monthlySessionLimitMessage,
+		"reason": "monthly_session_limit",
+	})
+}
+
 func writeAdmitError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errUserAtCapacity):
 		writeError(w, http.StatusTooManyRequests, "you already have an active deployment — end it before creating another")
+	case errors.Is(err, errMonthlySessionLimit):
+		writeMonthlySessionLimit(w)
 	case errors.Is(err, errDesignExceedsCluster):
 		writeDesignExceedsCluster(w)
 	case errors.Is(err, errQueueFull):
@@ -172,6 +199,8 @@ func writeAdmitError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusInternalServerError, "failed to check cluster capacity")
 	case errors.Is(err, errCountQueued):
 		writeError(w, http.StatusInternalServerError, "failed to check deploy queue")
+	case errors.Is(err, errCountMonthlySessions):
+		writeError(w, http.StatusInternalServerError, "failed to check monthly session quota")
 	case errors.Is(err, errDesignEncode):
 		writeError(w, http.StatusInternalServerError, "invalid design")
 	default:

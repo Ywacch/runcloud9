@@ -59,6 +59,7 @@ type deploymentStore interface {
 	ListUserDeploymentHistory(ctx context.Context, userID string, limit int) ([]store.DeploymentHistoryRow, error)
 	ListQueuedDeployments(ctx context.Context) ([]store.QueuedDeploymentRow, error)
 	CountQueuedDeployments(ctx context.Context) (int, error)
+	CountUserDeploymentsSince(ctx context.Context, userID string, since time.Time) (int, error)
 	ClaimQueued(ctx context.Context, namespace string) (bool, error)
 	CreateDeployment(ctx context.Context, params store.CreateDeploymentParams) (string, error)
 	SumActiveAdmissionWeights(ctx context.Context) (store.AdmissionOccupancy, error)
@@ -422,7 +423,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 	if h.store != nil {
 		h.admitMu.Lock()
 		var admitErr error
-		status, admitErr = h.admitAndCreate(r.Context(), userID, limits.MaxConcurrent, design, resourceQuotaTier, namespace, sessionExpiresAt)
+		status, admitErr = h.admitAndCreate(r.Context(), userID, limits.MaxConcurrent, limits.MaxSessionsPerMonth, design, resourceQuotaTier, namespace, sessionExpiresAt)
 		h.admitMu.Unlock()
 		if admitErr != nil {
 			log.Printf("admit create deployment: %v", admitErr)

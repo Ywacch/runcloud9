@@ -10,8 +10,9 @@ import (
 )
 
 type stubUserStore struct {
-	user store.UserRecord
-	err  error
+	user        store.UserRecord
+	err         error
+	monthlyUsed int
 }
 
 func (s *stubUserStore) ListActiveDeployments(context.Context, string) ([]store.ActiveDeploymentRow, error) {
@@ -24,7 +25,10 @@ func (s *stubUserStore) ListQueuedDeployments(context.Context) ([]store.QueuedDe
 	return nil, nil
 }
 func (s *stubUserStore) CountQueuedDeployments(context.Context) (int, error) { return 0, nil }
-func (s *stubUserStore) ClaimQueued(context.Context, string) (bool, error)  { return false, nil }
+func (s *stubUserStore) CountUserDeploymentsSince(context.Context, string, time.Time) (int, error) {
+	return s.monthlyUsed, nil
+}
+func (s *stubUserStore) ClaimQueued(context.Context, string) (bool, error) { return false, nil }
 func (s *stubUserStore) CreateDeployment(context.Context, store.CreateDeploymentParams) (string, error) {
 	return "", nil
 }

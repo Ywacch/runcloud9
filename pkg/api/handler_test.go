@@ -420,6 +420,54 @@ func TestHandleCreateDeployment_ConcurrentLimit_RejectsSecondActive(t *testing.T
 	}
 }
 
+func TestHandleCreateDeployment_MonthlySessionLimit(t *testing.T) {
+	t.Setenv("ENV", "development")
+	t.Setenv("SUPABASE_JWT_SECRET", "")
+	t.Setenv("SUPABASE_URL", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "")
+
+	s := newFakeDeploymentStore()
+	used := 5
+	s.forcedMonthlyCount = &used
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "standard",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app", Type: "app-server", Name: "app", Config: map[string]interface{}{}},
+			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app", TargetID: "db"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("want 429, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var er struct {
+		Error  string `json:"error"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &er); err != nil {
+		t.Fatal(err)
+	}
+	if er.Reason != "monthly_session_limit" {
+		t.Fatalf("reason = %q, want monthly_session_limit body=%s", er.Reason, rec.Body.String())
+	}
+	if er.Error != monthlySessionLimitMessage {
+		t.Fatalf("error = %q, want %q", er.Error, monthlySessionLimitMessage)
+	}
+}
+
 func TestHandleCreateDeployment_RoomBudget_EnqueuesWhenFull(t *testing.T) {
 	t.Setenv("ENV", "development")
 	t.Setenv("SUPABASE_JWT_SECRET", "")
@@ -1128,19 +1176,21 @@ func TestDeleteDuringProvision_StaysTerminated(t *testing.T) {
 }
 
 type fakeDeploymentStore struct {
-	mu              sync.Mutex
-	byNS            map[string]store.DeploymentRow
-	active          []store.ActiveDeploymentRow
-	history         []store.DeploymentHistoryRow
-	historyErr      error
-	historyUser     string
-	historyLimit    int
-	nextSeq         int
-	users           map[string]store.UserRecord
-	defaultUser     store.UserRecord
-	admittedByNS    map[string]store.AdmissionOccupancy
-	forcedOccupancy *store.AdmissionOccupancy
-	sumOccErr       error
+	mu                 sync.Mutex
+	byNS               map[string]store.DeploymentRow
+	active             []store.ActiveDeploymentRow
+	history            []store.DeploymentHistoryRow
+	historyErr         error
+	historyUser        string
+	historyLimit       int
+	nextSeq            int
+	users              map[string]store.UserRecord
+	defaultUser        store.UserRecord
+	admittedByNS       map[string]store.AdmissionOccupancy
+	forcedOccupancy    *store.AdmissionOccupancy
+	sumOccErr          error
+	forcedMonthlyCount *int
+	monthlyCountErr    error
 }
 
 func newFakeDeploymentStore() *fakeDeploymentStore {
@@ -1255,6 +1305,36 @@ func (f *fakeDeploymentStore) CountQueuedDeployments(ctx context.Context) (int, 
 		return 0, err
 	}
 	return len(rows), nil
+}
+
+func (f *fakeDeploymentStore) CountUserDeploymentsSince(_ context.Context, userID string, since time.Time) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.monthlyCountErr != nil {
+		return 0, f.monthlyCountErr
+	}
+	if f.forcedMonthlyCount != nil {
+		return *f.forcedMonthlyCount, nil
+	}
+	n := 0
+	for _, row := range f.byNS {
+		if row.UserID != userID {
+			continue
+		}
+		if row.CreatedAt.Before(since) {
+			continue
+		}
+		if row.Status == "running" {
+			n++
+			continue
+		}
+		if row.MetricsSummary != nil {
+			if raw, ok := row.MetricsSummary["running_at"]; ok && raw != nil && raw != "" {
+				n++
+			}
+		}
+	}
+	return n, nil
 }
 
 func (f *fakeDeploymentStore) ClaimQueued(_ context.Context, namespace string) (bool, error) {

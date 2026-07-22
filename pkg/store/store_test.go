@@ -221,6 +221,31 @@ func TestListActiveDeployments_IncludesQueued(t *testing.T) {
 	}
 }
 
+func TestCountUserDeploymentsSince_Query(t *testing.T) {
+	t.Parallel()
+
+	since := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		assertQueryValue(t, map[string][]string(q), "user_id", "eq.user-1")
+		assertQueryValue(t, map[string][]string(q), "created_at", "gte."+since.Format(time.RFC3339))
+		if got := q.Get("or"); got == "" {
+			t.Error("expected or= filter for successful sessions")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]map[string]any{})
+	}))
+	defer server.Close()
+
+	s, err := NewDeploymentStore(server.URL, "service-key")
+	if err != nil {
+		t.Fatalf("NewDeploymentStore: %v", err)
+	}
+	if _, err := s.CountUserDeploymentsSince(context.Background(), "user-1", since); err != nil {
+		t.Fatalf("CountUserDeploymentsSince: %v", err)
+	}
+}
+
 func assertJSONInt64(t *testing.T, v any, want int64) {
 	t.Helper()
 	switch n := v.(type) {
