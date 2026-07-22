@@ -13,6 +13,7 @@ type currentUserLimitsResponse struct {
 	MaxConcurrent        int   `json:"maxConcurrent"`
 	SessionDefaultMins   int   `json:"sessionDefaultMins"`
 	SessionCapMins       int   `json:"sessionCapMins"`
+	MaxSessionsPerMonth  *int  `json:"maxSessionsPerMonth"`
 	AllTemplates         bool  `json:"allTemplates"`
 	MaxAppServerReplicas int32 `json:"maxAppServerReplicas"`
 	AllowLoadBalancer    bool  `json:"allowLoadBalancer"`
@@ -22,31 +23,42 @@ type currentUserLimitsResponse struct {
 
 // currentUserResponse is the authenticated caller profile returned by GET /me.
 type currentUserResponse struct {
-	UserID           string                    `json:"userId"`
-	IsInternal       bool                      `json:"isInternal"`
-	IsPremium        bool                      `json:"isPremium"`
-	PremiumExpiresAt *string                   `json:"premiumExpiresAt"`
-	EffectiveTier    string                    `json:"effectiveTier"`
-	QuotaTier        string                    `json:"quotaTier"`
-	Limits           currentUserLimitsResponse `json:"limits"`
+	UserID                     string                    `json:"userId"`
+	IsInternal                 bool                      `json:"isInternal"`
+	IsPremium                  bool                      `json:"isPremium"`
+	PremiumExpiresAt           *string                   `json:"premiumExpiresAt"`
+	EffectiveTier              string                    `json:"effectiveTier"`
+	QuotaTier                  string                    `json:"quotaTier"`
+	Limits                     currentUserLimitsResponse `json:"limits"`
+	SessionsUsedThisMonth      int                       `json:"sessionsUsedThisMonth"`
+	SessionsRemainingThisMonth *int                      `json:"sessionsRemainingThisMonth"`
 }
 
-func buildCurrentUserResponse(userID string, user store.UserRecord) currentUserResponse {
+func buildCurrentUserResponse(userID string, user store.UserRecord, sessionsUsed int) currentUserResponse {
 	effectiveTier := store.ResolveEffectiveTier(user)
 	limits := store.GetTierLimits(effectiveTier)
-	return currentUserResponse{
-		UserID:           userID,
-		IsInternal:       user.IsInternal,
-		IsPremium:        user.IsPremium,
-		PremiumExpiresAt: formatPremiumExpiresAt(user.PremiumExpiresAt),
-		EffectiveTier:    effectiveTier,
-		QuotaTier:        store.ResourceQuotaTier(effectiveTier),
-		Limits:           currentUserLimitsFromStore(limits),
+	resp := currentUserResponse{
+		UserID:                userID,
+		IsInternal:            user.IsInternal,
+		IsPremium:             user.IsPremium,
+		PremiumExpiresAt:      formatPremiumExpiresAt(user.PremiumExpiresAt),
+		EffectiveTier:         effectiveTier,
+		QuotaTier:             store.ResourceQuotaTier(effectiveTier),
+		Limits:                currentUserLimitsFromStore(limits),
+		SessionsUsedThisMonth: sessionsUsed,
 	}
+	if limits.MaxSessionsPerMonth > 0 {
+		remaining := limits.MaxSessionsPerMonth - sessionsUsed
+		if remaining < 0 {
+			remaining = 0
+		}
+		resp.SessionsRemainingThisMonth = &remaining
+	}
+	return resp
 }
 
 func currentUserLimitsFromStore(limits store.TierLimits) currentUserLimitsResponse {
-	return currentUserLimitsResponse{
+	out := currentUserLimitsResponse{
 		MaxConcurrent:        limits.MaxConcurrent,
 		SessionDefaultMins:   limits.SessionDefaultMins,
 		SessionCapMins:       limits.SessionCapMins,
@@ -56,6 +68,11 @@ func currentUserLimitsFromStore(limits store.TierLimits) currentUserLimitsRespon
 		AllowMQWorker:        limits.AllowMQWorker,
 		AllowProxyCache:      limits.AllowProxyCache,
 	}
+	if limits.MaxSessionsPerMonth > 0 {
+		max := limits.MaxSessionsPerMonth
+		out.MaxSessionsPerMonth = &max
+	}
+	return out
 }
 
 func formatPremiumExpiresAt(expires *time.Time) *string {
@@ -80,6 +97,17 @@ func (h *Handler) handleGetCurrentUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sessionsUsed := 0
+	limits := store.GetTierLimits(store.ResolveEffectiveTier(userRecord))
+	if limits.MaxSessionsPerMonth > 0 && h.store != nil {
+		n, err := h.store.CountUserDeploymentsSince(r.Context(), userID, store.StartOfUTCMonth(time.Now()))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to check monthly session quota")
+			return
+		}
+		sessionsUsed = n
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(buildCurrentUserResponse(userID, userRecord))
+	_ = json.NewEncoder(w).Encode(buildCurrentUserResponse(userID, userRecord, sessionsUsed))
 }

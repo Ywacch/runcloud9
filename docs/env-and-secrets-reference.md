@@ -64,4 +64,5 @@ Optional keys:
 - Keep `cloud9-api` at **`replicas: 1`** while doorway (`MAX_CONCURRENT_PROVISIONS`), room (`CLUSTER_DEPLOY_BUDGET_*`), and deploy queue (in-process FIFO) use in-process mutex/semaphore. Scale only after DB-atomic admission exists.
 - SQL for weight columns: [`docs/sql/admitted_weights.sql`](sql/admitted_weights.sql). Status `queued` needs no schema change (`status` is unconstrained text).
 - When the room is full, creates return **201** with `status=queued`, `queuePosition`, and `estimatedWaitSeconds`. Overflow past `MAX_DEPLOY_QUEUE` returns **429** `reason=queue_full`.
+- Monthly session caps are **code constants** on tier limits (not env): free **5** / engineer **20** / internal unlimited per UTC calendar month. Only deployments that reach live count (`status=running` or `metrics_summary.running_at` set). At cap → **429** `reason=monthly_session_limit`. `GET /me` exposes `limits.maxSessionsPerMonth`, `sessionsUsedThisMonth`, and `sessionsRemainingThisMonth`.
 

@@ -302,6 +302,26 @@ func (s *DeploymentStore) CountQueuedDeployments(ctx context.Context) (int, erro
 	return int(count), nil
 }
 
+// CountUserDeploymentsSince returns how many of the user's deployments this month
+// actually reached live (status=running, or metrics_summary.running_at set after
+// a successful provision). Queued/cancelled/failed-before-running do not count.
+func (s *DeploymentStore) CountUserDeploymentsSince(ctx context.Context, userID string, since time.Time) (int, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return 0, fmt.Errorf("store.CountUserDeploymentsSince: user ID is required")
+	}
+	_, count, err := s.client.From("cloud_deployments").
+		Select("id", "exact", true).
+		Eq("user_id", userID).
+		Filter("created_at", "gte", since.UTC().Format(time.RFC3339)).
+		Or("status.eq.running,metrics_summary->>running_at.not.is.null", "").
+		Execute()
+	if err != nil {
+		return 0, fmt.Errorf("store.CountUserDeploymentsSince: %w", err)
+	}
+	return int(count), nil
+}
+
 // SumActiveAdmissionWeights sums admitted_cpu_m / admitted_mem_mi for rows with
 // status IN ('provisioning','running'). NULL weights count as 0.
 func (s *DeploymentStore) SumActiveAdmissionWeights(ctx context.Context) (AdmissionOccupancy, error) {

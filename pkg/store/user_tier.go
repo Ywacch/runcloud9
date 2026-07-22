@@ -31,11 +31,18 @@ type TierLimits struct {
 	MaxConcurrent        int
 	SessionDefaultMins   int
 	SessionCapMins       int
+	MaxSessionsPerMonth  int // 0 = unlimited
 	AllTemplates         bool
 	MaxAppServerReplicas int32
 	AllowLoadBalancer    bool
 	AllowMQWorker        bool
 	AllowProxyCache      bool
+}
+
+// StartOfUTCMonth returns 00:00:00 UTC on the first day of t's calendar month.
+func StartOfUTCMonth(t time.Time) time.Time {
+	u := t.UTC()
+	return time.Date(u.Year(), u.Month(), 1, 0, 0, 0, 0, time.UTC)
 }
 
 // ResolveEffectiveTier maps a user record to free, engineer, or internal.
@@ -59,6 +66,7 @@ func GetTierLimits(tier string) TierLimits {
 			MaxConcurrent:        40,
 			SessionDefaultMins:   9,
 			SessionCapMins:       30,
+			MaxSessionsPerMonth:  0, // unlimited
 			AllTemplates:         true,
 			MaxAppServerReplicas: 3,
 			AllowLoadBalancer:    true,
@@ -70,6 +78,7 @@ func GetTierLimits(tier string) TierLimits {
 			MaxConcurrent:        1,
 			SessionDefaultMins:   9,
 			SessionCapMins:       15,
+			MaxSessionsPerMonth:  20,
 			AllTemplates:         true,
 			MaxAppServerReplicas: 3,
 			AllowLoadBalancer:    true,
@@ -81,6 +90,7 @@ func GetTierLimits(tier string) TierLimits {
 			MaxConcurrent:        1,
 			SessionDefaultMins:   9,
 			SessionCapMins:       9,
+			MaxSessionsPerMonth:  5,
 			AllTemplates:         false,
 			MaxAppServerReplicas: 1,
 			AllowLoadBalancer:    false,

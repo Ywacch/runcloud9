@@ -56,6 +56,7 @@ func TestGetTierLimits(t *testing.T) {
 		tier                string
 		wantConcurrent      int
 		wantSessionCap      int
+		wantMonthlySessions int
 		wantAllTemplates    bool
 		wantMaxAppReplicas  int32
 		wantAllowLB         bool
@@ -63,15 +64,15 @@ func TestGetTierLimits(t *testing.T) {
 		wantAllowProxyCache bool
 	}{
 		{
-			tier: TierFree, wantConcurrent: 1, wantSessionCap: 9, wantAllTemplates: false,
+			tier: TierFree, wantConcurrent: 1, wantSessionCap: 9, wantMonthlySessions: 5, wantAllTemplates: false,
 			wantMaxAppReplicas: 1, wantAllowLB: false, wantAllowMQWorker: false, wantAllowProxyCache: false,
 		},
 		{
-			tier: TierEngineer, wantConcurrent: 1, wantSessionCap: 15, wantAllTemplates: true,
+			tier: TierEngineer, wantConcurrent: 1, wantSessionCap: 15, wantMonthlySessions: 20, wantAllTemplates: true,
 			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
 		},
 		{
-			tier: TierInternal, wantConcurrent: 40, wantSessionCap: 30, wantAllTemplates: true,
+			tier: TierInternal, wantConcurrent: 40, wantSessionCap: 30, wantMonthlySessions: 0, wantAllTemplates: true,
 			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
 		},
 	}
@@ -85,6 +86,9 @@ func TestGetTierLimits(t *testing.T) {
 			}
 			if got.SessionCapMins != tt.wantSessionCap {
 				t.Fatalf("SessionCapMins = %d, want %d", got.SessionCapMins, tt.wantSessionCap)
+			}
+			if got.MaxSessionsPerMonth != tt.wantMonthlySessions {
+				t.Fatalf("MaxSessionsPerMonth = %d, want %d", got.MaxSessionsPerMonth, tt.wantMonthlySessions)
 			}
 			if got.AllTemplates != tt.wantAllTemplates {
 				t.Fatalf("AllTemplates = %v, want %v", got.AllTemplates, tt.wantAllTemplates)
@@ -150,6 +154,15 @@ func TestResourceQuotaTier(t *testing.T) {
 	}
 	if got := ResourceQuotaTier(TierInternal); got != TierInternal {
 		t.Fatalf("internal: got %q", got)
+	}
+}
+
+func TestStartOfUTCMonth(t *testing.T) {
+	t.Parallel()
+	got := StartOfUTCMonth(time.Date(2026, 7, 22, 15, 30, 0, 0, time.UTC))
+	want := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Fatalf("StartOfUTCMonth = %v, want %v", got, want)
 	}
 }
 
