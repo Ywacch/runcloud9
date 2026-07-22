@@ -30,35 +30,6 @@ import (
 // version is set at link time (Dockerfile / CI) for Sentry release tagging.
 var version = "dev"
 
-func withCORS(next http.Handler) http.Handler {
-	raw := os.Getenv("ALLOWED_ORIGINS")
-	if raw == "" {
-		raw = "http://localhost:3000"
-	}
-	allowedSet := make(map[string]bool)
-	for _, origin := range strings.Split(raw, ",") {
-		o := strings.TrimSpace(origin)
-		if o != "" {
-			allowedSet[o] = true
-		}
-	}
-
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-		if allowedSet[origin] {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-		}
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID")
-		w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID, X-Cloud9-Proxied")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 // buildDeployers returns the deployer map, k8s clientset, and optional metrics clientset.
 // os.Getenv returns empty string if var not set.
 // Default to local so tests and local dev without minikube still work.
@@ -371,7 +342,7 @@ func main() {
 	if sentryHTTP {
 		root = sentryhttp.New(sentryhttp.Options{}).Handle(root)
 	}
-	if err := http.ListenAndServe(":"+port, withCORS(root)); err != nil {
+	if err := http.ListenAndServe(":"+port, api.WithSecurityHeaders(api.WithCORS(root))); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }

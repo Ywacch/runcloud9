@@ -47,9 +47,11 @@ func TestProxyRESTHeaders_includesRequestID(t *testing.T) {
 }
 
 func TestSetProxyCORS_exposesRequestID(t *testing.T) {
-	t.Parallel()
+	t.Setenv("ALLOWED_ORIGINS", "https://app.example")
 	rec := httptest.NewRecorder()
-	setProxyCORS(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Origin", "https://app.example")
+	setProxyCORS(rec, req)
 	expose := rec.Header().Get("Access-Control-Expose-Headers")
 	if expose == "" || !containsHeaderToken(expose, "X-Request-ID") {
 		t.Fatalf("Access-Control-Expose-Headers: got %q", expose)
@@ -57,6 +59,20 @@ func TestSetProxyCORS_exposesRequestID(t *testing.T) {
 	allow := rec.Header().Get("Access-Control-Allow-Headers")
 	if !containsHeaderToken(allow, "X-Request-ID") {
 		t.Fatalf("Access-Control-Allow-Headers: got %q", allow)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://app.example" {
+		t.Fatalf("Allow-Origin: got %q", got)
+	}
+}
+
+func TestSetProxyCORS_disallowedOriginOmitsAllowOrigin(t *testing.T) {
+	t.Setenv("ALLOWED_ORIGINS", "https://app.example")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	setProxyCORS(rec, req)
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("Allow-Origin: got %q, want empty", got)
 	}
 }
 

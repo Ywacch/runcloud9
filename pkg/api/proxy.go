@@ -24,12 +24,8 @@ var hopByHopResponseHeaders = map[string]struct{}{
 }
 
 func setProxyCORS(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID")
-	w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID, X-Cloud9-Proxied")
+	applyCORSAllowlist(w, r, AllowedOriginsFromEnv(), "GET, POST, OPTIONS")
 	w.Header().Set("Access-Control-Max-Age", "86400")
-	_ = r // reserved for future origin checks
 }
 
 // proxyRequestID returns the client trace id or generates one for downstream propagation.
