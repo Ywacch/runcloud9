@@ -175,6 +175,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /health", routePublic(rl, http.HandlerFunc(h.handleHealth)))
 	mux.Handle("GET /templates", routePublic(rl, http.HandlerFunc(h.handleGetTemplates)))
 	mux.Handle("GET /meta/resource-profiles", routePublic(rl, http.HandlerFunc(h.handleGetResourceProfiles)))
+	mux.Handle("GET /meta/topology-rules", routePublic(rl, http.HandlerFunc(h.handleGetTopologyRules)))
 }
 
 // handleMetricsStream upgrades the HTTP connection to WebSocket and streams
@@ -329,6 +330,11 @@ func (h *Handler) handleGetTemplates(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleGetResourceProfiles(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(deployer.NewResourceCatalogResponse())
+}
+
+func (h *Handler) handleGetTopologyRules(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(deployer.NewTopologyRulesResponse())
 }
 
 func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request) {
