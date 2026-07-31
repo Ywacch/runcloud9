@@ -398,13 +398,12 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 			"deploymentId": "",
 			"namespace":    "",
 			"status":       "simulation_recommended",
-			"assessment": map[string]any{
-				"verdict":     assessment.Verdict,
-				"explanation": assessment.Explanation,
-			},
+			"assessment":   deployer.AssessmentMap(assessment, nil),
 		})
 		return
 	}
+
+	capabilityWarnings := deployer.TemplateCapabilityWarnings(design)
 
 	if err := deployer.ValidateResourceBudget(design, resourceQuotaTier); err != nil {
 		var budgetErr *deployer.ResourceBudgetError
@@ -436,10 +435,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		"deploymentId": namespace,
 		"namespace":    namespace,
 		"status":       status,
-		"assessment": map[string]any{
-			"verdict":     assessment.Verdict,
-			"explanation": assessment.Explanation,
-		},
+		"assessment":   deployer.AssessmentMap(assessment, capabilityWarnings),
 	}
 	if status == statusQueued || status == statusProvisioning {
 		h.attachWaitFields(resp, r.Context(), namespace, status)
