@@ -226,6 +226,25 @@ func TestRegistryJSON_IncludesStorytelling(t *testing.T) {
 	}
 }
 
+func TestRegistryJSON_IncludesStorytellingEdges(t *testing.T) {
+	t.Parallel()
+	sf := GetTemplate("social-feed")
+	if sf == nil || sf.Storytelling == nil {
+		t.Fatal("social-feed storytelling missing")
+	}
+	edge, ok := sf.Storytelling.Edges["app-server->cache"]
+	if !ok || edge.Base == "" {
+		t.Fatalf("expected app-server->cache edge meaning, got %+v", sf.Storytelling.Edges)
+	}
+	if !strings.Contains(strings.ToLower(edge.Base), "timeline") {
+		t.Fatalf("social-feed cache edge should mention timelines, got %q", edge.Base)
+	}
+	us := GetTemplate("url-shortener")
+	if us == nil || us.Storytelling == nil || us.Storytelling.Edges["app-server->cache"].Base == "" {
+		t.Fatal("url-shortener app-server->cache edge missing")
+	}
+}
+
 func TestRegistryJSON_IncludesSimulatableDeployable(t *testing.T) {
 	t.Parallel()
 	b, err := json.Marshal(Registry())

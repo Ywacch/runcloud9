@@ -196,6 +196,19 @@ storytelling:
       base: "GET /catalog and POST /checkout"
     lb:
       base: "Routes traffic across app-server replicas"
+  edges:
+    lb->app-server:
+      base: "Load balancer spreads HTTP to app-server replicas."
+    app-server->db:
+      base: "App reads catalog/inventory and writes orders directly to Postgres."
+    app-server->cache:
+      base: "App checks Redis for catalog and product keys (cache-aside)."
+    app-server->mq:
+      base: "Checkout publishes order.placed for async fulfillment."
+    worker->mq:
+      base: "Fulfillment worker consumes order.placed from this queue."
+    worker->db:
+      base: "Worker updates order/fulfillment state in Postgres."
   journeys:
     - id: catalog
       method: GET

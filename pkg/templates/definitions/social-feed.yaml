@@ -250,6 +250,24 @@ storytelling:
           label: "Publishes new posts to the queue; serves feeds from Redis"
     lb:
       base: "Routes requests across app-server replicas"
+  edges:
+    lb->app-server:
+      base: "Load balancer spreads HTTP to app-server replicas."
+    app-server->db:
+      base: "App reads and writes users, posts, and the follower graph in Postgres."
+    app-server->cache:
+      base: "App reads follower timelines from Redis (ZREVRANGE on timeline:{userId})."
+      variants:
+        - when: { topology: "!hasCache" }
+          label: "No Redis on the canvas — feed reads fall back to Postgres JOINs."
+    app-server->mq:
+      base: "App publishes new posts to the queue for async fan-out."
+    worker->mq:
+      base: "Fan-out worker consumes post events from this queue."
+    worker->db:
+      base: "Worker loads follower lists and post metadata from Postgres."
+    worker->cache:
+      base: "Worker writes timeline:{followerId} sorted sets in Redis after each post."
   journeys:
     - id: feed-read
       method: GET

@@ -139,6 +139,11 @@ storytelling:
       base: "Stores users, posts, and the follower graph"
     lb:
       base: "Routes requests across app-server replicas"
+  edges:
+    lb->app-server:
+      base: "Load balancer spreads HTTP to app-server replicas."
+    app-server->db:
+      base: "Every feed read and post write hits Postgres (pull / JOIN path)."
   journeys:
     - id: feed-read
       method: GET
