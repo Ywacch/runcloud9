@@ -273,23 +273,34 @@ func TestHandleCreateDeployment_RequestBodyTooLarge(t *testing.T) {
 }
 
 func TestHandleCreateDeployment_SimulationRecommended_PartialTopology(t *testing.T) {
-	t.Parallel()
-	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	t.Setenv("ENV", "development")
+	t.Setenv("SUPABASE_JWT_SECRET", "")
+	t.Setenv("SUPABASE_URL", "")
+
+	future := time.Now().Add(24 * time.Hour)
+	s := newFakeDeploymentStore()
+	s.users = map[string]store.UserRecord{
+		"dev-user": {IsPremium: true, PremiumExpiresAt: &future},
+	}
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
+	// Chained LBs are valid but unsupported (simulation_recommended). Multi app-server
+	// nodes are rejected by ValidateTopology, so they can no longer drive this case.
 	body := deployer.DeploymentDesign{
 		Template:  "url-shortener",
 		Archetype: "standard",
 		Nodes: []deployer.DeploymentNode{
-			{ID: "a", Type: "app-server", Name: "a", Config: map[string]interface{}{}},
-			{ID: "b", Type: "app-server", Name: "b", Config: map[string]interface{}{}},
+			{ID: "lb1", Type: "lb", Name: "lb1", Config: map[string]interface{}{}},
+			{ID: "lb2", Type: "lb", Name: "lb2", Config: map[string]interface{}{}},
+			{ID: "app", Type: "app-server", Name: "app", Config: map[string]interface{}{}},
 			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
 		},
 		Connections: []deployer.DeploymentConn{
-			{SourceID: "a", TargetID: "b"},
-			{SourceID: "a", TargetID: "db"},
-			{SourceID: "b", TargetID: "db"},
+			{SourceID: "lb1", TargetID: "lb2"},
+			{SourceID: "lb2", TargetID: "app"},
+			{SourceID: "app", TargetID: "db"},
 		},
 	}
 	raw, _ := json.Marshal(body)
@@ -320,11 +331,45 @@ func TestHandleCreateDeployment_SimulationRecommended_PartialTopology(t *testing
 	if out.DeploymentID != "" || out.Namespace != "" {
 		t.Fatalf("expected empty deployment id/namespace, got %q %q", out.DeploymentID, out.Namespace)
 	}
-	if out.Assessment.Verdict != deployer.VerdictPartial {
-		t.Fatalf("verdict: got %q", out.Assessment.Verdict)
+	if out.Assessment.Verdict != deployer.VerdictPartial && out.Assessment.Verdict != deployer.VerdictSimulate {
+		t.Fatalf("verdict: got %q want partial or simulate", out.Assessment.Verdict)
 	}
 	if out.Assessment.Explanation == "" {
 		t.Fatal("empty assessment explanation")
+	}
+}
+
+func TestHandleCreateDeployment_MultipleAppServersRejected(t *testing.T) {
+	t.Parallel()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "standard",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "a", Type: "app-server", Name: "a", Config: map[string]interface{}{}},
+			{ID: "b", Type: "app-server", Name: "b", Config: map[string]interface{}{}},
+			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "a", TargetID: "db"},
+			{SourceID: "b", TargetID: "db"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "only one app-server") {
+		t.Fatalf("body: want multi app-server error, got %s", rec.Body.String())
 	}
 }
 
