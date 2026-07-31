@@ -1,9 +1,12 @@
 package templates
 
-// StorytellingSpec is template-authored copy for roles, request journeys, and detector narratives.
+// StorytellingSpec is template-authored copy for roles, request journeys, edge meanings, and detector narratives.
 // Loaded from embedded YAML; exposed on TemplateSpec for GET /templates and tooling.
 type StorytellingSpec struct {
-	Roles            map[string]RoleStorySpec        `yaml:"roles" json:"roles,omitempty"`
+	Roles map[string]RoleStorySpec `yaml:"roles" json:"roles,omitempty"`
+	// Edges maps "sourceType->targetType" (e.g. "app-server->cache") to teaching copy for canvas edge tooltips.
+	// Uses the same base/variants shape as Roles. FE falls back to platform defaults when a pair is missing.
+	Edges            map[string]RoleStorySpec        `yaml:"edges" json:"edges,omitempty"`
 	Journeys         []JourneySpec                   `yaml:"journeys" json:"journeys,omitempty"`
 	NarrativeContext map[string]NarrativeRuleContext `yaml:"narrativeContext" json:"narrativeContext,omitempty"`
 }

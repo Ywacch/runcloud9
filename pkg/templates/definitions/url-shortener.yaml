@@ -142,6 +142,26 @@ storytelling:
       base: "Handles POST /shorten and GET /r/{code}"
     lb:
       base: "Routes traffic across app-server replicas"
+  edges:
+    lb->app-server:
+      base: "Load balancer spreads HTTP to app-server replicas."
+    app-server->db:
+      base: "App looks up original URLs in Postgres on cache miss (and writes new codes)."
+    app-server->cache:
+      base: "App checks Redis for short:{code} on the hot resolve path."
+      variants:
+        - when: { strategy: "write-through" }
+          label: >-
+            App talks to the caching proxy: SET writes Redis then Postgres before ack;
+            GET miss fills from Postgres (read-through).
+        - when: { strategy: "write-behind" }
+          label: >-
+            App talks to the caching proxy: SET lands in Redis and flushes Postgres later;
+            GET miss fills from Postgres (read-through).
+        - when: { strategy: "cache-aside" }
+          label: "App GETs Redis first; on miss it reads Postgres and SETs the key."
+    cache->db:
+      base: "Proxy cache fills or flushes against Postgres for this strategy."
   journeys:
     - id: resolve
       method: GET
