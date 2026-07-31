@@ -27,24 +27,26 @@ type SeedConfig struct {
 
 // TemplateSpec is the single source of truth for a template's metadata.
 type TemplateSpec struct {
-	ID                  string           `json:"id"`
-	Name                string           `json:"name"`
-	Description         string           `json:"description"`
-	Components          int              `json:"components"`
-	Bottleneck          string           `json:"bottleneck"`
-	DescriptionLite     string           `json:"descriptionLite,omitempty"`
-	ComponentsLite      int              `json:"componentsLite,omitempty"`
-	BottleneckLite      string           `json:"bottleneckLite,omitempty"`
-	Available           bool             `json:"available"`
-	Premium             bool             `json:"premium"`
-	Tags                []string         `json:"tags"`
-	Topology            []TopologyHint   `json:"topology"`
-	Preset              *TemplatePreset  `json:"preset,omitempty"`
-	PresetLite          *TemplatePreset  `json:"presetLite,omitempty"`
-	AppServerImage      string           `json:"-"`
-	WorkerImage         string           `json:"-"`
-	Simulatable         bool             `json:"simulatable"`
-	Deployable          bool             `json:"deployable"`
+	ID              string          `json:"id"`
+	Name            string          `json:"name"`
+	Description     string          `json:"description"`
+	Components      int             `json:"components"`
+	Bottleneck      string          `json:"bottleneck"`
+	DescriptionLite string          `json:"descriptionLite,omitempty"`
+	ComponentsLite  int             `json:"componentsLite,omitempty"`
+	BottleneckLite  string          `json:"bottleneckLite,omitempty"`
+	Available       bool            `json:"available"`
+	Premium         bool            `json:"premium"`
+	Tags            []string        `json:"tags"`
+	Topology        []TopologyHint  `json:"topology"`
+	Preset          *TemplatePreset `json:"preset,omitempty"`
+	PresetLite      *TemplatePreset `json:"presetLite,omitempty"`
+	AppServerImage  string          `json:"-"`
+	WorkerImage     string          `json:"-"`
+	Simulatable     bool            `json:"simulatable"`
+	Deployable      bool            `json:"deployable"`
+	// SupportsWorker is true when the template ships a real worker image (workerImageKey set).
+	SupportsWorker      bool             `json:"supportsWorker"`
 	SeedConfig          *SeedConfig      `json:"-"`
 	ProxyQueries        []ProxyQueryRule `json:"-"`
 	AppDatabaseMode     string           `json:"-"`
@@ -104,28 +106,28 @@ type ParamSpec struct {
 
 // templateDef mirrors embedded YAML before conversion to TemplateSpec.
 type templateDef struct {
-	ID             string   `yaml:"id"`
-	Name           string   `yaml:"name"`
-	Description    string   `yaml:"description"`
-	Components     int      `yaml:"components"`
-	Bottleneck     string   `yaml:"bottleneck"`
-	DescriptionLite string  `yaml:"descriptionLite"`
-	ComponentsLite  int     `yaml:"componentsLite"`
-	BottleneckLite  string  `yaml:"bottleneckLite"`
-	Available      bool     `yaml:"available"`
-	Premium        bool     `yaml:"premium"`
-	Tags           []string `yaml:"tags"`
-	Simulatable    bool     `yaml:"simulatable"`
-	Deployable     bool     `yaml:"deployable"`
-	ImageKey       string   `yaml:"imageKey"`
-	WorkerImageKey string   `yaml:"workerImageKey"`
-	Topology       []struct {
+	ID              string   `yaml:"id"`
+	Name            string   `yaml:"name"`
+	Description     string   `yaml:"description"`
+	Components      int      `yaml:"components"`
+	Bottleneck      string   `yaml:"bottleneck"`
+	DescriptionLite string   `yaml:"descriptionLite"`
+	ComponentsLite  int      `yaml:"componentsLite"`
+	BottleneckLite  string   `yaml:"bottleneckLite"`
+	Available       bool     `yaml:"available"`
+	Premium         bool     `yaml:"premium"`
+	Tags            []string `yaml:"tags"`
+	Simulatable     bool     `yaml:"simulatable"`
+	Deployable      bool     `yaml:"deployable"`
+	ImageKey        string   `yaml:"imageKey"`
+	WorkerImageKey  string   `yaml:"workerImageKey"`
+	Topology        []struct {
 		Type     string     `yaml:"type"`
 		Position [2]float64 `yaml:"position"`
 	} `yaml:"topology"`
-	Preset *presetYAML `yaml:"preset"`
+	Preset     *presetYAML `yaml:"preset"`
 	PresetLite *presetYAML `yaml:"presetLite"`
-	Seed *struct {
+	Seed       *struct {
 		DBType    string `yaml:"dbType"`
 		DumpPath  string `yaml:"dumpPath"`
 		Container string `yaml:"container"`
@@ -252,6 +254,7 @@ func defToSpec(def *templateDef) TemplateSpec {
 		Tags:                def.Tags,
 		Simulatable:         def.Simulatable,
 		Deployable:          def.Deployable,
+		SupportsWorker:      def.WorkerImageKey != "",
 		AppServerImage:      imageFor(def.ImageKey),
 		Topology:            make([]TopologyHint, 0, len(def.Topology)),
 		AppDatabaseMode:     "always",

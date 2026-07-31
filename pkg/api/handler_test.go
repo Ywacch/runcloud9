@@ -58,8 +58,9 @@ func TestHandleGetTemplates(t *testing.T) {
 	}
 
 	var list []struct {
-		ID        string `json:"id"`
-		Available bool   `json:"available"`
+		ID             string `json:"id"`
+		Available      bool   `json:"available"`
+		SupportsWorker bool   `json:"supportsWorker"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
 		t.Fatal(err)
@@ -67,17 +68,17 @@ func TestHandleGetTemplates(t *testing.T) {
 	if len(list) != 4 {
 		t.Fatalf("want 4 templates, got %d", len(list))
 	}
-	if list[0].ID != "url-shortener" || !list[0].Available {
-		t.Fatalf("first template: %+v", list[0])
+	if list[0].ID != "url-shortener" || !list[0].Available || list[0].SupportsWorker {
+		t.Fatalf("url-shortener: %+v", list[0])
 	}
-	if list[1].ID != "ecommerce" || !list[1].Available {
-		t.Fatalf("ecommerce should be available: %+v", list[1])
+	if list[1].ID != "ecommerce" || !list[1].Available || !list[1].SupportsWorker {
+		t.Fatalf("ecommerce: %+v", list[1])
 	}
-	if list[2].ID != "social-feed" || !list[2].Available {
-		t.Fatalf("social-feed should be available: %+v", list[2])
+	if list[2].ID != "social-feed" || !list[2].Available || !list[2].SupportsWorker {
+		t.Fatalf("social-feed: %+v", list[2])
 	}
-	if list[3].ID != "social-feed-pull" || !list[3].Available {
-		t.Fatalf("social-feed-pull should be available: %+v", list[3])
+	if list[3].ID != "social-feed-pull" || !list[3].Available || list[3].SupportsWorker {
+		t.Fatalf("social-feed-pull: %+v", list[3])
 	}
 }
 
@@ -368,6 +369,77 @@ func TestHandleCreateDeployment_UnavailableRegistryTemplate(t *testing.T) {
 	}
 	if out.DeploymentID == "" || out.Namespace == "" {
 		t.Fatalf("expected deployment id/namespace, got %q / %q", out.DeploymentID, out.Namespace)
+	}
+}
+
+func TestHandleCreateDeployment_TemplateCapabilityWarnings(t *testing.T) {
+	t.Setenv("ENV", "development")
+	t.Setenv("SUPABASE_JWT_SECRET", "")
+	t.Setenv("SUPABASE_URL", "")
+
+	future := time.Now().Add(24 * time.Hour)
+	s := newFakeDeploymentStore()
+	s.users = map[string]store.UserRecord{
+		"dev-user": {IsPremium: true, PremiumExpiresAt: &future},
+	}
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "standard",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app", Type: "app-server", Name: "app", Config: map[string]interface{}{}},
+			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
+			{ID: "mq", Type: "mq", Name: "mq", Config: map[string]interface{}{}},
+			{ID: "worker", Type: "worker", Name: "worker", Config: map[string]interface{}{}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app", TargetID: "db"},
+			{SourceID: "app", TargetID: "mq"},
+			{SourceID: "worker", TargetID: "mq"},
+			{SourceID: "worker", TargetID: "db"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status: want 201, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var out struct {
+		Assessment struct {
+			Verdict  string `json:"verdict"`
+			Warnings []struct {
+				Code    string   `json:"code"`
+				Message string   `json:"message"`
+				NodeIDs []string `json:"nodeIds"`
+			} `json:"warnings"`
+		} `json:"assessment"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Assessment.Verdict != deployer.VerdictFull {
+		t.Fatalf("verdict: got %q", out.Assessment.Verdict)
+	}
+	if len(out.Assessment.Warnings) != 1 {
+		t.Fatalf("warnings: want 1, got %d (%+v)", len(out.Assessment.Warnings), out.Assessment.Warnings)
+	}
+	if out.Assessment.Warnings[0].Code != deployer.WarningCodeTemplateNoAsync {
+		t.Fatalf("warning code: got %q", out.Assessment.Warnings[0].Code)
+	}
+	if out.Assessment.Warnings[0].Message == "" {
+		t.Fatal("empty warning message")
+	}
+	if len(out.Assessment.Warnings[0].NodeIDs) != 2 {
+		t.Fatalf("nodeIds: got %v", out.Assessment.Warnings[0].NodeIDs)
 	}
 }
 

@@ -145,6 +145,25 @@ func TestGetWorkerImage(t *testing.T) {
 	}
 }
 
+func TestTemplateSpec_SupportsWorker(t *testing.T) {
+	t.Parallel()
+	cases := map[string]bool{
+		"url-shortener":    false,
+		"ecommerce":        true,
+		"social-feed":      true,
+		"social-feed-pull": false,
+	}
+	for id, want := range cases {
+		tmpl := GetTemplate(id)
+		if tmpl == nil {
+			t.Fatalf("template %q not found", id)
+		}
+		if tmpl.SupportsWorker != want {
+			t.Fatalf("SupportsWorker(%q) = %v want %v", id, tmpl.SupportsWorker, want)
+		}
+	}
+}
+
 func TestImageFor_RegistryEnv(t *testing.T) {
 	// Not parallel: mutates process env; parallel tests would race on TEMPLATE_IMAGE_REGISTRY.
 	t.Setenv("TEMPLATE_IMAGE_REGISTRY", "reg.example/test")
