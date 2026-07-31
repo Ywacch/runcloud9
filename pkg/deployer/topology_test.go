@@ -602,6 +602,53 @@ func TestValidateTopology_WorkerWithAllDeps(t *testing.T) {
 	}
 }
 
+func TestValidateTopology_MultipleAppServers(t *testing.T) {
+	t.Parallel()
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "a1", Type: "app-server", Name: "App1"},
+			{ID: "a2", Type: "app-server", Name: "App2"},
+			{ID: "d1", Type: "db", Name: "DB"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "a1", TargetID: "d1"},
+			{SourceID: "a2", TargetID: "d1"},
+		},
+	}
+	err := ValidateTopology(design)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	if want := "only one app-server"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("expected error to contain %q, got %q", want, err.Error())
+	}
+}
+
+func TestValidateTopology_MultipleWorkers(t *testing.T) {
+	t.Parallel()
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "w1", Type: "worker", Name: "W1"},
+			{ID: "w2", Type: "worker", Name: "W2"},
+			{ID: "mq1", Type: "mq", Name: "MQ"},
+			{ID: "d1", Type: "db", Name: "DB"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "w1", TargetID: "mq1"},
+			{SourceID: "w1", TargetID: "d1"},
+			{SourceID: "w2", TargetID: "mq1"},
+			{SourceID: "w2", TargetID: "d1"},
+		},
+	}
+	err := ValidateTopology(design)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	if want := "only one worker"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("expected error to contain %q, got %q", want, err.Error())
+	}
+}
+
 func TestValidateTopology_MQWithoutWorker(t *testing.T) {
 	design := DeploymentDesign{
 		Nodes: []DeploymentNode{
