@@ -114,6 +114,45 @@ func TestHandleGetResourceProfiles(t *testing.T) {
 	}
 }
 
+func TestHandleGetTopologyRules(t *testing.T) {
+	t.Parallel()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/meta/topology-rules", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("Content-Type: want application/json, got %q", ct)
+	}
+
+	var resp deployer.TopologyRulesResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Connections) != 36 {
+		t.Fatalf("connections: want 36, got %d", len(resp.Connections))
+	}
+	if len(resp.Singletons) != 2 {
+		t.Fatalf("singletons: %+v", resp.Singletons)
+	}
+	foundWorkerReq := false
+	for _, r := range resp.RequiredOutbound {
+		if r.NodeType == "worker" {
+			foundWorkerReq = true
+			break
+		}
+	}
+	if !foundWorkerReq {
+		t.Fatalf("expected worker requiredOutbound, got %+v", resp.RequiredOutbound)
+	}
+}
+
 func TestHandleCreateDeployment_ResourceBudgetExceeded(t *testing.T) {
 	t.Parallel()
 	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)

@@ -102,16 +102,10 @@ func ValidateTopology(design DeploymentDesign) error {
 		}
 	}
 	if appServerCount > 1 {
-		return fmt.Errorf(
-			"only one app-server node is supported (found %d) — scale with replicas on a single app-server instead of placing multiple nodes",
-			appServerCount,
-		)
+		return fmt.Errorf("%s", singletonMessage("app-server", appServerCount))
 	}
 	if workerCount > 1 {
-		return fmt.Errorf(
-			"only one worker node is supported (found %d) — scale with replicas on a single worker instead of placing multiple nodes",
-			workerCount,
-		)
+		return fmt.Errorf("%s", singletonMessage("worker", workerCount))
 	}
 
 	for _, cacheNode := range design.Nodes {
@@ -264,13 +258,13 @@ func ValidateTopology(design DeploymentDesign) error {
 			}
 		}
 		if !hasDBDep {
-			return fmt.Errorf(`worker %q must connect to a db node (add worker -> db edge)`, workerNode.Name)
+			return fmt.Errorf("%s", workerMissingDBMessage(workerNode.Name))
 		}
 		if !hasMQDep {
 			if hasInboundMQ {
-				return fmt.Errorf(`invalid worker/mq edge direction for worker %q: found mq -> worker; use worker -> mq`, workerNode.Name)
+				return fmt.Errorf("%s", workerWrongMQDirectionMessage(workerNode.Name))
 			}
-			return fmt.Errorf(`worker %q must connect to an mq node (add worker -> mq edge)`, workerNode.Name)
+			return fmt.Errorf("%s", workerMissingMQMessage(workerNode.Name))
 		}
 	}
 

@@ -232,21 +232,20 @@ func AssessTopology(design DeploymentDesign) TopologyAssessment {
 
 	if hasCache && !hasDB {
 		return TopologyAssessment{
-			Verdict: VerdictInvalid,
-			Explanation: "A cache node is present but no database — clarify whether Redis is your primary store or add a database; " +
-				"for now this topology is rejected",
+			Verdict:     VerdictInvalid,
+			Explanation: msgPresenceCacheWithoutDB,
 		}
 	}
 	if hasWorker && !hasMQ {
 		return TopologyAssessment{
 			Verdict:     VerdictInvalid,
-			Explanation: "Workers consume from message queues — add a message queue to the design",
+			Explanation: msgPresenceWorkerWithoutMQ,
 		}
 	}
 	if hasMQ && !hasWorker {
 		return TopologyAssessment{
 			Verdict:     VerdictInvalid,
-			Explanation: "Message queue has no consumer — add a worker node",
+			Explanation: msgPresenceMQWithoutWorker,
 		}
 	}
 
