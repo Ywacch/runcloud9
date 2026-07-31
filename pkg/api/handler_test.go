@@ -286,8 +286,9 @@ func TestHandleCreateDeployment_SimulationRecommended_PartialTopology(t *testing
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	// Chained LBs are valid but unsupported (simulation_recommended). Multi app-server
-	// nodes are rejected by ValidateTopology, so they can no longer drive this case.
+	// Chained LBs (lb→lb) are valid but unsupported → simulation_recommended.
+	// Each LB still needs a direct lb→app-server edge for ValidateRuntimeContract.
+	// Multi app-server nodes are rejected by ValidateTopology, so they cannot drive this case.
 	body := deployer.DeploymentDesign{
 		Template:  "url-shortener",
 		Archetype: "standard",
@@ -299,6 +300,7 @@ func TestHandleCreateDeployment_SimulationRecommended_PartialTopology(t *testing
 		},
 		Connections: []deployer.DeploymentConn{
 			{SourceID: "lb1", TargetID: "lb2"},
+			{SourceID: "lb1", TargetID: "app"},
 			{SourceID: "lb2", TargetID: "app"},
 			{SourceID: "app", TargetID: "db"},
 		},
