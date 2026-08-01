@@ -12,6 +12,8 @@ const (
 	CapStats    Capability = "stats"
 	CapKeys     Capability = "keys"
 	CapKeyValue Capability = "key_value"
+	CapQueues   Capability = "queues"
+	CapPeek     Capability = "peek"
 )
 
 type TableInfo struct {
@@ -65,6 +67,23 @@ type KeyValue struct {
 	TTL   int64  `json:"ttl"`
 }
 
+// QueueInfo is a whitelisted queue with live AMQP inspect stats.
+type QueueInfo struct {
+	Name      string `json:"name"`
+	Messages  int    `json:"messages"`
+	Consumers int    `json:"consumers"`
+	Available bool   `json:"available"`
+}
+
+// PeekResult is a non-destructive peek of the head message (requeued).
+type PeekResult struct {
+	Queue       string `json:"queue"`
+	Empty       bool   `json:"empty"`
+	Body        string `json:"body,omitempty"`
+	ContentType string `json:"contentType,omitempty"`
+	Requeued    bool   `json:"requeued"`
+}
+
 // Driver is the base interface all introspection drivers implement.
 type Driver interface {
 	Capabilities() []Capability
@@ -85,4 +104,11 @@ type CacheDriver interface {
 	Driver
 	ScanKeys(ctx context.Context, pattern string, cursor uint64, count int) ([]KeyInfo, uint64, error)
 	GetKeyValue(ctx context.Context, key string) (KeyValue, error)
+}
+
+// QueueDriver can list whitelisted queues and peek messages.
+type QueueDriver interface {
+	Driver
+	ListQueues(ctx context.Context, names []string) ([]QueueInfo, error)
+	PeekQueue(ctx context.Context, name string) (PeekResult, error)
 }

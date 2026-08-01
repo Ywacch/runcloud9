@@ -7,6 +7,7 @@ type ComponentSpec struct {
 	Engine      string   `json:"engine" yaml:"engine"`
 	Tables      []string `json:"tables,omitempty" yaml:"tables"`
 	KeyPatterns []string `json:"keyPatterns,omitempty" yaml:"keyPatterns"`
+	Queues      []string `json:"queues,omitempty" yaml:"queues"`
 }
 
 // Spec is the top-level introspection config from a template YAML.
@@ -20,6 +21,11 @@ func TableAllowed(table string, tables []string) bool {
 		}
 	}
 	return false
+}
+
+// QueueAllowed reports whether queue is in the whitelist.
+func QueueAllowed(queue string, queues []string) bool {
+	return TableAllowed(queue, queues)
 }
 
 // KeyMatchesPatterns returns true if key matches any glob pattern.

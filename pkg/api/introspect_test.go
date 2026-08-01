@@ -37,3 +37,29 @@ func TestIntrospectRejectsUnwhitelistedTable(t *testing.T) {
 		t.Fatal("expected error for unwhitelisted table")
 	}
 }
+
+func TestIntrospectRejectsUnwhitelistedQueue(t *testing.T) {
+	t.Parallel()
+	spec := introspect.ComponentSpec{
+		Engine: "rabbitmq",
+		Queues: []string{"fanout"},
+	}
+	err := validateIntrospectAction("peek", spec, "secret", httptest.NewRequest(http.MethodGet, "/", nil))
+	if err == nil {
+		t.Fatal("expected error for unwhitelisted queue")
+	}
+}
+
+func TestResolveIntrospectHost_RabbitMQ(t *testing.T) {
+	t.Parallel()
+	host, err := resolveIntrospectHost("rabbitmq", "mq", "ns1", nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if host != "mq.ns1.svc.cluster.local" {
+		t.Fatalf("host=%q", host)
+	}
+	if _, err := resolveIntrospectHost("rabbitmq", "cache", "ns1", nil); err == nil {
+		t.Fatal("expected error for non-mq component")
+	}
+}
