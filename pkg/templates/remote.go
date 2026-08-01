@@ -8,6 +8,8 @@ import (
 )
 
 // cloudTemplateRow matches PostgREST JSON for table cloud_templates (snake_case columns).
+// storytelling is jsonb matching StorytellingSpec (roles / edges / journeys / narrativeContext).
+// supportsWorker is derived from worker_image_key (same as embedded YAML).
 type cloudTemplateRow struct {
 	ID             string          `json:"id"`
 	Name           string          `json:"name"`
@@ -23,6 +25,7 @@ type cloudTemplateRow struct {
 	WorkerImageKey string          `json:"worker_image_key"`
 	Topology       json.RawMessage `json:"topology"`
 	Seed           json.RawMessage `json:"seed"`
+	Storytelling   json.RawMessage `json:"storytelling"`
 }
 
 type topologyJSONEntry struct {
@@ -81,18 +84,31 @@ func (row *cloudTemplateRow) toTemplateDef() (*templateDef, error) {
 			PodLabel:  s.PodLabel,
 		}
 	}
+	if len(row.Storytelling) > 0 && string(row.Storytelling) != "null" {
+		var story StorytellingSpec
+		if err := json.Unmarshal(row.Storytelling, &story); err != nil {
+			return nil, err
+		}
+		def.Storytelling = &story
+	}
 	return def, nil
 }
+
+// cloudTemplatesSelect is the PostgREST column list for premium template rows.
+const cloudTemplatesSelect = "id,name,description,components,bottleneck,available,premium,tags,simulatable,deployable,image_key,worker_image_key,topology,seed,storytelling"
 
 // FetchRemoteTemplates loads premium rows from Supabase cloud_templates.
 // On failure (network, missing table, parse error) it logs and returns an empty slice — no error —
 // so self-hosted and local runs without premium data keep working.
+//
+// Requires cloud_templates.storytelling (jsonb, nullable) for edge/role/journey parity with
+// embedded YAML. If the column is missing, the select fails and premium rows are skipped.
 func FetchRemoteTemplates(client *supabase.Client) ([]TemplateSpec, error) {
 	if client == nil {
 		return []TemplateSpec{}, nil
 	}
 	data, _, err := client.From("cloud_templates").
-		Select("id,name,description,components,bottleneck,available,premium,tags,simulatable,deployable,image_key,worker_image_key,topology,seed", "exact", false).
+		Select(cloudTemplatesSelect, "exact", false).
 		Eq("premium", "true").
 		Execute()
 	if err != nil {
