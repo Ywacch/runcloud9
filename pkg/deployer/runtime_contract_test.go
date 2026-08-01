@@ -168,7 +168,7 @@ func TestValidateRuntimeContract_Table(t *testing.T) {
 			design: DeploymentDesign{
 				Template: "url-shortener",
 				Nodes: []DeploymentNode{
-					{ID: "lb1", Type: "lb", Name: "LB", Config: map[string]interface{}{"lbAlgorithm": "random"}},
+					{ID: "lb1", Type: "lb", Name: "LB", Config: map[string]interface{}{"lbAlgorithm": "least_time"}},
 					{ID: "app1", Type: "app-server", Name: "App"},
 					{ID: "db1", Type: "db", Name: "PostgreSQL"},
 				},
@@ -178,6 +178,40 @@ func TestValidateRuntimeContract_Table(t *testing.T) {
 				},
 			},
 			wantErr: "lbAlgorithm must be",
+		},
+		{
+			name:       "random lb algorithm accepted",
+			templateID: "url-shortener",
+			design: DeploymentDesign{
+				Template: "url-shortener",
+				Nodes: []DeploymentNode{
+					{ID: "lb1", Type: "lb", Name: "LB", Config: map[string]interface{}{"lbAlgorithm": "random"}},
+					{ID: "app1", Type: "app-server", Name: "App"},
+					{ID: "db1", Type: "db", Name: "PostgreSQL"},
+				},
+				Connections: []DeploymentConn{
+					{SourceID: "lb1", TargetID: "app1"},
+					{SourceID: "app1", TargetID: "db1"},
+				},
+			},
+			wantErr: "",
+		},
+		{
+			name:       "legacy ip_hash accepted after normalize to round-robin",
+			templateID: "url-shortener",
+			design: DeploymentDesign{
+				Template: "url-shortener",
+				Nodes: []DeploymentNode{
+					{ID: "lb1", Type: "lb", Name: "LB", Config: map[string]interface{}{"lbAlgorithm": "ip_hash"}},
+					{ID: "app1", Type: "app-server", Name: "App"},
+					{ID: "db1", Type: "db", Name: "PostgreSQL"},
+				},
+				Connections: []DeploymentConn{
+					{SourceID: "lb1", TargetID: "app1"},
+					{SourceID: "app1", TargetID: "db1"},
+				},
+			},
+			wantErr: "",
 		},
 	}
 

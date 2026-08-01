@@ -57,7 +57,7 @@ func TestLBSpec_nginxConfig(t *testing.T) {
 	if !strings.Contains(rr, "location /nginx_status") || !strings.Contains(rr, "stub_status") {
 		t.Fatalf("round-robin config missing stub_status: %s", rr)
 	}
-	if strings.Contains(rr, "least_conn") || strings.Contains(rr, "ip_hash") {
+	if strings.Contains(rr, "least_conn") || strings.Contains(rr, "random") || strings.Contains(rr, "ip_hash") {
 		t.Fatalf("unexpected alg directives in round-robin: %s", rr)
 	}
 
@@ -66,9 +66,15 @@ func TestLBSpec_nginxConfig(t *testing.T) {
 		t.Fatalf("least_conn: %s", lc)
 	}
 
-	iph := spec.nginxConfig(backends, "ip_hash")
-	if !strings.Contains(iph, "ip_hash") {
-		t.Fatalf("ip_hash: %s", iph)
+	rnd := spec.nginxConfig(backends, "random")
+	if !strings.Contains(rnd, "random;") {
+		t.Fatalf("random: %s", rnd)
+	}
+
+	// Legacy ip_hash normalizes to round-robin (no sticky directive).
+	legacy := spec.nginxConfig(backends, "ip_hash")
+	if strings.Contains(legacy, "ip_hash") || strings.Contains(legacy, "random;") || strings.Contains(legacy, "least_conn") {
+		t.Fatalf("ip_hash should normalize to round-robin: %s", legacy)
 	}
 
 	multi := spec.nginxConfig([]string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}, "least_conn")

@@ -60,20 +60,15 @@ func validateWorkerReplicas(design DeploymentDesign, _ *templates.TemplateSpec) 
 }
 
 func validateLBAlgorithm(design DeploymentDesign, _ *templates.TemplateSpec) error {
-	allowed := map[string]struct{}{
-		"round-robin": {},
-		"least_conn":  {},
-		"ip_hash":     {},
-	}
 	for _, node := range design.Nodes {
 		if node.Type != "lb" {
 			continue
 		}
-		algo := configString(node.Config, "lbAlgorithm", "round-robin")
-		if _, ok := allowed[algo]; !ok {
+		algo := normalizeLBAlgorithm(configString(node.Config, "lbAlgorithm", lbAlgoRoundRobin))
+		if !isLiveLBAlgorithm(algo) {
 			return fmt.Errorf(
-				"load balancer %q lbAlgorithm must be round-robin, least_conn, or ip_hash (got %q)",
-				node.Name, algo,
+				"load balancer %q lbAlgorithm must be %s (got %q)",
+				node.Name, liveLBAlgorithmList(), algo,
 			)
 		}
 	}

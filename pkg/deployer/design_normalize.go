@@ -45,6 +45,11 @@ func normalizeNodeConfig(n *DeploymentNode) {
 		}
 		delete(n.Config, "algorithm")
 	}
+	if raw := configString(n.Config, "lbAlgorithm", ""); raw != "" {
+		n.Config["lbAlgorithm"] = normalizeLBAlgorithm(raw)
+	} else {
+		n.Config["lbAlgorithm"] = lbAlgoRoundRobin
+	}
 }
 
 // normalizeCacheStrategyKeys keeps strategy and cacheStrategy identical.
