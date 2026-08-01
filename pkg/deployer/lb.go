@@ -86,10 +86,10 @@ func ReconcileLBUpstream(ctx context.Context, clientset kubernetes.Interface, na
 		return fmt.Errorf("app-server endpoints unavailable: nginx would use service fallback")
 	}
 
-	algo := configString(lbNode.Config, "lbAlgorithm", "round-robin")
+	algo := normalizeLBAlgorithm(configString(lbNode.Config, "lbAlgorithm", lbAlgoRoundRobin))
 	if cm, err := clientset.CoreV1().ConfigMaps(namespace).Get(ctx, lbConfigMapName, metav1.GetOptions{}); err == nil {
 		if v := cm.Annotations["cloud9.io/lb-algorithm"]; v != "" {
-			algo = v
+			algo = normalizeLBAlgorithm(v)
 		}
 	}
 
@@ -166,7 +166,7 @@ func isUpstreamServiceFallback(hosts []string, endpoints []LBEndpointSnapshot) b
 func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources corev1.ResourceRequirements, replicas int32) error {
 	spec := DefaultLBSpec()
 	spec.Resources = resources
-	algo := configString(cfg.Node.Config, "lbAlgorithm", "round-robin")
+	algo := normalizeLBAlgorithm(configString(cfg.Node.Config, "lbAlgorithm", lbAlgoRoundRobin))
 	logicalBackends := lbBackends(cfg.Node, cfg.Design)
 	if len(logicalBackends) == 0 {
 		return fmt.Errorf("lb has no app-server backends: add edges from lb to app-server")
@@ -271,14 +271,15 @@ func (k *K8sDeployer) reloadLBDeployment(ctx context.Context, namespace string) 
 }
 
 // nginxConfig builds a minimal nginx.conf with an upstream and reverse proxy to app backends.
-// algorithm: round-robin (default), least_conn, ip_hash — the latter two are valid only inside upstream {}.
+// algorithm: round-robin (default), least_conn, random — directives other than the default
+// must appear inside upstream {}.
 func (s LBSpec) nginxConfig(backends []string, algorithm string) string {
 	var upstreamExtra string
-	switch algorithm {
-	case "least_conn":
+	switch normalizeLBAlgorithm(algorithm) {
+	case lbAlgoLeastConn:
 		upstreamExtra = "        least_conn;\n"
-	case "ip_hash":
-		upstreamExtra = "        ip_hash;\n"
+	case lbAlgoRandom:
+		upstreamExtra = "        random;\n"
 	default:
 		upstreamExtra = ""
 	}

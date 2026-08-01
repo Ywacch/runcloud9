@@ -41,7 +41,7 @@ func TestNormalizeDesign(t *testing.T) {
 						Type: "load_balancer",
 						Name: "LB",
 						Config: map[string]interface{}{
-							"algorithm":   "ip_hash",
+							"algorithm":   "least_conn",
 							"lbAlgorithm": "round-robin",
 						},
 					},
@@ -49,6 +49,38 @@ func TestNormalizeDesign(t *testing.T) {
 			},
 			wantType: "lb",
 			wantAlgo: "round-robin",
+			hasAlgo:  true,
+		},
+		{
+			name: "legacy ip_hash normalizes to round-robin",
+			in: DeploymentDesign{
+				Nodes: []DeploymentNode{
+					{
+						ID:   "1",
+						Type: "load_balancer",
+						Name: "LB",
+						Config: map[string]interface{}{"lbAlgorithm": "ip_hash"},
+					},
+				},
+			},
+			wantType: "lb",
+			wantAlgo: "round-robin",
+			hasAlgo:  true,
+		},
+		{
+			name: "random kept",
+			in: DeploymentDesign{
+				Nodes: []DeploymentNode{
+					{
+						ID:   "1",
+						Type: "lb",
+						Name: "LB",
+						Config: map[string]interface{}{"algorithm": "random"},
+					},
+				},
+			},
+			wantType: "lb",
+			wantAlgo: "random",
 			hasAlgo:  true,
 		},
 	}
