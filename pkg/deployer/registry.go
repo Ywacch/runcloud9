@@ -70,7 +70,7 @@ var componentRegistry = map[string]ComponentSpec{
 	},
 	"mq": {
 		AppLabel:    "rabbitmq",
-		Image:       "rabbitmq:3",
+		Image:       "rabbitmq:3-alpine",
 		Ports:       []int32{5672, 15692},
 		ServiceName: "mq",
 		ServicePort: 5672,

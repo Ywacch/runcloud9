@@ -180,6 +180,9 @@ introspection:
   cache:
     engine: redis
     keyPatterns: ["product:*", "cart:*", "catalog", "product-pool"]
+  mq:
+    engine: rabbitmq
+    queues: [orders]
 
 storytelling:
   # Catalog and checkout use direct Redis (cache-aside). Proxy cache strategies are not deployable here (appDatabaseMode: always).

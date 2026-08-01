@@ -64,24 +64,9 @@ func (h *Handler) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var host string
-	switch introSpec.Engine {
-	case "postgres":
-		svcHost, _, err := resolveProxyTarget(component, row.Design)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		host = fmt.Sprintf("%s.%s.svc.cluster.local", svcHost, namespace)
-	case "redis":
-		if component != "cache" {
-			writeError(w, http.StatusBadRequest, "redis introspection only supports cache component")
-			return
-		}
-		svcHost := resolveIntrospectRedisHost(row.Design)
-		host = fmt.Sprintf("%s.%s.svc.cluster.local", svcHost, namespace)
-	default:
-		writeError(w, http.StatusBadRequest, "unsupported engine")
+	host, err := resolveIntrospectHost(introSpec.Engine, component, namespace, row.Design)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -93,8 +78,35 @@ func (h *Handler) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 		h.handlePostgresIntrospect(ctx, w, host, action, param, introSpec, r)
 	case "redis":
 		h.handleRedisIntrospect(ctx, w, host, action, param, introSpec, r)
+	case "rabbitmq":
+		h.handleRabbitMQIntrospect(ctx, w, host, action, param, introSpec)
 	default:
 		writeError(w, http.StatusBadRequest, "unsupported engine")
+	}
+}
+
+// resolveIntrospectHost maps engine + component to an in-cluster DNS host.
+func resolveIntrospectHost(engine, component, namespace string, design map[string]any) (string, error) {
+	switch engine {
+	case "postgres":
+		svcHost, _, err := resolveProxyTarget(component, design)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s.%s.svc.cluster.local", svcHost, namespace), nil
+	case "redis":
+		if component != "cache" {
+			return "", fmt.Errorf("redis introspection only supports cache component")
+		}
+		svcHost := resolveIntrospectRedisHost(design)
+		return fmt.Sprintf("%s.%s.svc.cluster.local", svcHost, namespace), nil
+	case "rabbitmq":
+		if component != "mq" {
+			return "", fmt.Errorf("rabbitmq introspection only supports mq component")
+		}
+		return fmt.Sprintf("mq.%s.svc.cluster.local", namespace), nil
+	default:
+		return "", fmt.Errorf("unsupported engine")
 	}
 }
 
@@ -139,6 +151,17 @@ func validateIntrospectAction(action string, spec introspect.ComponentSpec, para
 		if !introspect.PatternAllowed(pattern, spec.KeyPatterns) {
 			return fmt.Errorf("pattern %q is not allowed", pattern)
 		}
+	case "peek":
+		if param == "" {
+			return fmt.Errorf("queue name required")
+		}
+		if !introspect.QueueAllowed(param, spec.Queues) {
+			return fmt.Errorf("queue %q is not allowed", param)
+		}
+	case "queues", "capabilities":
+		// ok
+	default:
+		// Unknown actions are rejected later by the engine handler.
 	}
 	return nil
 }
@@ -241,6 +264,36 @@ func (h *Handler) handleRedisIntrospect(ctx context.Context, w http.ResponseWrit
 		writeIntrospectJSON(w, kv)
 	default:
 		writeError(w, http.StatusNotFound, "unknown redis action")
+	}
+}
+
+func (h *Handler) handleRabbitMQIntrospect(ctx context.Context, w http.ResponseWriter, host, action, queue string, spec introspect.ComponentSpec) {
+	driver, err := introspect.NewRabbitMQDriver(ctx, host)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("rabbitmq connect failed: %v", err))
+		return
+	}
+	defer driver.Close()
+
+	switch action {
+	case "capabilities":
+		writeIntrospectJSON(w, map[string]any{"capabilities": driver.Capabilities()})
+	case "queues":
+		queues, err := driver.ListQueues(ctx, spec.Queues)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeIntrospectJSON(w, queues)
+	case "peek":
+		peek, err := driver.PeekQueue(ctx, queue)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeIntrospectJSON(w, peek)
+	default:
+		writeError(w, http.StatusNotFound, "unknown rabbitmq action")
 	}
 }
 
