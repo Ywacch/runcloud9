@@ -649,6 +649,78 @@ func TestValidateTopology_MultipleWorkers(t *testing.T) {
 	}
 }
 
+func TestValidateTopology_MultipleCaches(t *testing.T) {
+	t.Parallel()
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "a1", Type: "app-server", Name: "App"},
+			{ID: "c1", Type: "cache", Name: "Cache 1"},
+			{ID: "c2", Type: "cache", Name: "Cache 2"},
+			{ID: "d1", Type: "db", Name: "DB"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "a1", TargetID: "d1"},
+			{SourceID: "a1", TargetID: "c1"},
+			{SourceID: "a1", TargetID: "c2"},
+		},
+	}
+	err := ValidateTopology(design)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	if want := "only one cache"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("expected error to contain %q, got %q", want, err.Error())
+	}
+}
+
+func TestValidateTopology_MultipleDBs(t *testing.T) {
+	t.Parallel()
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "a1", Type: "app-server", Name: "App"},
+			{ID: "d1", Type: "db", Name: "DB1"},
+			{ID: "d2", Type: "db", Name: "DB2"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "a1", TargetID: "d1"},
+			{SourceID: "a1", TargetID: "d2"},
+		},
+	}
+	err := ValidateTopology(design)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	if want := "only one db"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("expected error to contain %q, got %q", want, err.Error())
+	}
+}
+
+func TestValidateTopology_MultipleMQs(t *testing.T) {
+	t.Parallel()
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "a1", Type: "app-server", Name: "App"},
+			{ID: "d1", Type: "db", Name: "DB"},
+			{ID: "mq1", Type: "mq", Name: "MQ1"},
+			{ID: "mq2", Type: "mq", Name: "MQ2"},
+			{ID: "w1", Type: "worker", Name: "Worker"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "a1", TargetID: "d1"},
+			{SourceID: "a1", TargetID: "mq1"},
+			{SourceID: "w1", TargetID: "d1"},
+			{SourceID: "w1", TargetID: "mq1"},
+		},
+	}
+	err := ValidateTopology(design)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	if want := "only one mq"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("expected error to contain %q, got %q", want, err.Error())
+	}
+}
+
 func TestValidateTopology_MQWithoutWorker(t *testing.T) {
 	design := DeploymentDesign{
 		Nodes: []DeploymentNode{
