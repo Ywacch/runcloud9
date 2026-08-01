@@ -567,10 +567,10 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 			env["WRITE_BEHIND_INTERVAL"] = normalizeWriteBehindIntervalSeconds(node.Config)
 		}
 	case "worker":
-		if prefetch := configString(node.Config, "workerPrefetch", ""); prefetch != "" {
+		if prefetch, ok := positiveIntConfig(node.Config, "workerPrefetch"); ok {
 			env["WORKER_PREFETCH"] = prefetch
 		}
-		if concurrency := configString(node.Config, "workerConcurrency", ""); concurrency != "" {
+		if concurrency, ok := positiveIntConfig(node.Config, "workerConcurrency"); ok {
 			env["WORKER_CONCURRENCY"] = concurrency
 		}
 	}
@@ -608,4 +608,17 @@ func configString(config map[string]any, key, defaultVal string) string {
 	default:
 		return defaultVal
 	}
+}
+
+// positiveIntConfig returns a decimal string when config[key] parses as an integer > 0.
+func positiveIntConfig(config map[string]any, key string) (string, bool) {
+	raw := configString(config, key, "")
+	if raw == "" {
+		return "", false
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return "", false
+	}
+	return strconv.Itoa(n), true
 }

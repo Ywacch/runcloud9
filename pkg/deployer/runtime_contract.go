@@ -9,6 +9,9 @@ import (
 const (
 	minAppServerReplicas = 1
 	maxAppServerReplicas = 3
+	// Workers share the same horizontal scale ceiling as app-servers.
+	minWorkerReplicas = minAppServerReplicas
+	maxWorkerReplicas = maxAppServerReplicas
 )
 
 // ValidateRuntimeContract checks deploy-time runtime preconditions before orchestration starts.
@@ -18,6 +21,7 @@ func ValidateRuntimeContract(design DeploymentDesign, tmpl *templates.TemplateSp
 		validateLBBackends,
 		validateLBAlgorithm,
 		validateAppServerReplicas,
+		validateWorkerReplicas,
 		validateProxyQueries,
 		validateAppServerEnv,
 		validateWorkerEnv,
@@ -38,6 +42,18 @@ func validateAppServerReplicas(design DeploymentDesign, _ *templates.TemplateSpe
 		}
 		if _, err := replicaCountFromConfig(node.Config, 1, minAppServerReplicas, maxAppServerReplicas); err != nil {
 			return fmt.Errorf("app server %q: %w", node.Name, err)
+		}
+	}
+	return nil
+}
+
+func validateWorkerReplicas(design DeploymentDesign, _ *templates.TemplateSpec) error {
+	for _, node := range design.Nodes {
+		if node.Type != "worker" {
+			continue
+		}
+		if _, err := replicaCountFromConfig(node.Config, 1, minWorkerReplicas, maxWorkerReplicas); err != nil {
+			return fmt.Errorf("worker %q: %w", node.Name, err)
 		}
 	}
 	return nil

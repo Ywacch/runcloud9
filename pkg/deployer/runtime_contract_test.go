@@ -144,6 +144,25 @@ func TestValidateRuntimeContract_Table(t *testing.T) {
 			wantErr: "replicas must be between",
 		},
 		{
+			name:       "worker replicas capped at 3",
+			templateID: "social-feed",
+			design: DeploymentDesign{
+				Template: "social-feed",
+				Nodes: []DeploymentNode{
+					{ID: "w1", Type: "worker", Name: "Worker", Config: map[string]interface{}{"replicas": 4}},
+					{ID: "mq1", Type: "mq", Name: "MQ"},
+					{ID: "db1", Type: "db", Name: "PostgreSQL"},
+					{ID: "c1", Type: "cache", Name: "Cache"},
+				},
+				Connections: []DeploymentConn{
+					{SourceID: "w1", TargetID: "mq1"},
+					{SourceID: "w1", TargetID: "db1"},
+					{SourceID: "w1", TargetID: "c1"},
+				},
+			},
+			wantErr: "replicas must be between",
+		},
+		{
 			name:       "invalid lb algorithm rejected",
 			templateID: "url-shortener",
 			design: DeploymentDesign{

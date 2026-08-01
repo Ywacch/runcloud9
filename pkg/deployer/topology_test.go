@@ -833,6 +833,58 @@ func TestDeriveEnvVars_WorkerTuningKnobs(t *testing.T) {
 	}
 }
 
+func TestDeriveEnvVars_WorkerTuningKnobsRejectNonPositive(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		config map[string]any
+		want   map[string]string
+	}{
+		{
+			name:   "zero and negative omitted",
+			config: map[string]any{"workerPrefetch": 0, "workerConcurrency": -1},
+			want:   map[string]string{},
+		},
+		{
+			name:   "non-integer omitted",
+			config: map[string]any{"workerPrefetch": "many", "workerConcurrency": "x"},
+			want:   map[string]string{},
+		},
+		{
+			name:   "string digits accepted",
+			config: map[string]any{"workerPrefetch": "10", "workerConcurrency": "2"},
+			want:   map[string]string{"WORKER_PREFETCH": "10", "WORKER_CONCURRENCY": "2"},
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			design := DeploymentDesign{
+				Nodes: []DeploymentNode{{
+					ID: "w", Type: "worker", Name: "Worker", Config: tc.config,
+				}},
+			}
+			env := DeriveEnvVars(design.Nodes[0], design)
+			for key, want := range tc.want {
+				if env[key] != want {
+					t.Fatalf("%s: want %q, got %q", key, want, env[key])
+				}
+			}
+			if _, ok := tc.want["WORKER_PREFETCH"]; !ok {
+				if _, present := env["WORKER_PREFETCH"]; present {
+					t.Fatalf("WORKER_PREFETCH should be omitted, got %q", env["WORKER_PREFETCH"])
+				}
+			}
+			if _, ok := tc.want["WORKER_CONCURRENCY"]; !ok {
+				if _, present := env["WORKER_CONCURRENCY"]; present {
+					t.Fatalf("WORKER_CONCURRENCY should be omitted, got %q", env["WORKER_CONCURRENCY"])
+				}
+			}
+		})
+	}
+}
+
 func TestDisplayCacheStrategyForApp_NoCacheEdge(t *testing.T) {
 	design := DeploymentDesign{
 		Nodes: []DeploymentNode{
