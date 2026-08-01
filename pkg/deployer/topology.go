@@ -91,21 +91,11 @@ func firstNonProxyCacheFromApp(appServerID string, design DeploymentDesign, node
 // of the chosen caching strategy.
 func ValidateTopology(design DeploymentDesign) error {
 	nodeMap := make(map[string]DeploymentNode, len(design.Nodes))
-	var appServerCount, workerCount int
 	for _, n := range design.Nodes {
 		nodeMap[n.ID] = n
-		switch n.Type {
-		case "app-server":
-			appServerCount++
-		case "worker":
-			workerCount++
-		}
 	}
-	if appServerCount > 1 {
-		return fmt.Errorf("%s", singletonMessage("app-server", appServerCount))
-	}
-	if workerCount > 1 {
-		return fmt.Errorf("%s", singletonMessage("worker", workerCount))
+	if err := validatePlatformSingletons(design); err != nil {
+		return err
 	}
 
 	for _, cacheNode := range design.Nodes {

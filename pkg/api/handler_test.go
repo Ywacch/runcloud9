@@ -138,10 +138,25 @@ func TestHandleGetTopologyRules(t *testing.T) {
 	if len(resp.Connections) != 36 {
 		t.Fatalf("connections: want 36, got %d", len(resp.Connections))
 	}
-	if len(resp.Singletons) != 2 {
+	if len(resp.Singletons) != 5 {
 		t.Fatalf("singletons: %+v", resp.Singletons)
 	}
 	foundWorkerReq := false
+	foundCacheSingleton := false
+	for _, s := range resp.Singletons {
+		if s.NodeType == "cache" {
+			foundCacheSingleton = true
+			if s.ScaleWithReplicas {
+				t.Fatal("cache must not scaleWithReplicas")
+			}
+		}
+		if s.NodeType == "app-server" && !s.ScaleWithReplicas {
+			t.Fatal("app-server must scaleWithReplicas")
+		}
+	}
+	if !foundCacheSingleton {
+		t.Fatal("expected cache singleton in topology-rules")
+	}
 	for _, r := range resp.RequiredOutbound {
 		if r.NodeType == "worker" {
 			foundWorkerReq = true
