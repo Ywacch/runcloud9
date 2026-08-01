@@ -200,6 +200,12 @@ func replicasForBudget(node DeploymentNode) int32 {
 			return 1
 		}
 		return n
+	case "worker":
+		n, err := replicaCountFromConfig(node.Config, 1, minWorkerReplicas, maxWorkerReplicas)
+		if err != nil {
+			return 1
+		}
+		return n
 	default:
 		return parseReplicaCount(node.Config, 1)
 	}

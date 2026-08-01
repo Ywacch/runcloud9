@@ -101,7 +101,7 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 	// We set them equal here so Autopilot doesn't reject the pod.
 	resources := ResolveNodeResources(cfg.Node.Type, cfg.Node.Config)
 
-	// replicas can be tuned per node type (app-server bounds enforced in ValidateRuntimeContract).
+	// replicas can be tuned per node type (app-server / worker bounds in ValidateRuntimeContract).
 	replicas := parseReplicaCount(cfg.Node.Config, 1)
 
 	switch cfg.Node.Type {
