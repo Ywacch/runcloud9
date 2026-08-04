@@ -46,8 +46,11 @@ func TestNewTopologyRulesResponse_Completeness(t *testing.T) {
 		t.Fatalf("lb -> app-server should be valid+supported, got %+v", lbApp)
 	}
 
-	if len(resp.Presence) != 3 {
-		t.Fatalf("presence: want 3, got %d", len(resp.Presence))
+	if len(resp.Presence) != 4 {
+		t.Fatalf("presence: want 4, got %d", len(resp.Presence))
+	}
+	if resp.Presence[0].ID != "missing_app_server" {
+		t.Fatalf("presence[0]: want missing_app_server, got %q", resp.Presence[0].ID)
 	}
 	if len(resp.Singletons) != len(platformSingletons) {
 		t.Fatalf("singletons: want %d, got %d", len(platformSingletons), len(resp.Singletons))

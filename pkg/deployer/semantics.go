@@ -216,9 +216,11 @@ func AssessTopology(design DeploymentDesign) TopologyAssessment {
 		}
 	}
 
-	var hasCache, hasDB, hasMQ, hasWorker bool
+	var hasApp, hasCache, hasDB, hasMQ, hasWorker bool
 	for _, n := range design.Nodes {
 		switch n.Type {
+		case "app-server":
+			hasApp = true
 		case "cache":
 			hasCache = true
 		case "db":
@@ -230,6 +232,12 @@ func AssessTopology(design DeploymentDesign) TopologyAssessment {
 		}
 	}
 
+	if !hasApp {
+		return TopologyAssessment{
+			Verdict:     VerdictInvalid,
+			Explanation: msgPresenceMissingAppServer,
+		}
+	}
 	if hasCache && !hasDB {
 		return TopologyAssessment{
 			Verdict:     VerdictInvalid,

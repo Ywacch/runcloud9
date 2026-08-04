@@ -120,6 +120,34 @@ func TestAssessTopology_InvalidWorkerToLb(t *testing.T) {
 	}
 }
 
+func TestAssessTopology_MissingAppServer(t *testing.T) {
+	d := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "db", Type: "db", Name: "db"},
+		},
+	}
+	a := AssessTopology(d)
+	if a.Verdict != VerdictInvalid || !strings.Contains(a.Explanation, "App Server") {
+		t.Fatalf("got verdict=%q explanation=%q", a.Verdict, a.Explanation)
+	}
+}
+
+func TestAssessTopology_CacheAndDbWithoutApp(t *testing.T) {
+	d := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "cache", Type: "cache", Name: "cache"},
+			{ID: "db", Type: "db", Name: "db"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "cache", TargetID: "db"},
+		},
+	}
+	a := AssessTopology(d)
+	if a.Verdict != VerdictInvalid || !strings.Contains(a.Explanation, "App Server") {
+		t.Fatalf("got verdict=%q explanation=%q", a.Verdict, a.Explanation)
+	}
+}
+
 func TestAssessTopology_AmbiguityCacheWithoutDb(t *testing.T) {
 	d := DeploymentDesign{
 		Nodes: []DeploymentNode{
@@ -235,24 +263,30 @@ func TestAssessTopology_AppServerToAppServerNotWired(t *testing.T) {
 	}
 }
 
-func TestAssessTopology_LbToLbSimulateOnly(t *testing.T) {
+func TestAssessTopology_LbToLbPartialWithApp(t *testing.T) {
+	// lb→lb is simulate-only; an app-server is still required for a valid live design.
 	d := DeploymentDesign{
 		Nodes: []DeploymentNode{
 			{ID: "lb1", Type: "lb", Name: "lb1"},
 			{ID: "lb2", Type: "lb", Name: "lb2"},
+			{ID: "app", Type: "app-server", Name: "app"},
 		},
 		Connections: []DeploymentConn{
 			{SourceID: "lb1", TargetID: "lb2"},
+			{SourceID: "lb2", TargetID: "app"},
 		},
 	}
 	a := AssessTopology(d)
-	if a.Verdict != VerdictSimulate {
+	if a.Verdict != VerdictPartial {
 		t.Fatalf("got verdict=%q explanation=%q", a.Verdict, a.Explanation)
 	}
 	if !strings.Contains(a.Explanation, "Chained load balancers") {
 		t.Fatalf("explanation: %q", a.Explanation)
 	}
-	if len(a.Deployable) != 0 || len(a.Simulatable) != 2 {
-		t.Fatalf("deployable=%d simulatable=%d", len(a.Deployable), len(a.Simulatable))
+	if len(a.Deployable) != 1 || a.Deployable[0].Type != "app-server" {
+		t.Fatalf("deployable: %+v", a.Deployable)
+	}
+	if len(a.Simulatable) != 2 {
+		t.Fatalf("simulatable: %+v", a.Simulatable)
 	}
 }

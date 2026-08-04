@@ -25,6 +25,9 @@ const (
 	msgSingletonMQ =
 		"only one mq node is supported (found {count}) — remove extra message queue nodes; the platform provisions a single queue service"
 
+	msgPresenceMissingAppServer =
+		"Add an App Server — live sessions need something to receive traffic. " +
+			"A database alone cannot run the workload"
 	msgPresenceCacheWithoutDB =
 		"A cache node is present but no database — clarify whether Redis is your primary store or add a database; " +
 			"for now this topology is rejected"
@@ -137,6 +140,7 @@ func NewTopologyRulesResponse() TopologyRulesResponse {
 		ComponentTypes: types,
 		Connections:    conns,
 		Presence: []PresenceRule{
+			{ID: "missing_app_server", Message: msgPresenceMissingAppServer},
 			{ID: "cache_without_db", Message: msgPresenceCacheWithoutDB},
 			{ID: "worker_without_mq", Message: msgPresenceWorkerWithoutMQ},
 			{ID: "mq_without_worker", Message: msgPresenceMQWithoutWorker},
