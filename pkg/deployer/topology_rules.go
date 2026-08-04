@@ -26,8 +26,7 @@ const (
 		"only one mq node is supported (found {count}) — remove extra message queue nodes; the platform provisions a single queue service"
 
 	msgPresenceMissingAppServer =
-		"Add an App Server — live sessions need something to receive traffic. " +
-			"A database alone cannot run the workload"
+		"Add an App Server — live sessions need something to receive traffic"
 	msgPresenceCacheWithoutDB =
 		"A cache node is present but no database — clarify whether Redis is your primary store or add a database; " +
 			"for now this topology is rejected"
