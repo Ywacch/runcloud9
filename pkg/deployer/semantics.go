@@ -216,7 +216,7 @@ func AssessTopology(design DeploymentDesign) TopologyAssessment {
 		}
 	}
 
-	var hasApp, hasCache, hasDB, hasMQ, hasWorker bool
+	var hasApp, hasCache, hasDB, hasMQ, hasWorker, hasLB bool
 	for _, n := range design.Nodes {
 		switch n.Type {
 		case "app-server":
@@ -229,10 +229,14 @@ func AssessTopology(design DeploymentDesign) TopologyAssessment {
 			hasMQ = true
 		case "worker":
 			hasWorker = true
+		case "lb":
+			hasLB = true
 		}
 	}
 
-	if !hasApp {
+	hasAnyComponent := hasApp || hasCache || hasDB || hasMQ || hasWorker || hasLB
+	// Empty canvas is fine — do not nag before the student places anything.
+	if hasAnyComponent && !hasApp {
 		return TopologyAssessment{
 			Verdict:     VerdictInvalid,
 			Explanation: msgPresenceMissingAppServer,

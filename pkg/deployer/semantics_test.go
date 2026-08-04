@@ -120,6 +120,13 @@ func TestAssessTopology_InvalidWorkerToLb(t *testing.T) {
 	}
 }
 
+func TestAssessTopology_EmptyDesignOk(t *testing.T) {
+	a := AssessTopology(DeploymentDesign{})
+	if a.Verdict != VerdictFull {
+		t.Fatalf("got verdict=%q explanation=%q", a.Verdict, a.Explanation)
+	}
+}
+
 func TestAssessTopology_MissingAppServer(t *testing.T) {
 	d := DeploymentDesign{
 		Nodes: []DeploymentNode{
