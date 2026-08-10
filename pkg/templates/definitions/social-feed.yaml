@@ -21,6 +21,9 @@ workerImageKey: fanout-worker
 appDatabaseMode: always
 workerTimelineStore: redis
 prometheusMetrics:
+  # Metric key convention (neutral, OSS-facing):
+  #   <group>.<op>_rate   — throughput (req/s)
+  #   <group>.<op>_p50|p95|p99 — latency quantiles (seconds from PromQL)
   queries:
     - key: posts.total_sync
       expr: sum(social_post_total{<<ns>>,mode="sync"})
@@ -32,10 +35,18 @@ prometheusMetrics:
       expr: sum(rate(social_feed_request_total{<<ns>>,mode=~"push.*"}[30s]))
     - key: feed.push_total
       expr: sum(social_feed_request_total{<<ns>>,mode=~"push.*"})
+    - key: feed.pull_p50
+      expr: histogram_quantile(0.50, sum(rate(social_feed_latency_seconds_bucket{<<ns>>,mode="pull"}[30s])) by (le))
     - key: feed.pull_p95
       expr: histogram_quantile(0.95, sum(rate(social_feed_latency_seconds_bucket{<<ns>>,mode="pull"}[30s])) by (le))
+    - key: feed.pull_p99
+      expr: histogram_quantile(0.99, sum(rate(social_feed_latency_seconds_bucket{<<ns>>,mode="pull"}[30s])) by (le))
+    - key: feed.push_p50
+      expr: histogram_quantile(0.50, sum(rate(social_feed_latency_seconds_bucket{<<ns>>,mode=~"push.*"}[30s])) by (le))
     - key: feed.push_p95
       expr: histogram_quantile(0.95, sum(rate(social_feed_latency_seconds_bucket{<<ns>>,mode=~"push.*"}[30s])) by (le))
+    - key: feed.push_p99
+      expr: histogram_quantile(0.99, sum(rate(social_feed_latency_seconds_bucket{<<ns>>,mode=~"push.*"}[30s])) by (le))
     - key: worker.processed
       expr: sum(social_worker_processed_total{<<ns>>})
     - key: worker.errors

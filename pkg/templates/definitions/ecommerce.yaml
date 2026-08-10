@@ -20,15 +20,26 @@ imageKey: ecommerce
 workerImageKey: ecommerce-worker
 appDatabaseMode: always
 prometheusMetrics:
+  # Metric key convention (neutral, OSS-facing):
+  #   <group>.<op>_rate   — throughput (req/s)
+  #   <group>.<op>_p50|p95|p99 — latency quantiles (seconds from PromQL)
   queries:
     - key: checkout.sync_total
       expr: sum(ecommerce_checkout_total{<<ns>>,mode="sync"})
     - key: checkout.async_total
       expr: sum(ecommerce_checkout_total{<<ns>>,mode="async"})
+    - key: checkout.sync_p50
+      expr: histogram_quantile(0.50, sum(rate(ecommerce_checkout_duration_seconds_bucket{<<ns>>,mode="sync"}[30s])) by (le))
     - key: checkout.sync_p95
       expr: histogram_quantile(0.95, sum(rate(ecommerce_checkout_duration_seconds_bucket{<<ns>>,mode="sync"}[30s])) by (le))
+    - key: checkout.sync_p99
+      expr: histogram_quantile(0.99, sum(rate(ecommerce_checkout_duration_seconds_bucket{<<ns>>,mode="sync"}[30s])) by (le))
+    - key: checkout.async_p50
+      expr: histogram_quantile(0.50, sum(rate(ecommerce_checkout_duration_seconds_bucket{<<ns>>,mode="async"}[30s])) by (le))
     - key: checkout.async_p95
       expr: histogram_quantile(0.95, sum(rate(ecommerce_checkout_duration_seconds_bucket{<<ns>>,mode="async"}[30s])) by (le))
+    - key: checkout.async_p99
+      expr: histogram_quantile(0.99, sum(rate(ecommerce_checkout_duration_seconds_bucket{<<ns>>,mode="async"}[30s])) by (le))
     - key: checkout.inventory_conflicts
       expr: sum(ecommerce_inventory_conflicts_total{<<ns>>})
     - key: mq.publish_total
