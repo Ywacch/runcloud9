@@ -11,7 +11,7 @@ jobs:
       contents: read
       id-token: write
     env:
-      PROJECT_ID: runcloud9
+      PROJECT_ID: runcloud9-505411
       CLUSTER_NAME: cloud9
       CLUSTER_REGION: us-central1
       GAR_HOST: us-central1-docker.pkg.dev
