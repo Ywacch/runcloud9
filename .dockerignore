@@ -1,0 +1,15 @@
+.git
+**/.venv
+**/venv
+scripts/seed/.venv
+scripts/seed/env
+infra
+.terraform
+*.tfstate
+*.tfstate.*
+terraform-key.json
+images
+docs
+**/__pycache__
+*.md
+.cursor

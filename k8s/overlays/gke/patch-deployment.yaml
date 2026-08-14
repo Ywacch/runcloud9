@@ -8,12 +8,14 @@ spec:
     spec:
       containers:
         - name: cloud9-api
-          image: us-central1-docker.pkg.dev/runcloud9/cloud9-images/cloud9-api:latest
+          image: us-central1-docker.pkg.dev/runcloud9-505411/cloud9-images/cloud9-api:latest
           imagePullPolicy: IfNotPresent
           env:
             - name: SEED_BUCKET_NAME
-              value: "runcloud9-seed-data"
+              value: "runcloud9-505411-seed-data"
             - name: DDC_BUCKET
-              value: "runcloud9-diagnostics"
+              value: "runcloud9-505411-diagnostics"
             - name: PROMETHEUS_URL
               value: "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
+            - name: TEMPLATE_IMAGE_REGISTRY
+              value: "us-central1-docker.pkg.dev/runcloud9-505411/cloud9-images"
