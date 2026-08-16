@@ -35,7 +35,7 @@ func withMetrics(pathPattern string, next http.Handler) http.Handler {
 		if rid := r.Header.Get("X-Request-ID"); rid != "" {
 			attrs = append(attrs, "request_id", rid)
 		}
-		if verboseLogsEnabled() {
+		if verboseLogsEnabled() || r.Header.Get("X-Trace-Sample") == "1" {
 			slog.Info("request handled", attrs...)
 		}
 	})

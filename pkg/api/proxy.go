@@ -39,7 +39,8 @@ func proxyRequestID(r *http.Request) string {
 // proxyRESTHeaders builds outbound headers for the K8s service proxy request.
 func proxyRESTHeaders(r *http.Request, requestID string) map[string]string {
 	h := map[string]string{
-		"X-Request-ID": requestID,
+		"X-Request-ID":   requestID,
+		"X-Trace-Sample": "1",
 	}
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		h["Content-Type"] = ct

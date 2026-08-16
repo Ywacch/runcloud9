@@ -32,6 +32,7 @@ type targetInput struct {
 	Method string `json:"method"`
 	Body   string `json:"body"`
 	Weight int    `json:"weight"`
+	Key    string `json:"key,omitempty"`
 }
 
 // loadStats matches pkg/loadgen.LoadStats JSON consumed by the API.
@@ -268,6 +269,7 @@ func (s *server) runAttack(ctx context.Context, req startRequest) {
 }
 
 func buildTargeter(targets []targetInput) vegeta.Targeter {
+	// PR3 dedupes this targeter via replace => pkg/loadgen.
 	type weighted struct {
 		t      targetInput
 		weight int
@@ -308,15 +310,21 @@ func buildTargeter(targets []targetInput) vegeta.Targeter {
 
 		tgt.Method = selected.Method
 		tgt.URL = selected.URL
+		rid := fmt.Sprintf("%x", rand.Uint64())
+		h := http.Header{}
+		endpointKey := selected.Key
+		if endpointKey == "" {
+			endpointKey = selected.Method + " " + selected.URL
+		}
+		applyTraceSampleHeaders(h, rid, endpointKey, nil, traceSampleRate())
 		if selected.Body != "" {
 			body := strings.ReplaceAll(selected.Body, "{{.Rand}}", fmt.Sprintf("%d", rand.Intn(1_000_000)))
 			tgt.Body = []byte(body)
-			tgt.Header = http.Header{"Content-Type": []string{"application/json"}}
+			h.Set("Content-Type", "application/json")
 		} else {
 			tgt.Body = nil
-			tgt.Header = http.Header{}
 		}
-		tgt.Header.Set("X-Request-ID", fmt.Sprintf("%x", rand.Uint64()))
+		tgt.Header = h
 		return nil
 	}
 }

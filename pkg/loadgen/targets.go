@@ -18,6 +18,8 @@ type ResolvedTarget struct {
 	Method string
 	Body   string
 	Weight int
+	// Key is the DistributionKey endpoint stratum (e.g. "GET /feed/{userId}").
+	Key string
 }
 
 // profileToTargets resolves template endpoints, fetches param pools, and expands targets.
@@ -54,6 +56,7 @@ func profileToTargets(ctx context.Context, namespace string, profile LoadProfile
 				Method: spec.Method,
 				Body:   spec.BodyTemplate,
 				Weight: spec.Weight,
+				Key:    DistributionKey(spec),
 			})
 			continue
 		}
@@ -74,6 +77,7 @@ func profileToTargets(ctx context.Context, namespace string, profile LoadProfile
 				Method: spec.Method,
 				Body:   expandBodyTemplate(spec.BodyTemplate, val),
 				Weight: weightEach,
+				Key:    DistributionKey(spec),
 			})
 		}
 	}
@@ -141,7 +145,11 @@ func newWeightedTargeter(list []resolvedWeighted, total int) vegeta.Targeter {
 		tgt.URL = selected.URL
 		rid := fmt.Sprintf("%x", rand.Uint64())
 		h := http.Header{}
-		h.Set("X-Request-ID", rid)
+		endpointKey := selected.Key
+		if endpointKey == "" {
+			endpointKey = selected.Method + " " + selected.URL
+		}
+		ApplyTraceSampleHeaders(h, rid, endpointKey, nil, TraceSampleRate())
 		if selected.Body != "" {
 			body := strings.ReplaceAll(selected.Body, "{{.Rand}}", strconv.Itoa(rand.Intn(1_000_000)))
 			if strings.Contains(selected.Body, "{{.Param}}") {
