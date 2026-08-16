@@ -17,6 +17,24 @@ tags: [multi-server, write-heavy, intermediate]
 simulatable: true
 deployable: true
 imageKey: ecommerce
+loadgen:
+  endpoints:
+    - method: GET
+      pathTemplate: /catalog
+      weight: 40
+    - method: GET
+      pathTemplate: /products/{productId}
+      paramName: productId
+      poolEndpoint: /product-pool
+      poolField: productIds
+      weight: 30
+    - method: POST
+      pathTemplate: /checkout
+      paramName: productId
+      poolEndpoint: /product-pool
+      poolField: productIds
+      bodyTemplate: '{"product_id":{{.Param}}, "quantity":1}'
+      weight: 30
 workerImageKey: ecommerce-worker
 appDatabaseMode: always
 prometheusMetrics:

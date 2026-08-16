@@ -17,6 +17,27 @@ tags: [async, fan-out, advanced]
 simulatable: true
 deployable: true
 imageKey: social-feed
+loadgen:
+  endpoints:
+    - method: GET
+      pathTemplate: /feed/{userId}
+      paramName: userId
+      poolEndpoint: /user-pool
+      poolField: userIds
+      weight: 60
+    - method: POST
+      pathTemplate: /post
+      paramName: userId
+      poolEndpoint: /user-pool
+      poolField: userIds
+      bodyTemplate: '{"user_id":{{.Param}}, "content":"Load test post {{.Rand}}"}'
+      weight: 30
+    - method: GET
+      pathTemplate: /users/{userId}
+      paramName: userId
+      poolEndpoint: /user-pool
+      poolField: userIds
+      weight: 10
 workerImageKey: fanout-worker
 appDatabaseMode: always
 workerTimelineStore: redis

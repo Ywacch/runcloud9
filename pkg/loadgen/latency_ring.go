@@ -8,8 +8,8 @@ import (
 // RecentLatenciesCap is how many per-request client latencies LoadStats retains for needle charts.
 const RecentLatenciesCap = 120
 
-// latencyRing is a fixed-size FIFO of recent request latencies in milliseconds.
-type latencyRing struct {
+// LatencyRing is a fixed-size FIFO of recent request latencies in milliseconds.
+type LatencyRing struct {
 	mu   sync.Mutex
 	buf  [RecentLatenciesCap]float64
 	n    int
@@ -17,7 +17,8 @@ type latencyRing struct {
 	full bool
 }
 
-func (r *latencyRing) Push(ms float64) {
+// Push records one request latency sample in milliseconds.
+func (r *LatencyRing) Push(ms float64) {
 	if r == nil || !validLatencyMs(ms) {
 		return
 	}
@@ -40,7 +41,7 @@ func (r *latencyRing) Push(ms float64) {
 }
 
 // Snapshot returns oldest→newest latencies (copy, len ≤ RecentLatenciesCap).
-func (r *latencyRing) Snapshot() []float64 {
+func (r *LatencyRing) Snapshot() []float64 {
 	if r == nil {
 		return nil
 	}

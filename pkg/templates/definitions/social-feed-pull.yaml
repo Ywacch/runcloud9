@@ -12,7 +12,28 @@ tags: [read-heavy, beginner]
 simulatable: true
 deployable: true
 # Lower default loadgen rate: most traffic hits expensive fan-out-on-read feed queries at alpha resources.
-loadgenDefaultRps: 25
+loadgen:
+  defaultRps: 25
+  endpoints:
+    - method: GET
+      pathTemplate: /feed/{userId}
+      paramName: userId
+      poolEndpoint: /user-pool
+      poolField: userIds
+      weight: 60
+    - method: POST
+      pathTemplate: /post
+      paramName: userId
+      poolEndpoint: /user-pool
+      poolField: userIds
+      bodyTemplate: '{"user_id":{{.Param}}, "content":"Load test post {{.Rand}}"}'
+      weight: 30
+    - method: GET
+      pathTemplate: /users/{userId}
+      paramName: userId
+      poolEndpoint: /user-pool
+      poolField: userIds
+      weight: 10
 imageKey: social-feed
 appDatabaseMode: always
 prometheusMetrics:

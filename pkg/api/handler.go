@@ -781,7 +781,7 @@ func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if specs, ok := loadgen.TemplateEndpoints[profile.Template]; !ok || len(specs) == 0 {
+	if !templates.HasLoadgenEndpoints(profile.Template) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("load generator does not yet support template %q — it has no endpoint definitions", profile.Template))
 		return
 	}

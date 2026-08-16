@@ -419,6 +419,47 @@ func TestLoadgenDefaultRPSByTemplate(t *testing.T) {
 	}
 }
 
+func TestLoadgenEndpointsFromYAML_matchLegacyGoMap(t *testing.T) {
+	t.Parallel()
+
+	legacy := map[string][]LoadgenEndpointSpec{
+		"url-shortener": {
+			{Method: "GET", PathTemplate: "/r/{code}", ParamName: "code", PoolEndpoint: "/code-pool", PoolField: "codes", Weight: 80},
+			{Method: "POST", PathTemplate: "/shorten", BodyTemplate: `{"url":"https://example.com/page/{{.Rand}}"}`, Weight: 20},
+		},
+		"ecommerce": {
+			{Method: "GET", PathTemplate: "/catalog", Weight: 40},
+			{Method: "GET", PathTemplate: "/products/{productId}", ParamName: "productId", PoolEndpoint: "/product-pool", PoolField: "productIds", Weight: 30},
+			{Method: "POST", PathTemplate: "/checkout", ParamName: "productId", PoolEndpoint: "/product-pool", PoolField: "productIds", BodyTemplate: `{"product_id":{{.Param}}, "quantity":1}`, Weight: 30},
+		},
+		"social-feed": {
+			{Method: "GET", PathTemplate: "/feed/{userId}", ParamName: "userId", PoolEndpoint: "/user-pool", PoolField: "userIds", Weight: 60},
+			{Method: "POST", PathTemplate: "/post", ParamName: "userId", PoolEndpoint: "/user-pool", PoolField: "userIds", BodyTemplate: `{"user_id":{{.Param}}, "content":"Load test post {{.Rand}}"}`, Weight: 30},
+			{Method: "GET", PathTemplate: "/users/{userId}", ParamName: "userId", PoolEndpoint: "/user-pool", PoolField: "userIds", Weight: 10},
+		},
+		"social-feed-pull": {
+			{Method: "GET", PathTemplate: "/feed/{userId}", ParamName: "userId", PoolEndpoint: "/user-pool", PoolField: "userIds", Weight: 60},
+			{Method: "POST", PathTemplate: "/post", ParamName: "userId", PoolEndpoint: "/user-pool", PoolField: "userIds", BodyTemplate: `{"user_id":{{.Param}}, "content":"Load test post {{.Rand}}"}`, Weight: 30},
+			{Method: "GET", PathTemplate: "/users/{userId}", ParamName: "userId", PoolEndpoint: "/user-pool", PoolField: "userIds", Weight: 10},
+		},
+	}
+
+	for templateID, want := range legacy {
+		got, ok := LoadgenEndpoints(templateID)
+		if !ok {
+			t.Fatalf("%s: LoadgenEndpoints returned false", templateID)
+		}
+		if len(got) != len(want) {
+			t.Fatalf("%s: len(got)=%d len(want)=%d", templateID, len(got), len(want))
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("%s[%d]: got %+v want %+v", templateID, i, got[i], want[i])
+			}
+		}
+	}
+}
+
 func TestSocialFeedPull_NoRedisInTopologyOrPreset(t *testing.T) {
 	t.Parallel()
 	sfp := GetTemplate("social-feed-pull")

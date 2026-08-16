@@ -7,7 +7,7 @@ import (
 
 func TestLatencyRing_EmptySnapshot(t *testing.T) {
 	t.Parallel()
-	var r latencyRing
+	var r LatencyRing
 	if got := r.Snapshot(); got != nil {
 		t.Fatalf("Snapshot() = %v, want nil", got)
 	}
@@ -15,7 +15,7 @@ func TestLatencyRing_EmptySnapshot(t *testing.T) {
 
 func TestLatencyRing_PushAndSnapshotOrder(t *testing.T) {
 	t.Parallel()
-	var r latencyRing
+	var r LatencyRing
 	for i := 1; i <= 5; i++ {
 		r.Push(float64(i * 10))
 	}
@@ -33,7 +33,7 @@ func TestLatencyRing_PushAndSnapshotOrder(t *testing.T) {
 
 func TestLatencyRing_WrapMaintainsFIFO(t *testing.T) {
 	t.Parallel()
-	var r latencyRing
+	var r LatencyRing
 	for i := 1; i <= RecentLatenciesCap+5; i++ {
 		r.Push(float64(i))
 	}
@@ -53,7 +53,7 @@ func TestLatencyRing_WrapMaintainsFIFO(t *testing.T) {
 
 func TestLatencyRing_IgnoresInvalid(t *testing.T) {
 	t.Parallel()
-	var r latencyRing
+	var r LatencyRing
 	r.Push(-1)
 	r.Push(math.NaN())
 	r.Push(math.Inf(1))

@@ -44,7 +44,7 @@ type attackSession struct {
 	targets []ResolvedTarget
 	stats   LoadStats
 	mu      sync.RWMutex // protects stats reads
-	recent  latencyRing
+	recent  LatencyRing
 }
 
 // NewLocalLoadGenerator returns an in-process vegeta load generator.

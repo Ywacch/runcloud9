@@ -119,6 +119,11 @@ func buildTargeterFromResolved(targets []ResolvedTarget) vegeta.Targeter {
 	return newWeightedTargeter(list, total)
 }
 
+// BuildTargeterFromResolved exposes the resolved-target vegeta targeter for the loadgen pod.
+func BuildTargeterFromResolved(targets []ResolvedTarget) vegeta.Targeter {
+	return buildTargeterFromResolved(targets)
+}
+
 type resolvedWeighted struct {
 	t      ResolvedTarget
 	weight int
