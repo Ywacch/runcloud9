@@ -18,6 +18,18 @@ tags: [caching, read-heavy, beginner]
 simulatable: true
 deployable: true
 imageKey: url-shortener
+loadgen:
+  endpoints:
+    - method: GET
+      pathTemplate: /r/{code}
+      paramName: code
+      poolEndpoint: /code-pool
+      poolField: codes
+      weight: 80
+    - method: POST
+      pathTemplate: /shorten
+      bodyTemplate: '{"url":"https://example.com/page/{{.Rand}}"}'
+      weight: 20
 workerImageKey: ""
 appDatabaseMode: non-proxy
 prometheusMetrics:

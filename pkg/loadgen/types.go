@@ -75,7 +75,7 @@ func DefaultProfile() LoadProfile {
 	return LoadProfile{RPS: 50}
 }
 
-// NormalizeProfile applies defaults and merges distribution from TemplateEndpoints when needed.
+// NormalizeProfile applies defaults and merges distribution from template loadgen endpoints when needed.
 // Template must already be set by the API (from the request body or deployment row); this function never invents a template name.
 func NormalizeProfile(p LoadProfile) LoadProfile {
 	def := DefaultProfile()
@@ -98,8 +98,8 @@ func NormalizeProfile(p LoadProfile) LoadProfile {
 		return p
 	}
 
-	specs := TemplateEndpoints[p.Template]
-	if len(specs) == 0 {
+	specs, ok := cloneEndpointSpecs(p.Template)
+	if !ok {
 		return p
 	}
 

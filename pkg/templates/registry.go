@@ -53,6 +53,8 @@ type TemplateSpec struct {
 	WorkerTimelineStore string           `json:"-"`
 	// LoadgenDefaultRPS is the suggested default RPS when starting loadgen with no rps in the request (0 = use global 50).
 	LoadgenDefaultRPS int `json:"loadgenDefaultRps,omitempty"`
+	// Loadgen holds YAML-authored endpoint specs and optional default RPS.
+	Loadgen *LoadgenSpec `json:"-"`
 	// Storytelling is optional template-authored copy for UI narratives, roles, and journeys.
 	Storytelling *StorytellingSpec `json:"storytelling,omitempty"`
 	// Introspection configures live DB/cache browsing for the data snapshots UI.
@@ -137,6 +139,7 @@ type templateDef struct {
 	AppDatabaseMode      string                 `yaml:"appDatabaseMode"`
 	WorkerTimelineStore  string                 `yaml:"workerTimelineStore"`
 	LoadgenDefaultRPS    int                    `yaml:"loadgenDefaultRps"`
+	Loadgen              *loadgenDef            `yaml:"loadgen"`
 	Storytelling         *StorytellingSpec      `yaml:"storytelling"`
 	Introspection        introspect.Spec        `yaml:"introspection"`
 	PrometheusMetricsRef string                 `yaml:"prometheusMetricsRef"`
@@ -266,7 +269,13 @@ func defToSpec(def *templateDef) TemplateSpec {
 	if def.WorkerTimelineStore != "" {
 		spec.WorkerTimelineStore = def.WorkerTimelineStore
 	}
-	if def.LoadgenDefaultRPS > 0 {
+	if def.Loadgen != nil {
+		spec.Loadgen = loadgenSpecFromDef(def.Loadgen)
+		if def.Loadgen.DefaultRps > 0 {
+			spec.LoadgenDefaultRPS = def.Loadgen.DefaultRps
+		}
+	}
+	if spec.LoadgenDefaultRPS == 0 && def.LoadgenDefaultRPS > 0 {
 		spec.LoadgenDefaultRPS = def.LoadgenDefaultRPS
 	}
 	if def.WorkerImageKey != "" {

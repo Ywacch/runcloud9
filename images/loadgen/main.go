@@ -4,17 +4,15 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
-	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/ywacch/cloud9/pkg/loadgen"
 	vegeta "github.com/tsenart/vegeta/v12/lib"
 )
 
@@ -35,38 +33,18 @@ type targetInput struct {
 	Key    string `json:"key,omitempty"`
 }
 
-// loadStats matches pkg/loadgen.LoadStats JSON consumed by the API.
-type loadStats struct {
-	Active            bool                `json:"active"`
-	CurrentRPS        float64             `json:"currentRps"`
-	TargetRPS         float64             `json:"targetRps"`
-	ActualRPS         float64             `json:"actualRps"`
-	TotalRequests     uint64              `json:"totalRequests"`
-	SuccessRate       float64             `json:"successRate"`
-	MeanLatency       float64             `json:"meanLatency"`
-	P99Latency        float64             `json:"p99Latency"`
-	IntervalP99Ms     float64             `json:"intervalP99Ms"`
-	IntervalActualRPS float64             `json:"intervalActualRps"`
-	RecentIntervals   []loadIntervalStats `json:"recentIntervals,omitempty"`
-	RecentLatenciesMs []float64           `json:"recentLatenciesMs,omitempty"`
-	DurationSeconds   float64             `json:"durationSeconds"`
-	StatusCodes       map[string]int      `json:"statusCodes"`
-	Distribution      map[string]int      `json:"distribution"`
-	StartedAt         *time.Time          `json:"startedAt"`
-}
-
 type server struct {
 	mu sync.Mutex
 
-	running      bool
-	cancel       context.CancelFunc
+	running       bool
+	cancel        context.CancelFunc
 	configuredRPS int
-	distribution map[string]int
-	startedAt    *time.Time
+	distribution  map[string]int
+	startedAt     *time.Time
 
 	statsMu sync.RWMutex
-	stats   loadStats
-	recent  latencyRing
+	stats   loadgen.LoadStats
+	recent  loadgen.LatencyRing
 }
 
 func main() {
@@ -74,7 +52,7 @@ func main() {
 	slog.SetDefault(logger)
 
 	srv := &server{
-		stats: loadStats{
+		stats: loadgen.LoadStats{
 			StatusCodes:  map[string]int{},
 			Distribution: map[string]int{},
 		},
@@ -148,7 +126,7 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	s.startedAt = &now
 
 	s.statsMu.Lock()
-	s.stats = loadStats{
+	s.stats = loadgen.LoadStats{
 		Active:       true,
 		CurrentRPS:   float64(req.RPS),
 		TargetRPS:    float64(req.RPS),
@@ -156,7 +134,7 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		Distribution: copyIntMap(req.Distribution),
 		StartedAt:    &now,
 	}
-	s.recent = latencyRing{}
+	s.recent = loadgen.LatencyRing{}
 	s.statsMu.Unlock()
 	s.mu.Unlock()
 
@@ -200,8 +178,8 @@ func (s *server) runAttack(ctx context.Context, req startRequest) {
 		s.statsMu.Unlock()
 	}()
 
-	targeter := buildTargeter(req.Targets)
-	attacker := newVegetaAttacker(req.RPS)
+	targeter := loadgen.BuildTargeterFromResolved(podTargetsToResolved(req.Targets))
+	attacker := loadgen.NewVegetaAttacker(req.RPS)
 
 	rate := vegeta.Rate{Freq: req.RPS, Per: time.Second}
 	var attackDur time.Duration
@@ -211,7 +189,7 @@ func (s *server) runAttack(ctx context.Context, req startRequest) {
 
 	results := attacker.Attack(targeter, rate, attackDur, "cloud9-loadgen-pod")
 	tick1s := time.NewTicker(time.Second)
-	tick5s := time.NewTicker(intervalWindow)
+	tick5s := time.NewTicker(loadgen.IntervalWindow)
 	defer tick1s.Stop()
 	defer tick5s.Stop()
 
@@ -225,10 +203,10 @@ func (s *server) runAttack(ctx context.Context, req startRequest) {
 			if !ok {
 				vmMu.Lock()
 				s.statsMu.Lock()
-				window = closeInterval(&s.stats, &window, time.Now())
+				window = loadgen.CloseInterval(&s.stats, &window, time.Now())
 				cumulative.Close()
 				s.stats.RecentLatenciesMs = s.recent.Snapshot()
-				applyMetricsUpdate(&s.stats, &cumulative, req.RPS, s.startedAt)
+				loadgen.ApplyMetricsUpdate(&s.stats, &cumulative, req.RPS, s.startedAt)
 				if len(s.distribution) > 0 {
 					s.stats.Distribution = copyIntMap(s.distribution)
 				}
@@ -247,7 +225,7 @@ func (s *server) runAttack(ctx context.Context, req startRequest) {
 			s.statsMu.Lock()
 			cumulative.Close()
 			s.stats.RecentLatenciesMs = s.recent.Snapshot()
-			applyMetricsUpdate(&s.stats, &cumulative, req.RPS, s.startedAt)
+			loadgen.ApplyMetricsUpdate(&s.stats, &cumulative, req.RPS, s.startedAt)
 			if len(s.distribution) > 0 {
 				s.stats.Distribution = copyIntMap(s.distribution)
 			}
@@ -257,7 +235,7 @@ func (s *server) runAttack(ctx context.Context, req startRequest) {
 		case now := <-tick5s.C:
 			vmMu.Lock()
 			s.statsMu.Lock()
-			window = closeInterval(&s.stats, &window, now)
+			window = loadgen.CloseInterval(&s.stats, &window, now)
 			s.statsMu.Unlock()
 			vmMu.Unlock()
 
@@ -268,65 +246,18 @@ func (s *server) runAttack(ctx context.Context, req startRequest) {
 	}
 }
 
-func buildTargeter(targets []targetInput) vegeta.Targeter {
-	// PR3 dedupes this targeter via replace => pkg/loadgen.
-	type weighted struct {
-		t      targetInput
-		weight int
-	}
-	var list []weighted
-	total := 0
+func podTargetsToResolved(targets []targetInput) []loadgen.ResolvedTarget {
+	out := make([]loadgen.ResolvedTarget, 0, len(targets))
 	for _, t := range targets {
-		w := t.Weight
-		if w <= 0 {
-			continue
-		}
-		list = append(list, weighted{t: t, weight: w})
-		total += w
+		out = append(out, loadgen.ResolvedTarget{
+			URL:    t.URL,
+			Method: t.Method,
+			Body:   t.Body,
+			Weight: t.Weight,
+			Key:    t.Key,
+		})
 	}
-	if len(list) == 0 && len(targets) > 0 {
-		list = append(list, weighted{t: targets[0], weight: 1})
-		total = 1
-	}
-	if total == 0 {
-		total = 1
-	}
-
-	var mu sync.Mutex
-	return func(tgt *vegeta.Target) error {
-		mu.Lock()
-		defer mu.Unlock()
-
-		r := rand.Intn(total)
-		cumulative := 0
-		var selected targetInput
-		for _, w := range list {
-			cumulative += w.weight
-			if r < cumulative {
-				selected = w.t
-				break
-			}
-		}
-
-		tgt.Method = selected.Method
-		tgt.URL = selected.URL
-		rid := fmt.Sprintf("%x", rand.Uint64())
-		h := http.Header{}
-		endpointKey := selected.Key
-		if endpointKey == "" {
-			endpointKey = selected.Method + " " + selected.URL
-		}
-		applyTraceSampleHeaders(h, rid, endpointKey, nil, traceSampleRate())
-		if selected.Body != "" {
-			body := strings.ReplaceAll(selected.Body, "{{.Rand}}", fmt.Sprintf("%d", rand.Intn(1_000_000)))
-			tgt.Body = []byte(body)
-			h.Set("Content-Type", "application/json")
-		} else {
-			tgt.Body = nil
-		}
-		tgt.Header = h
-		return nil
-	}
+	return out
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
