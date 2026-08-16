@@ -49,6 +49,7 @@ type podTarget struct {
 	Method string `json:"method"`
 	Body   string `json:"body"`
 	Weight int    `json:"weight"`
+	Key    string `json:"key,omitempty"`
 }
 
 // Start resolves targets and POSTs /start on the namespace loadgen pod.
@@ -71,6 +72,7 @@ func (p *PodLoadGenerator) Start(ctx context.Context, namespace string, profile 
 			Method: t.Method,
 			Body:   t.Body,
 			Weight: t.Weight,
+			Key:    t.Key,
 		})
 	}
 

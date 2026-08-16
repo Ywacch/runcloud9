@@ -38,6 +38,9 @@ func TestProxyRESTHeaders_includesRequestID(t *testing.T) {
 	if h["X-Request-ID"] != "persona-trace-1" {
 		t.Fatalf("X-Request-ID: got %q", h["X-Request-ID"])
 	}
+	if h["X-Trace-Sample"] != "1" {
+		t.Fatalf("X-Trace-Sample: got %q, want 1", h["X-Trace-Sample"])
+	}
 	if h["Content-Type"] != "application/json" {
 		t.Fatalf("Content-Type: got %q", h["Content-Type"])
 	}

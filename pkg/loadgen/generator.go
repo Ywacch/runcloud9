@@ -408,7 +408,7 @@ func buildTargeter(baseURL string, specs []EndpointSpec, pools map[string][]stri
 
 		rid := fmt.Sprintf("%x", rand.Uint64())
 		h := http.Header{}
-		h.Set("X-Request-ID", rid)
+		ApplyTraceSampleHeaders(h, rid, DistributionKey(selected), nil, TraceSampleRate())
 		if selected.BodyTemplate != "" {
 			body := strings.ReplaceAll(selected.BodyTemplate, "{{.Rand}}", fmt.Sprintf("%d", rand.Intn(1000000)))
 			if selected.ParamName != "" {

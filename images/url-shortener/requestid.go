@@ -1,3 +1,4 @@
+// Duplicate across url-shortener/social-feed/ecommerce. Collapse into pkg/templateapp/trace in PR3.
 package main
 
 import (
@@ -8,12 +9,17 @@ import (
 )
 
 type requestIDKey struct{}
+type traceSampleKey struct{}
 
 func withRequestContext(r *http.Request) *http.Request {
-	if rid := r.Header.Get("X-Request-ID"); rid == "" {
-		return r
+	ctx := r.Context()
+	if rid := r.Header.Get("X-Request-ID"); rid != "" {
+		ctx = context.WithValue(ctx, requestIDKey{}, rid)
 	}
-	return r.WithContext(context.WithValue(r.Context(), requestIDKey{}, r.Header.Get("X-Request-ID")))
+	if r.Header.Get("X-Trace-Sample") == "1" {
+		ctx = context.WithValue(ctx, traceSampleKey{}, true)
+	}
+	return r.WithContext(ctx)
 }
 
 func requestIDFrom(ctx context.Context) string {
@@ -21,14 +27,26 @@ func requestIDFrom(ctx context.Context) string {
 	return v
 }
 
+func sampledFrom(ctx context.Context) bool {
+	v, _ := ctx.Value(traceSampleKey{}).(bool)
+	return v
+}
+
+func shouldTrace(ctx context.Context) bool {
+	return verboseLogsEnabled() || sampledFrom(ctx)
+}
+
 func setRequestIDHeader(req *http.Request, ctx context.Context) {
 	if rid := requestIDFrom(ctx); rid != "" {
 		req.Header.Set("X-Request-ID", rid)
 	}
+	if sampledFrom(ctx) {
+		req.Header.Set("X-Trace-Sample", "1")
+	}
 }
 
 func logDBOp(ctx context.Context, operation string, start time.Time) {
-	if !verboseLogsEnabled() {
+	if !shouldTrace(ctx) {
 		return
 	}
 	rid := requestIDFrom(ctx)
@@ -39,7 +57,7 @@ func logDBOp(ctx context.Context, operation string, start time.Time) {
 }
 
 func logCacheGet(ctx context.Context, key string, hit bool, start time.Time) {
-	if !verboseLogsEnabled() {
+	if !shouldTrace(ctx) {
 		return
 	}
 	rid := requestIDFrom(ctx)
@@ -50,7 +68,7 @@ func logCacheGet(ctx context.Context, key string, hit bool, start time.Time) {
 }
 
 func logCacheSet(ctx context.Context, key string, start time.Time) {
-	if !verboseLogsEnabled() {
+	if !shouldTrace(ctx) {
 		return
 	}
 	rid := requestIDFrom(ctx)
