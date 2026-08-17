@@ -124,11 +124,14 @@ func classifyFanoutError(err error) string {
 }
 
 func fanoutPost(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, msg fanoutMessage, timelineTTL time.Duration) error {
+	dbStart := time.Now()
 	var username string
 	if err := pool.QueryRow(ctx, `SELECT username FROM users WHERE id = $1`, msg.UserID).Scan(&username); err != nil {
 		return fmt.Errorf("db user lookup: %w", err)
 	}
+	logWorkerOp(ctx, "db_user_lookup", dbStart)
 
+	dbStart = time.Now()
 	rows, err := pool.Query(ctx, `SELECT follower_id FROM follows WHERE following_id = $1`, msg.UserID)
 	if err != nil {
 		return fmt.Errorf("db follower lookup: %w", err)
@@ -146,6 +149,7 @@ func fanoutPost(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, msg 
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("db follower rows: %w", err)
 	}
+	logWorkerOp(ctx, "db_follower_lookup", dbStart)
 
 	workerFanoutSize.Observe(float64(len(followers)))
 	workerWriteTotal.WithLabelValues("redis").Add(float64(len(followers)))
@@ -156,6 +160,7 @@ func fanoutPost(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, msg 
 		"content":    msg.Content,
 		"created_at": msg.CreatedAt,
 	})
+	redisStart := time.Now()
 	pipe := rdb.Pipeline()
 	for _, followerID := range followers {
 		appendTimelineWrite(ctx, pipe, followerID, payload, msg.CreatedAt, timelineTTL)
@@ -163,6 +168,7 @@ func fanoutPost(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, msg 
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("redis timeline pipeline: %w", err)
 	}
+	logWorkerOp(ctx, "redis_timeline_write", redisStart)
 	return nil
 }
 
@@ -171,6 +177,8 @@ func processDelivery(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client,
 	defer func() {
 		workerProcessingDuration.Observe(time.Since(start).Seconds())
 	}()
+
+	ctx = ctxFromDelivery(ctx, d)
 
 	var msg fanoutMessage
 	if err := json.Unmarshal(d.Body, &msg); err != nil {
@@ -182,8 +190,9 @@ func processDelivery(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client,
 	if err := fanoutPost(ctx, pool, rdb, msg, timelineTTL); err != nil {
 		reason := classifyFanoutError(err)
 		workerErrorsTotal.WithLabelValues(reason).Inc()
-		slog.Error("fanout failed", "post_id", msg.PostID, "author_id", msg.UserID, "reason", reason, "error", err)
+		slog.Error("fanout failed", "post_id", msg.PostID, "author_id", msg.UserID, "reason", reason, "error", err, "request_id", requestIDFrom(ctx))
 	} else {
+		logWorkerOp(ctx, "fanout", start)
 		workerProcessedTotal.Inc()
 	}
 	return d.DeliveryTag

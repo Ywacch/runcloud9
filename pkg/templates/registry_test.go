@@ -493,6 +493,37 @@ func TestLoadgenActorParamsFromYAML(t *testing.T) {
 	}
 }
 
+func TestLoadgenConfig_socialFeed(t *testing.T) {
+	t.Parallel()
+	view, ok := LoadgenConfig("social-feed")
+	if !ok {
+		t.Fatal("expected social-feed loadgen config")
+	}
+	ids := map[string]bool{}
+	for _, s := range view.Schedules {
+		ids[s.ID] = true
+	}
+	if !ids["steady"] || !ids["world_cup_goal"] {
+		t.Fatalf("schedules: %+v", view.Schedules)
+	}
+	found := false
+	for _, p := range view.Params {
+		if p.Key == "celebrityPostPct" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("params: %+v", view.Params)
+	}
+}
+
+func TestLoadgenConfig_unknown(t *testing.T) {
+	t.Parallel()
+	if _, ok := LoadgenConfig("no-such-template"); ok {
+		t.Fatal("expected missing template")
+	}
+}
+
 func TestSocialFeedPull_NoRedisInTopologyOrPreset(t *testing.T) {
 	t.Parallel()
 	sfp := GetTemplate("social-feed-pull")

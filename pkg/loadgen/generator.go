@@ -3,6 +3,7 @@ package loadgen
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -23,8 +24,17 @@ import (
 type LoadGenerator interface {
 	Start(ctx context.Context, namespace string, profile LoadProfile) error
 	Stop(ctx context.Context, namespace string) error
+	Update(ctx context.Context, namespace string, rps int) error
 	GetStats(namespace string) LoadStats
 }
+
+// ErrNotRunning is returned by Update when no attack is active for the namespace.
+var ErrNotRunning = errors.New("loadgen: no attack running")
+
+const (
+	minLiveRPS = 1
+	maxLiveRPS = 5000
+)
 
 // LocalLoadGenerator manages one vegeta attacker per active deployment.
 // UNDERSTAND: vegeta sends requests from INSIDE the Go API server process.
@@ -40,6 +50,7 @@ var _ LoadGenerator = (*LocalLoadGenerator)(nil)
 
 type attackSession struct {
 	cancel    context.CancelFunc
+	control   *AttackControl
 	profile   LoadProfile
 	namespace string
 	stats     LoadStats
@@ -91,8 +102,10 @@ func (lg *LocalLoadGenerator) Start(ctx context.Context, namespace string, profi
 
 	attackCtx, cancel := context.WithCancel(context.Background())
 	now := time.Now()
+	control := NewAttackControl(profile.RPS)
 	session := &attackSession{
 		cancel:    cancel,
+		control:   control,
 		profile:   profile,
 		namespace: namespace,
 		stats: LoadStats{
@@ -107,7 +120,23 @@ func (lg *LocalLoadGenerator) Start(ctx context.Context, namespace string, profi
 	}
 	lg.active[namespace] = session
 
-	go session.run(attackCtx, lg, namespace, profile)
+	go session.run(attackCtx, lg, namespace, profile, control)
+	return nil
+}
+
+// Update changes the base RPS of a running attack without stopping it.
+func (lg *LocalLoadGenerator) Update(ctx context.Context, namespace string, rps int) error {
+	_ = ctx
+	if err := ValidateLiveRPS(rps); err != nil {
+		return err
+	}
+	lg.mu.Lock()
+	session, ok := lg.active[namespace]
+	lg.mu.Unlock()
+	if !ok || session == nil || session.control == nil {
+		return ErrNotRunning
+	}
+	session.control.SetBaseRPS(rps)
 	return nil
 }
 
@@ -153,7 +182,7 @@ func (lg *LocalLoadGenerator) GetStats(namespace string) LoadStats {
 	return session.stats
 }
 
-func (s *attackSession) run(ctx context.Context, lg *LocalLoadGenerator, namespace string, profile LoadProfile) {
+func (s *attackSession) run(ctx context.Context, lg *LocalLoadGenerator, namespace string, profile LoadProfile, control *AttackControl) {
 	slog.Info("loadgen started", "namespace", namespace, "template", profile.Template, "rps", profile.RPS, "schedule", profile.ScheduleID)
 
 	RunAttackLoop(AttackLoopOpts{
@@ -164,6 +193,7 @@ func (s *attackSession) run(ctx context.Context, lg *LocalLoadGenerator, namespa
 		Stats:           &s.stats,
 		StatsMu:         &s.mu,
 		Recent:          &s.recent,
+		Control:         control,
 		AttackName:      "cloud9-loadgen",
 		OnNaturalFinish: func() {
 			lg.finish(namespace, s)
@@ -409,3 +439,14 @@ func fallbackParamValue(paramName string) string {
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }
+
+// ValidateLiveRPS rejects out-of-range live RPS updates.
+func ValidateLiveRPS(rps int) error {
+	if rps < minLiveRPS {
+		return fmt.Errorf("loadgen: rps must be at least %d", minLiveRPS)
+	}
+	if rps > maxLiveRPS {
+		return fmt.Errorf("loadgen: rps must be at most %d", maxLiveRPS)
+	}
+	return nil
+}

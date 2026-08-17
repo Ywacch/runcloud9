@@ -20,9 +20,10 @@ const listenAddr = ":9100"
 type server struct {
 	mu sync.Mutex
 
-	running  bool
-	cancel   context.CancelFunc
+	running   bool
+	cancel    context.CancelFunc
 	startedAt *time.Time
+	control   *loadgen.AttackControl
 
 	statsMu sync.RWMutex
 	stats   loadgen.LoadStats
@@ -42,6 +43,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /start", srv.handleStart)
+	mux.HandleFunc("PATCH /rate", srv.handleRate)
 	mux.HandleFunc("DELETE /stop", srv.handleStop)
 	mux.HandleFunc("GET /metrics", srv.handleMetrics)
 
@@ -102,6 +104,8 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	attackCtx, cancel := context.WithCancel(context.Background())
 	s.running = true
 	s.cancel = cancel
+	control := loadgen.NewAttackControl(body.RPS)
+	s.control = control
 	now := time.Now()
 	s.startedAt = &now
 
@@ -119,9 +123,34 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	s.statsMu.Unlock()
 	s.mu.Unlock()
 
-	go s.runAttack(attackCtx, body)
+	go s.runAttack(attackCtx, body, control)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
+}
+
+func (s *server) handleRate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		RPS int `json:"rps"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if err := loadgen.ValidateLiveRPS(body.RPS); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	s.mu.Lock()
+	if !s.running || s.control == nil {
+		s.mu.Unlock()
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "load not running"})
+		return
+	}
+	s.control.SetBaseRPS(body.RPS)
+	s.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "rps": body.RPS})
 }
 
 func (s *server) handleStop(w http.ResponseWriter, r *http.Request) {
@@ -131,6 +160,7 @@ func (s *server) handleStop(w http.ResponseWriter, r *http.Request) {
 	}
 	s.running = false
 	s.cancel = nil
+	s.control = nil
 	s.mu.Unlock()
 
 	s.statsMu.Lock()
@@ -147,11 +177,12 @@ func (s *server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (s *server) runAttack(ctx context.Context, body loadgen.PodStartBody) {
+func (s *server) runAttack(ctx context.Context, body loadgen.PodStartBody, control *loadgen.AttackControl) {
 	defer func() {
 		s.mu.Lock()
 		s.running = false
 		s.cancel = nil
+		s.control = nil
 		s.mu.Unlock()
 
 		s.statsMu.Lock()
@@ -174,6 +205,7 @@ func (s *server) runAttack(ctx context.Context, body loadgen.PodStartBody) {
 		Stats:         &s.stats,
 		StatsMu:       &s.statsMu,
 		Recent:        &s.recent,
+		Control:       control,
 		AttackName:    "cloud9-loadgen-pod",
 	})
 }

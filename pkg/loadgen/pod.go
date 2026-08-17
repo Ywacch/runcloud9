@@ -63,11 +63,47 @@ func (p *PodLoadGenerator) Start(ctx context.Context, namespace string, profile 
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusConflict {
-		return fmt.Errorf("loadgen pod: attack already running (stop first to change RPS)")
+		return fmt.Errorf("loadgen pod: attack already running")
 	}
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("loadgen pod: start returned %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	return nil
+}
+
+type rateUpdateBody struct {
+	RPS int `json:"rps"`
+}
+
+// Update PATCHes /rate on the namespace loadgen pod.
+func (p *PodLoadGenerator) Update(ctx context.Context, namespace string, rps int) error {
+	if err := ValidateLiveRPS(rps); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(rateUpdateBody{RPS: rps})
+	if err != nil {
+		return fmt.Errorf("loadgen pod: encode rate: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, podEndpoint(namespace)+"/rate", bytes.NewReader(raw))
+	if err != nil {
+		return fmt.Errorf("loadgen pod: build rate request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("loadgen pod: rate request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusConflict {
+		return ErrNotRunning
+	}
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("loadgen pod: rate returned %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	return nil
 }

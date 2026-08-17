@@ -23,9 +23,12 @@ type AttackLoopOpts struct {
 	Recent          *LatencyRing
 	OnNaturalFinish func()
 	AttackName      string
+	Control         *AttackControl
 }
 
-// RunAttackLoop drives vegeta with optional schedule phases (re-attack per phase boundary).
+// RunAttackLoop drives one continuous vegeta Attack. A self-rebasing pacer
+// changes effective RPS live; a live targeter swaps mix/actor plans on phase
+// boundaries without Stop/re-attack.
 func RunAttackLoop(opts AttackLoopOpts) {
 	if opts.Stats == nil || opts.BuildTargeter == nil {
 		return
@@ -36,6 +39,11 @@ func RunAttackLoop(opts AttackLoopOpts) {
 	}
 	runner := NewScheduleRunner(opts.Profile.Phases, startedAt)
 
+	control := opts.Control
+	if control == nil {
+		control = NewAttackControl(opts.Profile.RPS)
+	}
+
 	var cumulative vegeta.Metrics
 	var window vegeta.Metrics
 	var vmMu sync.Mutex
@@ -45,21 +53,25 @@ func RunAttackLoop(opts AttackLoopOpts) {
 	defer tick1s.Stop()
 	defer tick5s.Stop()
 
-	runPhase := func(phase Phase, phaseIdx int, attackDur time.Duration) (<-chan *vegeta.Result, *vegeta.Attacker, int) {
-		phaseProfile := ProfileForPhase(opts.Profile, phase)
-		targetRPS := EffectiveRPS(opts.Profile.RPS, phase)
-		targeter, dist, err := opts.BuildTargeter(opts.Ctx, phaseProfile, phase)
-		if err != nil {
-			slog.Warn("loadgen phase targeter build failed", "error", err, "phase", phaseIdx)
-			targeter = func(tgt *vegeta.Target) error { return nil }
-			dist = opts.Profile.Distribution
+	live := &liveTargeter{}
+	pacer := newRatePacer(1)
+
+	applyPhase := func(phase Phase, phaseIdx int, rebuild bool) int {
+		targetRPS := EffectiveRPS(control.BaseRPS(), phase)
+		pacer.SetTarget(targetRPS)
+
+		var dist map[string]int
+		if rebuild {
+			phaseProfile := ProfileForPhase(opts.Profile, phase)
+			targeter, d, err := opts.BuildTargeter(opts.Ctx, phaseProfile, phase)
+			if err != nil {
+				slog.Warn("loadgen phase targeter build failed", "error", err, "phase", phaseIdx)
+				targeter = func(tgt *vegeta.Target) error { return nil }
+				d = opts.Profile.Distribution
+			}
+			live.Swap(&targeterState{next: targeter, dist: d})
+			dist = d
 		}
-		attacker := NewVegetaAttacker(targetRPS)
-		rate := vegeta.Rate{Freq: targetRPS, Per: time.Second}
-		if opts.Profile.DurationSeconds > 0 && attackDur == 0 {
-			attackDur = opts.Profile.AttackDuration()
-		}
-		results := attacker.Attack(targeter, rate, attackDur, opts.AttackName)
 
 		if opts.StatsMu != nil {
 			opts.StatsMu.Lock()
@@ -73,36 +85,25 @@ func RunAttackLoop(opts AttackLoopOpts) {
 			}
 			opts.StatsMu.Unlock()
 		}
-		return results, attacker, targetRPS
+		return targetRPS
 	}
 
 	phase, phaseIdx := runner.Current(time.Now())
-	attackDur := runner.PhaseAttackDuration(time.Now(), phaseIdx)
-	results, attacker, targetRPS := runPhase(phase, phaseIdx, attackDur)
+	targetRPS := applyPhase(phase, phaseIdx, true)
 	lastPhaseIdx := phaseIdx
+
+	attacker := NewVegetaAttacker(attackerRPSBudget(control.BaseRPS(), opts.Profile.Phases))
+	results := attacker.Attack(live.Targeter(), pacer, opts.Profile.AttackDuration(), opts.AttackName)
 
 	loopDone := false
 	for !loopDone {
 		select {
 		case res, ok := <-results:
 			if !ok {
-				if opts.Ctx.Err() != nil {
-					loopDone = true
-					continue
-				}
-				now := time.Now()
-				nextPhase, nextIdx := runner.Current(now)
-				if runner != nil && nextIdx != lastPhaseIdx {
-					phase, phaseIdx = nextPhase, nextIdx
-					attackDur = runner.PhaseAttackDuration(now, phaseIdx)
-					results, attacker, targetRPS = runPhase(phase, phaseIdx, attackDur)
-					lastPhaseIdx = phaseIdx
-					continue
-				}
 				vmMu.Lock()
 				if opts.StatsMu != nil {
 					opts.StatsMu.Lock()
-					window = CloseInterval(opts.Stats, &window, now)
+					window = CloseInterval(opts.Stats, &window, time.Now())
 					cumulative.Close()
 					if opts.Recent != nil {
 						opts.Stats.RecentLatenciesMs = opts.Recent.Snapshot()
@@ -111,7 +112,7 @@ func RunAttackLoop(opts AttackLoopOpts) {
 					opts.StatsMu.Unlock()
 				}
 				vmMu.Unlock()
-				if opts.OnNaturalFinish != nil {
+				if opts.OnNaturalFinish != nil && opts.Ctx.Err() == nil {
 					opts.OnNaturalFinish()
 				}
 				loopDone = true
@@ -127,13 +128,9 @@ func RunAttackLoop(opts AttackLoopOpts) {
 
 		case now := <-tick1s.C:
 			phase, phaseIdx = runner.Current(now)
-			if runner != nil && phaseIdx != lastPhaseIdx {
-				attacker.Stop()
-				attackDur = runner.PhaseAttackDuration(now, phaseIdx)
-				results, attacker, targetRPS = runPhase(phase, phaseIdx, attackDur)
-				lastPhaseIdx = phaseIdx
-				continue
-			}
+			rebuild := phaseIdx != lastPhaseIdx
+			targetRPS = applyPhase(phase, phaseIdx, rebuild)
+			lastPhaseIdx = phaseIdx
 			vmMu.Lock()
 			if opts.StatsMu != nil {
 				opts.StatsMu.Lock()
@@ -179,7 +176,6 @@ func PodTargeterBuilder(body PodStartBody) TargeterBuilder {
 	return func(ctx context.Context, profile LoadProfile, phase Phase) (vegeta.Targeter, map[string]int, error) {
 		_ = ctx
 		_ = profile
-		_ = phase
 		if body.Actor != nil {
 			cfg := *body.Actor
 			cfg.Distribution = EffectiveDistributionMap(body.Distribution, phase)

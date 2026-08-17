@@ -64,6 +64,55 @@ func LoadgenParams(templateID string) ([]LoadgenActorParam, bool) {
 	return out, true
 }
 
+// LoadgenActorParamView is the public JSON projection of an actor param (includes tier as data).
+type LoadgenActorParamView struct {
+	Key     string             `json:"key"`
+	Type    string             `json:"type"`
+	Default float64            `json:"default"`
+	Min     *float64           `json:"min,omitempty"`
+	Max     *float64           `json:"max,omitempty"`
+	Pools   []LoadgenActorPool `json:"pools,omitempty"`
+	ApplyTo []string           `json:"applyTo,omitempty"`
+	Tier    string             `json:"tier,omitempty"`
+}
+
+// LoadgenConfigView is the Load UI contract for schedules and actor params.
+type LoadgenConfigView struct {
+	DefaultRPS int                     `json:"defaultRps,omitempty"`
+	Params     []LoadgenActorParamView `json:"params,omitempty"`
+	Schedules  []LoadgenSchedule       `json:"schedules,omitempty"`
+}
+
+// LoadgenConfig returns the projected loadgen UI config for templateID.
+func LoadgenConfig(templateID string) (LoadgenConfigView, bool) {
+	t := GetTemplate(templateID)
+	if t == nil || t.Loadgen == nil {
+		return LoadgenConfigView{}, false
+	}
+	lg := t.Loadgen
+	view := LoadgenConfigView{
+		DefaultRPS: lg.DefaultRPS,
+		Params:     make([]LoadgenActorParamView, 0, len(lg.Params)),
+	}
+	schedules, ok := LoadgenSchedules(templateID)
+	if ok {
+		view.Schedules = schedules
+	}
+	for _, p := range lg.Params {
+		view.Params = append(view.Params, LoadgenActorParamView{
+			Key:     p.Key,
+			Type:    p.Type,
+			Default: p.Default,
+			Min:     p.Min,
+			Max:     p.Max,
+			Pools:   append([]LoadgenActorPool(nil), p.Pools...),
+			ApplyTo: append([]string(nil), p.ApplyTo...),
+			Tier:    p.Tier,
+		})
+	}
+	return view, true
+}
+
 func loadgenSpecFromDef(def *loadgenDef) *LoadgenSpec {
 	if def == nil {
 		return nil

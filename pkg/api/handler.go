@@ -174,10 +174,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("OPTIONS /deployments/{id}/introspect/{component}/queues", routeAuth(auth, rl, http.HandlerFunc(h.handleIntrospect)))
 	mux.Handle("OPTIONS /deployments/{id}/introspect/{component}/peek/{param}", routeAuth(auth, rl, http.HandlerFunc(h.handleIntrospect)))
 	mux.Handle("POST /deployments/{id}/loadgen", routeAuthExpensive(auth, rl, http.HandlerFunc(h.handleStartLoadGen)))
+	mux.Handle("PATCH /deployments/{id}/loadgen", routeAuth(auth, rl, http.HandlerFunc(h.handleUpdateLoadGen)))
 	mux.Handle("DELETE /deployments/{id}/loadgen", routeAuth(auth, rl, http.HandlerFunc(h.handleStopLoadGen)))
 	mux.Handle("POST /deployments/{id}/chaos", routeAuthExpensive(auth, rl, http.HandlerFunc(h.handleChaos)))
 	mux.Handle("GET /health", routePublic(rl, http.HandlerFunc(h.handleHealth)))
 	mux.Handle("GET /templates", routePublic(rl, http.HandlerFunc(h.handleGetTemplates)))
+	mux.Handle("GET /templates/{id}/loadgen", routePublic(rl, http.HandlerFunc(h.handleGetTemplateLoadgen)))
 	mux.Handle("GET /meta/resource-profiles", routePublic(rl, http.HandlerFunc(h.handleGetResourceProfiles)))
 	mux.Handle("GET /meta/topology-rules", routePublic(rl, http.HandlerFunc(h.handleGetTopologyRules)))
 }
@@ -329,6 +331,17 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleGetTemplates(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(templates.Registry())
+}
+
+func (h *Handler) handleGetTemplateLoadgen(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	view, ok := templates.LoadgenConfig(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("template %q not found or has no loadgen config", id))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(view)
 }
 
 func (h *Handler) handleGetResourceProfiles(w http.ResponseWriter, r *http.Request) {
@@ -860,6 +873,70 @@ func (h *Handler) handleStopLoadGen(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) handleUpdateLoadGen(w http.ResponseWriter, r *http.Request) {
+	namespace := r.PathValue("id")
+	if namespace == "" {
+		writeError(w, http.StatusBadRequest, "missing deployment id")
+		return
+	}
+	if h.store != nil && h.requireOwnership(w, r, namespace) == nil {
+		return
+	}
+	if h.loadgen == nil {
+		writeError(w, http.StatusServiceUnavailable, "load generator unavailable")
+		return
+	}
+	limitJSONBody(w, r)
+
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var body struct {
+		RPS int `json:"rps"`
+	}
+	if err := dec.Decode(&body); err != nil {
+		if isBodyTooLarge(err) {
+			writeError(w, http.StatusBadRequest, "request body too large")
+			return
+		}
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid json: %v", err))
+		return
+	}
+	if err := loadgen.ValidateLiveRPS(body.RPS); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := h.loadgen.Update(r.Context(), namespace, body.RPS); err != nil {
+		if errors.Is(err, loadgen.ErrNotRunning) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if h.eventBus != nil {
+		h.eventBus.Emit(namespace, metrics.Event{
+			Timestamp:   time.Now(),
+			Type:        "action",
+			Source:      "loadgen",
+			Kind:        "loadgen_rate",
+			Audience:    "both",
+			Title:       "Load generator rate updated",
+			Description: fmt.Sprintf("rps=%d", body.RPS),
+			Detail: map[string]string{
+				"rps": strconv.Itoa(body.RPS),
+			},
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status": "updated",
+		"rps":    body.RPS,
+	})
 }
 
 func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request) {

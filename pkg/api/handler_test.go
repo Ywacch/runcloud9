@@ -1175,6 +1175,126 @@ func TestHandleStartLoadGen_unknownSchedule(t *testing.T) {
 	}
 }
 
+func TestHandleGetTemplateLoadgen_socialFeed(t *testing.T) {
+	t.Parallel()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/templates/social-feed/loadgen", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var view templates.LoadgenConfigView
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, s := range view.Schedules {
+		ids[s.ID] = true
+	}
+	if !ids["steady"] || !ids["world_cup_goal"] {
+		t.Fatalf("schedules: %+v", view.Schedules)
+	}
+	found := false
+	for _, p := range view.Params {
+		if p.Key == "celebrityPostPct" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("params missing celebrityPostPct: %+v", view.Params)
+	}
+}
+
+func TestHandleGetTemplateLoadgen_unknown(t *testing.T) {
+	t.Parallel()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/templates/no-such-template/loadgen", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status: want 404, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleUpdateLoadGen_notRunning(t *testing.T) {
+	t.Parallel()
+	lg := loadgen.NewLoadGenerator()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, lg, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := `{"rps":20}`
+	req := httptest.NewRequest(http.MethodPatch, "/deployments/ns-idle/loadgen", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status: want 409, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleUpdateLoadGen_running(t *testing.T) {
+	t.Parallel()
+	lg := loadgen.NewLoadGenerator()
+	bus := metrics.NewEventBus()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, lg, bus)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	start := `{"template":"url-shortener","rps":5,"durationSeconds":30}`
+	req := httptest.NewRequest(http.MethodPost, "/deployments/ns-rate/loadgen", strings.NewReader(start))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("start status: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	patch := `{"rps":20}`
+	req = httptest.NewRequest(http.MethodPatch, "/deployments/ns-rate/loadgen", strings.NewReader(patch))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch status: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	events := bus.Drain("ns-rate")
+	found := false
+	for _, e := range events {
+		if e.Kind == "loadgen_rate" && e.Detail["rps"] == "20" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing loadgen_rate event: %+v", events)
+	}
+	_ = lg.Stop(context.Background(), "ns-rate")
+}
+
+func TestHandleUpdateLoadGen_badRPS(t *testing.T) {
+	t.Parallel()
+	lg := loadgen.NewLoadGenerator()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, lg, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPatch, "/deployments/ns-x/loadgen", strings.NewReader(`{"rps":0}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleStartLoadGen_RequestBodyTooLarge(t *testing.T) {
 	t.Parallel()
 	lg := loadgen.NewLoadGenerator()

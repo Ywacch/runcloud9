@@ -99,17 +99,23 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle("/get/", withRecovery(s.handleGet))       // GET /get/{code}
-	mux.Handle("/set/", withRecovery(s.handleSet))       // POST /set/{code}
-	mux.Handle("/del/", withRecovery(s.handleDel))       // DELETE /del/{code}
-	mux.Handle("/exists/", withRecovery(s.handleExists)) // GET /exists/{code}
-	mux.Handle("/stats/", withRecovery(s.handleStats))   // GET /stats/{code}
+	mux.Handle("/get/", withRecovery(withTrace(s.handleGet)))       // GET /get/{code}
+	mux.Handle("/set/", withRecovery(withTrace(s.handleSet)))       // POST /set/{code}
+	mux.Handle("/del/", withRecovery(withTrace(s.handleDel)))       // DELETE /del/{code}
+	mux.Handle("/exists/", withRecovery(withTrace(s.handleExists))) // GET /exists/{code}
+	mux.Handle("/stats/", withRecovery(withTrace(s.handleStats)))   // GET /stats/{code}
 	mux.Handle("/codes", withRecovery(s.handleCodes))
 	mux.Handle("/health", withRecovery(s.handleHealth))
 	mux.Handle("/health/live", withRecovery(s.handleLive))
 	mux.Handle("/health/ready", withRecovery(s.handleReady))
 	mux.Handle("/metrics", promhttp.Handler())
 	return mux
+}
+
+func withTrace(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		next(w, withRequestContext(r))
+	}
 }
 
 func withRecovery(next http.HandlerFunc) http.HandlerFunc {
@@ -137,18 +143,23 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	start := time.Now()
 	val, err := s.redis.Get(ctx, code).Result()
 	if err == nil {
+		logProxyOp(ctx, "cache_get_hit", code, start)
 		writeJSON(w, http.StatusOK, map[string]string{"value": val, "source": "cache"})
 		return
 	}
+	logProxyOp(ctx, "cache_get_miss", code, start)
 	if !errors.Is(err, redis.Nil) {
 		slog.Warn("redis GET failed", "code", code, "error", err)
 		// treat as miss -> DB fallback depends on strategy
 	}
 
 	// Cache miss: template-driven DB read-through (queries.yaml mounted at deploy time).
+	dbStart := time.Now()
 	payload, dbErr := proxyReadThrough(ctx, s.db.pool, s.rules, code)
+	logProxyOp(ctx, "db_read_through", code, dbStart)
 	if errors.Is(dbErr, errNoMatchingProxyRule) {
 		jsonError(w, http.StatusNotFound, "no matching cache key rule")
 		return
@@ -219,6 +230,7 @@ func (s *Server) handleSet(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Textbook write-through: Redis first, then DB; DEL on DB failure so no phantom cache entry.
+		start := time.Now()
 		if err := writeThrough(ctx, redisKV{s.redis}, s.db, code, req.Value, ttl); err != nil {
 			slog.Error("write-through failed", "code", code, "error", err)
 			msg := "write failed"
@@ -230,9 +242,11 @@ func (s *Server) handleSet(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusInternalServerError, msg)
 			return
 		}
+		logProxyOp(ctx, "cache_set", code, start)
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	case "write-behind":
 		// Opaque JSON cache populate (ecommerce/feeds): no URL validation.
+		start := time.Now()
 		if err := s.redis.Set(ctx, code, req.Value, ttl).Err(); err != nil {
 			slog.Warn("redis SET failed", "code", code, "error", err)
 		}
@@ -240,6 +254,7 @@ func (s *Server) handleSet(w http.ResponseWriter, r *http.Request) {
 		if err := storePendingWrite(ctx, s.redis, code, req.Value); err != nil {
 			slog.Warn("redis SET wb failed", "code", code, "error", err)
 		}
+		logProxyOp(ctx, "cache_set", code, start)
 		// DB write happens in background.
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	default:
@@ -260,9 +275,11 @@ func (s *Server) handleDel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	start := time.Now()
 	if err := s.redis.Del(ctx, code).Err(); err != nil {
 		slog.Warn("redis DEL failed", "code", code, "error", err)
 	}
+	logProxyOp(ctx, "cache_del", code, start)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

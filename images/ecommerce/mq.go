@@ -35,8 +35,23 @@ func NewMQPublisher(host, port, queueName string) (*MQPublisher, error) {
 func (mq *MQPublisher) Publish(ctx context.Context, body []byte) error {
 	return mq.channel.PublishWithContext(ctx, "", mq.queue, false, false, amqp.Publishing{
 		ContentType: "application/json",
+		Headers:     amqpTraceHeaders(ctx),
 		Body:        body,
 	})
+}
+
+func amqpTraceHeaders(ctx context.Context) amqp.Table {
+	h := amqp.Table{}
+	if rid := requestIDFrom(ctx); rid != "" {
+		h["x-request-id"] = rid
+	}
+	if sampledFrom(ctx) {
+		h["x-trace-sample"] = "1"
+	}
+	if len(h) == 0 {
+		return nil
+	}
+	return h
 }
 
 func (mq *MQPublisher) Close() {

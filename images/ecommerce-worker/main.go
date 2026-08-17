@@ -81,6 +81,7 @@ func processOrder(ctx context.Context, pool *pgxpool.Pool, order orderMessage) e
 	}
 	defer tx.Rollback(ctx)
 
+	dbStart := time.Now()
 	tag, err := tx.Exec(ctx,
 		`UPDATE products SET stock = stock - $2 WHERE id = $1 AND stock >= $2`,
 		order.ProductID, order.Quantity,
@@ -88,6 +89,7 @@ func processOrder(ctx context.Context, pool *pgxpool.Pool, order orderMessage) e
 	if err != nil {
 		return err
 	}
+	logWorkerOp(ctx, "db_stock_update", dbStart)
 	if tag.RowsAffected() == 0 {
 		_, err = tx.Exec(ctx, `UPDATE orders SET status = 'failed' WHERE id = $1`, order.OrderID)
 		if err != nil {
@@ -271,10 +273,12 @@ func main() {
 				continue
 			}
 
-			if err := processOrder(ctx, pool, order); err != nil {
+			jobCtx := ctxFromDelivery(ctx, msg)
+			if err := processOrder(jobCtx, pool, order); err != nil {
 				workerErrorsTotal.Inc()
-				slog.Error("order processing failed", "order_id", order.OrderID, "error", err)
+				slog.Error("order processing failed", "order_id", order.OrderID, "error", err, "request_id", requestIDFrom(jobCtx))
 			} else {
+				logWorkerOp(jobCtx, "process_order", start)
 				workerProcessedTotal.Inc()
 			}
 			workerProcessingDuration.Observe(time.Since(start).Seconds())
