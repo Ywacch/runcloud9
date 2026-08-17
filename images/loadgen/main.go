@@ -13,35 +13,16 @@ import (
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/loadgen"
-	vegeta "github.com/tsenart/vegeta/v12/lib"
 )
 
 const listenAddr = ":9100"
 
-type startRequest struct {
-	RPS             int                    `json:"rps"`
-	DurationSeconds int64                  `json:"durationSeconds"`
-	Targets         []targetInput          `json:"targets,omitempty"`
-	Actor           *loadgen.PodActorConfig `json:"actor,omitempty"`
-	Distribution    map[string]int         `json:"distribution,omitempty"`
-}
-
-type targetInput struct {
-	URL    string `json:"url"`
-	Method string `json:"method"`
-	Body   string `json:"body"`
-	Weight int    `json:"weight"`
-	Key    string `json:"key,omitempty"`
-}
-
 type server struct {
 	mu sync.Mutex
 
-	running       bool
-	cancel        context.CancelFunc
-	configuredRPS int
-	distribution  map[string]int
-	startedAt     *time.Time
+	running  bool
+	cancel   context.CancelFunc
+	startedAt *time.Time
 
 	statsMu sync.RWMutex
 	stats   loadgen.LoadStats
@@ -93,16 +74,16 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req startRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var body loadgen.PodStartBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
-	if req.RPS <= 0 {
+	if body.RPS <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rps must be positive"})
 		return
 	}
-	if req.Actor == nil && len(req.Targets) == 0 {
+	if body.Actor == nil && len(body.Targets) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "targets or actor config required"})
 		return
 	}
@@ -121,25 +102,24 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	attackCtx, cancel := context.WithCancel(context.Background())
 	s.running = true
 	s.cancel = cancel
-	s.configuredRPS = req.RPS
-	s.distribution = copyIntMap(req.Distribution)
 	now := time.Now()
 	s.startedAt = &now
 
 	s.statsMu.Lock()
 	s.stats = loadgen.LoadStats{
 		Active:       true,
-		CurrentRPS:   float64(req.RPS),
-		TargetRPS:    float64(req.RPS),
+		CurrentRPS:   float64(body.RPS),
+		TargetRPS:    float64(body.RPS),
+		ScheduleID:   body.ScheduleID,
 		StatusCodes:  map[string]int{},
-		Distribution: copyIntMap(req.Distribution),
+		Distribution: copyIntMap(body.Distribution),
 		StartedAt:    &now,
 	}
 	s.recent = loadgen.LatencyRing{}
 	s.statsMu.Unlock()
 	s.mu.Unlock()
 
-	go s.runAttack(attackCtx, req)
+	go s.runAttack(attackCtx, body)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
 }
@@ -167,7 +147,7 @@ func (s *server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (s *server) runAttack(ctx context.Context, req startRequest) {
+func (s *server) runAttack(ctx context.Context, body loadgen.PodStartBody) {
 	defer func() {
 		s.mu.Lock()
 		s.running = false
@@ -179,93 +159,23 @@ func (s *server) runAttack(ctx context.Context, req startRequest) {
 		s.statsMu.Unlock()
 	}()
 
-	targeter := buildPodTargeter(req)
-	attacker := loadgen.NewVegetaAttacker(req.RPS)
-
-	rate := vegeta.Rate{Freq: req.RPS, Per: time.Second}
-	var attackDur time.Duration
-	if req.DurationSeconds > 0 {
-		attackDur = time.Duration(req.DurationSeconds) * time.Second
+	profile := loadgen.LoadProfile{
+		RPS:             body.RPS,
+		DurationSeconds: body.DurationSeconds,
+		ScheduleID:      body.ScheduleID,
+		Phases:          body.Phases,
+		Distribution:    body.Distribution,
 	}
 
-	results := attacker.Attack(targeter, rate, attackDur, "cloud9-loadgen-pod")
-	tick1s := time.NewTicker(time.Second)
-	tick5s := time.NewTicker(loadgen.IntervalWindow)
-	defer tick1s.Stop()
-	defer tick5s.Stop()
-
-	var cumulative vegeta.Metrics
-	var window vegeta.Metrics
-	var vmMu sync.Mutex
-
-	for {
-		select {
-		case res, ok := <-results:
-			if !ok {
-				vmMu.Lock()
-				s.statsMu.Lock()
-				window = loadgen.CloseInterval(&s.stats, &window, time.Now())
-				cumulative.Close()
-				s.stats.RecentLatenciesMs = s.recent.Snapshot()
-				loadgen.ApplyMetricsUpdate(&s.stats, &cumulative, req.RPS, s.startedAt)
-				if len(s.distribution) > 0 {
-					s.stats.Distribution = copyIntMap(s.distribution)
-				}
-				s.statsMu.Unlock()
-				vmMu.Unlock()
-				return
-			}
-			vmMu.Lock()
-			cumulative.Add(res)
-			window.Add(res)
-			s.recent.Push(res.Latency.Seconds() * 1000)
-			vmMu.Unlock()
-
-		case <-tick1s.C:
-			vmMu.Lock()
-			s.statsMu.Lock()
-			cumulative.Close()
-			s.stats.RecentLatenciesMs = s.recent.Snapshot()
-			loadgen.ApplyMetricsUpdate(&s.stats, &cumulative, req.RPS, s.startedAt)
-			if len(s.distribution) > 0 {
-				s.stats.Distribution = copyIntMap(s.distribution)
-			}
-			s.statsMu.Unlock()
-			vmMu.Unlock()
-
-		case now := <-tick5s.C:
-			vmMu.Lock()
-			s.statsMu.Lock()
-			window = loadgen.CloseInterval(&s.stats, &window, now)
-			s.statsMu.Unlock()
-			vmMu.Unlock()
-
-		case <-ctx.Done():
-			attacker.Stop()
-			return
-		}
-	}
-}
-
-func buildPodTargeter(req startRequest) vegeta.Targeter {
-	if req.Actor != nil {
-		return loadgen.BuildTargeterFromPodActor(*req.Actor)
-	}
-	return loadgen.BuildTargeterFromResolved(podTargetsToResolved(req.Targets))
-}
-
-func podTargetsToResolved(targets []targetInput) []loadgen.ResolvedTarget {
-	out := make([]loadgen.ResolvedTarget, 0, len(targets))
-	for _, t := range targets {
-		out = append(out, loadgen.ResolvedTarget{
-			URL:    t.URL,
-			Method: t.Method,
-			Body:   t.Body,
-			Weight: t.Weight,
-			Key:    t.Key,
-		})
-	}
-	return out
+	loadgen.RunAttackLoop(loadgen.AttackLoopOpts{
+		Ctx:           ctx,
+		Profile:       profile,
+		BuildTargeter: loadgen.PodTargeterBuilder(body),
+		Stats:         &s.stats,
+		StatsMu:       &s.statsMu,
+		Recent:        &s.recent,
+		AttackName:    "cloud9-loadgen-pod",
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

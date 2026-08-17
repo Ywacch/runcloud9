@@ -16,6 +16,7 @@ type LoadgenSpec struct {
 	DefaultRPS int                   `yaml:"defaultRps" json:"defaultRps,omitempty"`
 	Endpoints  []LoadgenEndpointSpec `yaml:"endpoints" json:"endpoints,omitempty"`
 	Params     []LoadgenActorParam   `yaml:"params" json:"params,omitempty"`
+	Schedules  []LoadgenSchedule     `yaml:"schedules" json:"schedules,omitempty"`
 }
 
 type loadgenEndpointDef struct {
@@ -32,6 +33,7 @@ type loadgenDef struct {
 	DefaultRps int                    `yaml:"defaultRps"`
 	Endpoints  []loadgenEndpointDef   `yaml:"endpoints"`
 	Params     []loadgenActorParamDef `yaml:"params"`
+	Schedules  []loadgenScheduleDef   `yaml:"schedules"`
 }
 
 // LoadgenEndpoints returns a deep copy of endpoint specs for templateID.
@@ -70,6 +72,7 @@ func loadgenSpecFromDef(def *loadgenDef) *LoadgenSpec {
 		DefaultRPS: def.DefaultRps,
 		Endpoints:  make([]LoadgenEndpointSpec, 0, len(def.Endpoints)),
 		Params:     make([]LoadgenActorParam, 0, len(def.Params)),
+		Schedules:  loadgenSchedulesFromDef(def.Schedules),
 	}
 	for _, ep := range def.Endpoints {
 		spec.Endpoints = append(spec.Endpoints, LoadgenEndpointSpec(ep))
