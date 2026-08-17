@@ -97,4 +97,7 @@ func TestWithCORS_OPTIONS_NoContent(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://app.example" {
 		t.Fatalf("Allow-Origin = %q", got)
 	}
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, PATCH, DELETE, OPTIONS" {
+		t.Fatalf("Allow-Methods = %q", got)
+	}
 }
