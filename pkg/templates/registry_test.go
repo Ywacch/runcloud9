@@ -460,6 +460,21 @@ func TestLoadgenEndpointsFromYAML_matchLegacyGoMap(t *testing.T) {
 	}
 }
 
+func TestLoadgenSchedulesFromYAML(t *testing.T) {
+	t.Parallel()
+
+	sched, ok := GetLoadgenSchedule("social-feed", "world_cup_goal")
+	if !ok {
+		t.Fatal("world_cup_goal missing")
+	}
+	if len(sched.Phases) != 4 {
+		t.Fatalf("phases len: got %d", len(sched.Phases))
+	}
+	if sched.Phases[1].ActorOverride["celebrityPostPct"] != 90 {
+		t.Fatalf("spike override: %+v", sched.Phases[1])
+	}
+}
+
 func TestLoadgenActorParamsFromYAML(t *testing.T) {
 	t.Parallel()
 

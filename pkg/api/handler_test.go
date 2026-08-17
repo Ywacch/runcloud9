@@ -1157,6 +1157,24 @@ func TestHandleStartLoadGen_URLShortenerOK(t *testing.T) {
 	_ = lg.Stop(context.Background(), "ns-ok")
 }
 
+func TestHandleStartLoadGen_unknownSchedule(t *testing.T) {
+	t.Parallel()
+	lg := loadgen.NewLoadGenerator()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, lg, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := `{"template":"social-feed","rps":10,"scheduleId":"missing-schedule"}`
+	req := httptest.NewRequest(http.MethodPost, "/deployments/ns-bad/loadgen", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleStartLoadGen_RequestBodyTooLarge(t *testing.T) {
 	t.Parallel()
 	lg := loadgen.NewLoadGenerator()

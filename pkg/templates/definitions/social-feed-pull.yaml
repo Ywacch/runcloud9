@@ -52,6 +52,31 @@ loadgen:
       default: 1.0
       min: 1.0
       max: 5.0
+  schedules:
+    - id: steady
+      label: Steady load
+      phases:
+        - durationSeconds: 0
+          rpsMultiplier: 1.0
+    - id: world_cup_goal
+      label: Celebrity post storm
+      phases:
+        - durationSeconds: 60
+          rpsMultiplier: 1.0
+          note: baseline
+        - durationSeconds: 30
+          rpsMultiplier: 4.0
+          endpointBoost:
+            POST /post: 8.0
+          actorOverride:
+            celebrityPostPct: 90
+        - durationSeconds: 45
+          rpsMultiplier: 2.0
+          endpointBoost:
+            GET /feed/{userId}: 3.0
+          note: feed refresh storm
+        - durationSeconds: 0
+          rpsMultiplier: 1.0
 imageKey: social-feed
 appDatabaseMode: always
 prometheusMetrics:

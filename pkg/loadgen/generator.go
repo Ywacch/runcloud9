@@ -39,12 +39,12 @@ type LocalLoadGenerator struct {
 var _ LoadGenerator = (*LocalLoadGenerator)(nil)
 
 type attackSession struct {
-	cancel   context.CancelFunc
-	profile  LoadProfile
-	targeter vegeta.Targeter
-	stats    LoadStats
-	mu       sync.RWMutex // protects stats reads
-	recent   LatencyRing
+	cancel    context.CancelFunc
+	profile   LoadProfile
+	namespace string
+	stats     LoadStats
+	mu        sync.RWMutex // protects stats reads
+	recent    LatencyRing
 }
 
 // NewLocalLoadGenerator returns an in-process vegeta load generator.
@@ -90,15 +90,17 @@ func (lg *LocalLoadGenerator) Start(ctx context.Context, namespace string, profi
 	}
 
 	attackCtx, cancel := context.WithCancel(context.Background())
+	now := time.Now()
 	session := &attackSession{
-		cancel:   cancel,
-		profile:  profile,
-		targeter: plan.BuildTargeter(),
+		cancel:    cancel,
+		profile:   profile,
+		namespace: namespace,
 		stats: LoadStats{
 			Active:       true,
 			CurrentRPS:   float64(profile.RPS),
 			TargetRPS:    float64(profile.RPS),
-			StartedAt:    ptrTime(time.Now()),
+			ScheduleID:   profile.ScheduleID,
+			StartedAt:    ptrTime(now),
 			Distribution: copyDist(plan.Distribution),
 			StatusCodes:  make(map[string]int),
 		},
@@ -152,67 +154,25 @@ func (lg *LocalLoadGenerator) GetStats(namespace string) LoadStats {
 }
 
 func (s *attackSession) run(ctx context.Context, lg *LocalLoadGenerator, namespace string, profile LoadProfile) {
-	attacker := NewVegetaAttacker(profile.RPS)
+	slog.Info("loadgen started", "namespace", namespace, "template", profile.Template, "rps", profile.RPS, "schedule", profile.ScheduleID)
 
-	targeter := s.targeter
-	rate := vegeta.Rate{Freq: profile.RPS, Per: time.Second}
-	attackDur := profile.AttackDuration()
+	RunAttackLoop(AttackLoopOpts{
+		Ctx:             ctx,
+		Profile:         profile,
+		Namespace:       namespace,
+		BuildTargeter:   LocalTargeterBuilder(namespace),
+		Stats:           &s.stats,
+		StatsMu:         &s.mu,
+		Recent:          &s.recent,
+		AttackName:      "cloud9-loadgen",
+		OnNaturalFinish: func() {
+			lg.finish(namespace, s)
+			slog.Info("loadgen attack finished", "namespace", namespace)
+		},
+	})
 
-	slog.Info("loadgen started", "namespace", namespace, "template", profile.Template, "rps", profile.RPS)
-
-	var cumulative vegeta.Metrics
-	var window vegeta.Metrics
-	var vmMu sync.Mutex
-
-	results := attacker.Attack(targeter, rate, attackDur, "cloud9-loadgen")
-	tick1s := time.NewTicker(time.Second)
-	tick5s := time.NewTicker(IntervalWindow)
-	defer tick1s.Stop()
-	defer tick5s.Stop()
-
-	for {
-		select {
-		case res, ok := <-results:
-			if !ok {
-				vmMu.Lock()
-				s.mu.Lock()
-				window = CloseInterval(&s.stats, &window, time.Now())
-				cumulative.Close()
-				s.stats.RecentLatenciesMs = s.recent.Snapshot()
-				ApplyMetricsUpdate(&s.stats, &cumulative, profile.RPS, s.stats.StartedAt)
-				s.mu.Unlock()
-				vmMu.Unlock()
-				lg.finish(namespace, s)
-				slog.Info("loadgen attack finished", "namespace", namespace)
-				return
-			}
-			vmMu.Lock()
-			cumulative.Add(res)
-			window.Add(res)
-			s.recent.Push(res.Latency.Seconds() * 1000)
-			vmMu.Unlock()
-
-		case <-tick1s.C:
-			vmMu.Lock()
-			s.mu.Lock()
-			cumulative.Close()
-			s.stats.RecentLatenciesMs = s.recent.Snapshot()
-			ApplyMetricsUpdate(&s.stats, &cumulative, profile.RPS, s.stats.StartedAt)
-			s.mu.Unlock()
-			vmMu.Unlock()
-
-		case now := <-tick5s.C:
-			vmMu.Lock()
-			s.mu.Lock()
-			window = CloseInterval(&s.stats, &window, now)
-			s.mu.Unlock()
-			vmMu.Unlock()
-
-		case <-ctx.Done():
-			attacker.Stop()
-			slog.Info("loadgen stopped", "namespace", namespace)
-			return
-		}
+	if ctx.Err() != nil {
+		slog.Info("loadgen stopped", "namespace", namespace)
 	}
 }
 

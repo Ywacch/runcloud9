@@ -9,6 +9,8 @@ import (
 type PodStartBody struct {
 	RPS             int              `json:"rps"`
 	DurationSeconds int64            `json:"durationSeconds"`
+	ScheduleID      string           `json:"scheduleId,omitempty"`
+	Phases          []Phase          `json:"phases,omitempty"`
 	Targets         []PodStartTarget `json:"targets,omitempty"`
 	Actor           *PodActorConfig  `json:"actor,omitempty"`
 	Distribution    map[string]int   `json:"distribution,omitempty"`
@@ -33,6 +35,8 @@ func BuildPodStartBody(ctx context.Context, namespace string, profile LoadProfil
 	body := PodStartBody{
 		RPS:             profile.RPS,
 		DurationSeconds: profile.DurationSeconds,
+		ScheduleID:      profile.ScheduleID,
+		Phases:          append([]Phase(nil), profile.Phases...),
 		Distribution:    plan.Distribution,
 	}
 

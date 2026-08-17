@@ -48,6 +48,10 @@ type LoadProfile struct {
 	Distribution map[string]int `json:"distribution"`
 	// ActorParams overrides template-declared actor param defaults (validated against YAML schema).
 	ActorParams map[string]float64 `json:"actorParams,omitempty"`
+	// ScheduleID selects a template-declared load schedule (YAML loadgen.schedules).
+	ScheduleID string `json:"scheduleId,omitempty"`
+	// Phases is resolved from the template schedule during normalization (not sent by clients).
+	Phases []Phase `json:"-"`
 }
 
 // AttackDuration returns vegeta attack duration; 0 means run until Stop().
@@ -79,6 +83,9 @@ type LoadStats struct {
 	StatusCodes       map[string]int `json:"statusCodes"`     // "200" → count, "500" → count
 	Distribution      map[string]int `json:"distribution"`    // effective weights per DistributionKey
 	StartedAt         *time.Time     `json:"startedAt"`       // nil if not active
+	ScheduleID        string         `json:"scheduleId,omitempty"`
+	CurrentPhase      string         `json:"currentPhase,omitempty"`
+	PhaseIndex        int            `json:"phaseIndex,omitempty"`
 }
 
 // DefaultProfile returns default RPS only. Template and distribution come from the handler or JSON.
@@ -120,6 +127,15 @@ func ValidateAndNormalizeProfile(p LoadProfile) (LoadProfile, error) {
 		return p, err
 	}
 	p.ActorParams = values
+
+	phases, err := resolveSchedulePhases(p)
+	if err != nil {
+		return p, err
+	}
+	if err := validatePhaseActorOverrides(p.Template, phases); err != nil {
+		return p, err
+	}
+	p.Phases = phases
 
 	specs, ok := cloneEndpointSpecs(p.Template)
 	if !ok {
