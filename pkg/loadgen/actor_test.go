@@ -1,7 +1,9 @@
 package loadgen
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -108,37 +110,50 @@ func TestActorModel_segmentSkew(t *testing.T) {
 
 func TestActorModel_readAfterPostBoost(t *testing.T) {
 	t.Parallel()
-	specs := []EndpointSpec{
-		{Method: http.MethodPost, PathTemplate: "/post", ParamName: "userId", BodyTemplate: `{"user_id":{{.Param}}}`, Weight: 1},
-		{Method: http.MethodGet, PathTemplate: "/feed/{userId}", ParamName: "userId", Weight: 99},
-	}
-	pools := map[string][]string{"userId": {"111", "222", "333"}}
-	m := newActorModel(
+	postModel := newActorModel(
 		"http://test",
-		specs,
-		map[string]int{"POST /post": 1, "GET /feed/{userId}": 99},
-		pools,
+		[]EndpointSpec{{
+			Method:       http.MethodPost,
+			PathTemplate: "/post",
+			ParamName:    "userId",
+			BodyTemplate: `{"user_id":{{.Param}}}`,
+			Weight:       100,
+		}},
+		nil,
+		map[string][]string{"userId": {"111", "222", "333"}},
 		nil,
 		nil,
 		map[string]float64{"readAfterPostBoost": 100},
 	)
-
-	var posted string
-	for i := 0; i < 100; i++ {
-		rt := m.nextResolved()
-		if rt.Method == http.MethodPost {
-			posted = strings.TrimPrefix(rt.Body, `{"user_id":`)
-			posted = strings.TrimSuffix(posted, "}")
-			break
-		}
+	postRT := postModel.nextResolved()
+	if postRT.Method != http.MethodPost {
+		t.Fatalf("setup: want POST, got %s", postRT.Method)
 	}
+	posted := strings.TrimPrefix(postRT.Body, `{"user_id":`)
+	posted = strings.TrimSuffix(posted, "}")
 	if posted == "" {
-		t.Fatal("failed to observe POST within 100 requests")
+		t.Fatalf("setup: empty posted id from body %q", postRT.Body)
 	}
+
+	readModel := newActorModel(
+		"http://test",
+		[]EndpointSpec{{
+			Method:       http.MethodGet,
+			PathTemplate: "/feed/{userId}",
+			ParamName:    "userId",
+			Weight:       100,
+		}},
+		nil,
+		map[string][]string{"userId": {"111", "222", "333"}},
+		nil,
+		nil,
+		map[string]float64{"readAfterPostBoost": 100},
+	)
+	readModel.lastWrite["userId"] = posted
 
 	matched := 0
 	for i := 0; i < 50; i++ {
-		rt := m.nextResolved()
+		rt := readModel.nextResolved()
 		if strings.Contains(rt.URL, "/feed/"+posted) {
 			matched++
 		}
@@ -149,11 +164,16 @@ func TestActorModel_readAfterPostBoost(t *testing.T) {
 }
 
 func TestProfileToTargetPlan_actorModeForTemplatesWithParams(t *testing.T) {
-	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"userIds": []int{1, 2, 11}})
+	}))
+	defer srv.Close()
+	t.Setenv("LOADGEN_BASE_URL", srv.URL)
+
 	plan, err := profileToTargetPlan(t.Context(), "ns", NormalizeProfile(LoadProfile{
 		Template: "social-feed",
 		RPS:      10,
-		BaseURL:  "http://example",
+		BaseURL:  srv.URL,
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -167,11 +187,16 @@ func TestProfileToTargetPlan_actorModeForTemplatesWithParams(t *testing.T) {
 }
 
 func TestBuildPodStartBody_actorMode(t *testing.T) {
-	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"userIds": []int{1, 2, 11}})
+	}))
+	defer srv.Close()
+	t.Setenv("LOADGEN_BASE_URL", srv.URL)
+
 	body, err := BuildPodStartBody(t.Context(), "ns", NormalizeProfile(LoadProfile{
 		Template: "social-feed",
 		RPS:      10,
-		BaseURL:  "http://example",
+		BaseURL:  srv.URL,
 	}))
 	if err != nil {
 		t.Fatal(err)
