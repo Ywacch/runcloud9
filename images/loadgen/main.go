@@ -19,10 +19,11 @@ import (
 const listenAddr = ":9100"
 
 type startRequest struct {
-	RPS             int            `json:"rps"`
-	DurationSeconds int64          `json:"durationSeconds"`
-	Targets         []targetInput  `json:"targets"`
-	Distribution    map[string]int `json:"distribution,omitempty"`
+	RPS             int                    `json:"rps"`
+	DurationSeconds int64                  `json:"durationSeconds"`
+	Targets         []targetInput          `json:"targets,omitempty"`
+	Actor           *loadgen.PodActorConfig `json:"actor,omitempty"`
+	Distribution    map[string]int         `json:"distribution,omitempty"`
 }
 
 type targetInput struct {
@@ -101,8 +102,8 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rps must be positive"})
 		return
 	}
-	if len(req.Targets) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "targets required"})
+	if req.Actor == nil && len(req.Targets) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "targets or actor config required"})
 		return
 	}
 
@@ -178,7 +179,7 @@ func (s *server) runAttack(ctx context.Context, req startRequest) {
 		s.statsMu.Unlock()
 	}()
 
-	targeter := loadgen.BuildTargeterFromResolved(podTargetsToResolved(req.Targets))
+	targeter := buildPodTargeter(req)
 	attacker := loadgen.NewVegetaAttacker(req.RPS)
 
 	rate := vegeta.Rate{Freq: req.RPS, Per: time.Second}
@@ -244,6 +245,13 @@ func (s *server) runAttack(ctx context.Context, req startRequest) {
 			return
 		}
 	}
+}
+
+func buildPodTargeter(req startRequest) vegeta.Targeter {
+	if req.Actor != nil {
+		return loadgen.BuildTargeterFromPodActor(*req.Actor)
+	}
+	return loadgen.BuildTargeterFromResolved(podTargetsToResolved(req.Targets))
 }
 
 func podTargetsToResolved(targets []targetInput) []loadgen.ResolvedTarget {

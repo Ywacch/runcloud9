@@ -448,12 +448,23 @@ func (s *Server) handleUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, user)
 }
 
+func userPoolSQL(segment string) string {
+	switch segment {
+	case "celebrity":
+		return `SELECT id FROM users WHERE id <= 10 ORDER BY id`
+	case "normal":
+		return `SELECT id FROM users WHERE id > 10 ORDER BY id LIMIT 50`
+	default:
+		return `SELECT id FROM users ORDER BY id LIMIT 50`
+	}
+}
+
 func (s *Server) handleUserPool(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	rows, err := s.db.pool.Query(r.Context(), `SELECT id FROM users ORDER BY id LIMIT 50`)
+	rows, err := s.db.pool.Query(r.Context(), userPoolSQL(r.URL.Query().Get("segment")))
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to fetch user ids")
 		return

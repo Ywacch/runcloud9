@@ -11,29 +11,18 @@ import (
 
 	vegeta "github.com/tsenart/vegeta/v12/lib"
 )
-
-// ResolvedTarget is a fully-built HTTP target for vegeta or the loadgen pod.
-type ResolvedTarget struct {
-	URL    string
-	Method string
-	Body   string
-	Weight int
-	// Key is the DistributionKey endpoint stratum (e.g. "GET /feed/{userId}").
-	Key string
-}
-
-// profileToTargets resolves template endpoints, fetches param pools, and expands targets.
-// profile must already be normalized (call NormalizeProfile first).
-func profileToTargets(ctx context.Context, namespace string, profile LoadProfile) ([]ResolvedTarget, map[string]int, error) {
+// profileToTargetPlan resolves template endpoints into a static or actor-driven attack plan.
+// profile must already be normalized (call ValidateAndNormalizeProfile first).
+func profileToTargetPlan(ctx context.Context, namespace string, profile LoadProfile) (TargetPlan, error) {
 	if profile.Template == "" {
-		return nil, nil, fmt.Errorf("loadgen: template is required")
+		return TargetPlan{}, fmt.Errorf("loadgen: template is required")
 	}
 	specs, ok := cloneEndpointSpecs(profile.Template)
 	if !ok {
-		return nil, nil, fmt.Errorf("loadgen: unknown template %q", profile.Template)
+		return TargetPlan{}, fmt.Errorf("loadgen: unknown template %q", profile.Template)
 	}
 	if len(profile.Distribution) == 0 {
-		return nil, nil, fmt.Errorf("loadgen: no distribution for template %q", profile.Template)
+		return TargetPlan{}, fmt.Errorf("loadgen: no distribution for template %q", profile.Template)
 	}
 	for i := range specs {
 		if w, ok := profile.Distribution[DistributionKey(specs[i])]; ok {
@@ -42,9 +31,28 @@ func profileToTargets(ctx context.Context, namespace string, profile LoadProfile
 	}
 
 	baseURL := resolveLoadgenBaseURL(namespace, profile)
-	pools := fetchParamPools(ctx, baseURL, specs)
 	distribution := EffectiveDistribution(specs)
 
+	paramDefs, hasActor := actorParamsFromTemplate(profile.Template)
+	if hasActor {
+		flatPools := fetchParamPools(ctx, baseURL, specs)
+		segmentPools := actorSegmentPoolsFromTemplate(ctx, baseURL, profile.Template)
+		model := newActorModel(baseURL, specs, profile.Distribution, flatPools, segmentPools, paramDefs, profile.ActorParams)
+		return TargetPlan{Actor: model, Distribution: distribution}, nil
+	}
+
+	targets, err := expandStaticTargets(baseURL, specs, flatPoolsFromSpecs(ctx, baseURL, specs))
+	if err != nil {
+		return TargetPlan{}, err
+	}
+	return TargetPlan{Static: targets, Distribution: distribution}, nil
+}
+
+func flatPoolsFromSpecs(ctx context.Context, baseURL string, specs []EndpointSpec) map[string][]string {
+	return fetchParamPools(ctx, baseURL, specs)
+}
+
+func expandStaticTargets(baseURL string, specs []EndpointSpec, pools map[string][]string) ([]ResolvedTarget, error) {
 	var targets []ResolvedTarget
 	for _, spec := range specs {
 		if spec.Weight <= 0 {
@@ -71,7 +79,7 @@ func profileToTargets(ctx context.Context, namespace string, profile LoadProfile
 		}
 		placeholder := "{" + spec.ParamName + "}"
 		for _, val := range pool {
-			path := strings.Replace(spec.PathTemplate, placeholder, val, 1)
+			path := replacePathParam(spec.PathTemplate, placeholder, val)
 			targets = append(targets, ResolvedTarget{
 				URL:    baseURL + path,
 				Method: spec.Method,
@@ -83,17 +91,31 @@ func profileToTargets(ctx context.Context, namespace string, profile LoadProfile
 	}
 
 	if len(targets) == 0 {
-		return nil, nil, fmt.Errorf("loadgen: no targets for template %q", profile.Template)
+		return nil, fmt.Errorf("loadgen: no targets resolved")
 	}
-	return targets, distribution, nil
+	return targets, nil
+}
+
+func replacePathParam(pathTemplate, placeholder, value string) string {
+	return strings.Replace(pathTemplate, placeholder, value, 1)
+}
+// profileToTargets resolves static targets for callers that do not use actor mode.
+func profileToTargets(ctx context.Context, namespace string, profile LoadProfile) ([]ResolvedTarget, map[string]int, error) {
+	plan, err := profileToTargetPlan(ctx, namespace, profile)
+	if err != nil {
+		return nil, nil, err
+	}
+	if plan.Actor != nil {
+		return nil, plan.Distribution, fmt.Errorf("loadgen: template %q uses actor mode; use profileToTargetPlan", profile.Template)
+	}
+	return plan.Static, plan.Distribution, nil
 }
 
 func expandBodyTemplate(tmpl, param string) string {
 	if tmpl == "" {
 		return ""
 	}
-	out := strings.ReplaceAll(tmpl, "{{.Param}}", param)
-	return out
+	return strings.ReplaceAll(tmpl, "{{.Param}}", param)
 }
 
 // buildTargeterFromResolved creates a vegeta targeter from pre-resolved targets.
@@ -158,7 +180,6 @@ func newWeightedTargeter(list []resolvedWeighted, total int) vegeta.Targeter {
 		if selected.Body != "" {
 			body := strings.ReplaceAll(selected.Body, "{{.Rand}}", strconv.Itoa(rand.Intn(1_000_000)))
 			if strings.Contains(selected.Body, "{{.Param}}") {
-				// Param should already be expanded; leave literal if present.
 				body = strings.ReplaceAll(body, "{{.Param}}", "")
 			}
 			tgt.Body = []byte(body)

@@ -38,6 +38,24 @@ loadgen:
       poolEndpoint: /user-pool
       poolField: userIds
       weight: 10
+  params:
+    - key: celebrityPostPct
+      type: percent
+      default: 5
+      pools:
+        - name: celebrity
+          poolEndpoint: /user-pool?segment=celebrity
+          poolField: userIds
+        - name: normal
+          poolEndpoint: /user-pool?segment=normal
+          poolField: userIds
+      applyTo:
+        - POST /post
+    - key: readAfterPostBoost
+      type: float
+      default: 1.0
+      min: 1.0
+      max: 5.0
 workerImageKey: fanout-worker
 appDatabaseMode: always
 workerTimelineStore: redis
