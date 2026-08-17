@@ -9,11 +9,12 @@ import (
 )
 
 func TestPodLoadGenerator_StartStopGetStats(t *testing.T) {
-	t.Parallel()
-
 	var running bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/code-pool":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string][]string{"codes": {"abc123"}})
 		case r.Method == http.MethodPost && r.URL.Path == "/start":
 			if running {
 				w.WriteHeader(http.StatusConflict)
@@ -25,6 +26,13 @@ func TestPodLoadGenerator_StartStopGetStats(t *testing.T) {
 		case r.Method == http.MethodDelete && r.URL.Path == "/stop":
 			running = false
 			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPatch && r.URL.Path == "/rate":
+			if !running {
+				w.WriteHeader(http.StatusConflict)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
 		case r.Method == http.MethodGet && r.URL.Path == "/metrics":
 			_ = json.NewEncoder(w).Encode(LoadStats{
 				Active:      running,
@@ -39,7 +47,7 @@ func TestPodLoadGenerator_StartStopGetStats(t *testing.T) {
 	defer srv.Close()
 
 	podEndpointOverride = func(string) string { return srv.URL }
-	defer func() { podEndpointOverride = nil }()
+	t.Cleanup(func() { podEndpointOverride = nil })
 
 	p := &PodLoadGenerator{httpClient: srv.Client()}
 	profile := NormalizeProfile(LoadProfile{
@@ -50,6 +58,9 @@ func TestPodLoadGenerator_StartStopGetStats(t *testing.T) {
 
 	if err := p.Start(context.Background(), "ns-test", profile); err != nil {
 		t.Fatalf("Start: %v", err)
+	}
+	if err := p.Update(context.Background(), "ns-test", 80); err != nil {
+		t.Fatalf("Update: %v", err)
 	}
 	stats := p.GetStats("ns-test")
 	if !stats.Active {

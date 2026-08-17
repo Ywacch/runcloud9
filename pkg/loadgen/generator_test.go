@@ -150,3 +150,30 @@ func TestBuildTargeter_SetsXRequestIDHeader(t *testing.T) {
 		t.Fatalf("expected unique IDs per request, got duplicate %q", rida)
 	}
 }
+
+func TestLocalLoadGenerator_UpdateNotRunning(t *testing.T) {
+	t.Parallel()
+	lg := NewLocalLoadGenerator()
+	err := lg.Update(context.Background(), "ns-none", 20)
+	if err != ErrNotRunning {
+		t.Fatalf("got %v want ErrNotRunning", err)
+	}
+}
+
+func TestLocalLoadGenerator_UpdateRunning(t *testing.T) {
+	t.Parallel()
+	lg := NewLocalLoadGenerator()
+	lg.mu.Lock()
+	lg.active["ns-live"] = &attackSession{control: NewAttackControl(10)}
+	lg.mu.Unlock()
+
+	if err := lg.Update(context.Background(), "ns-live", 40); err != nil {
+		t.Fatal(err)
+	}
+	lg.mu.Lock()
+	got := lg.active["ns-live"].control.BaseRPS()
+	lg.mu.Unlock()
+	if got != 40 {
+		t.Fatalf("base rps: got %d want 40", got)
+	}
+}
