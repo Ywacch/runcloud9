@@ -41,7 +41,7 @@ func applyCORSAllowlist(w http.ResponseWriter, r *http.Request, allowed map[stri
 func WithCORS(next http.Handler) http.Handler {
 	allowed := AllowedOriginsFromEnv()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		applyCORSAllowlist(w, r, allowed, "GET, POST, DELETE, OPTIONS")
+		applyCORSAllowlist(w, r, allowed, "GET, POST, PATCH, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
