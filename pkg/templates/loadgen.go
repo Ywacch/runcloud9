@@ -15,6 +15,7 @@ type LoadgenEndpointSpec struct {
 type LoadgenSpec struct {
 	DefaultRPS int                   `yaml:"defaultRps" json:"defaultRps,omitempty"`
 	Endpoints  []LoadgenEndpointSpec `yaml:"endpoints" json:"endpoints,omitempty"`
+	Params     []LoadgenActorParam   `yaml:"params" json:"params,omitempty"`
 }
 
 type loadgenEndpointDef struct {
@@ -28,8 +29,9 @@ type loadgenEndpointDef struct {
 }
 
 type loadgenDef struct {
-	DefaultRps int                  `yaml:"defaultRps"`
-	Endpoints  []loadgenEndpointDef `yaml:"endpoints"`
+	DefaultRps int                    `yaml:"defaultRps"`
+	Endpoints  []loadgenEndpointDef   `yaml:"endpoints"`
+	Params     []loadgenActorParamDef `yaml:"params"`
 }
 
 // LoadgenEndpoints returns a deep copy of endpoint specs for templateID.
@@ -49,6 +51,17 @@ func HasLoadgenEndpoints(templateID string) bool {
 	return ok
 }
 
+// LoadgenParams returns actor param definitions for templateID.
+func LoadgenParams(templateID string) ([]LoadgenActorParam, bool) {
+	t := GetTemplate(templateID)
+	if t == nil || t.Loadgen == nil || len(t.Loadgen.Params) == 0 {
+		return nil, false
+	}
+	out := make([]LoadgenActorParam, len(t.Loadgen.Params))
+	copy(out, t.Loadgen.Params)
+	return out, true
+}
+
 func loadgenSpecFromDef(def *loadgenDef) *LoadgenSpec {
 	if def == nil {
 		return nil
@@ -56,9 +69,25 @@ func loadgenSpecFromDef(def *loadgenDef) *LoadgenSpec {
 	spec := &LoadgenSpec{
 		DefaultRPS: def.DefaultRps,
 		Endpoints:  make([]LoadgenEndpointSpec, 0, len(def.Endpoints)),
+		Params:     make([]LoadgenActorParam, 0, len(def.Params)),
 	}
 	for _, ep := range def.Endpoints {
 		spec.Endpoints = append(spec.Endpoints, LoadgenEndpointSpec(ep))
+	}
+	for _, p := range def.Params {
+		param := LoadgenActorParam{
+			Key:     p.Key,
+			Type:    p.Type,
+			Default: p.Default,
+			Min:     p.Min,
+			Max:     p.Max,
+			ApplyTo: append([]string(nil), p.ApplyTo...),
+			Tier:    p.Tier,
+		}
+		for _, pool := range p.Pools {
+			param.Pools = append(param.Pools, LoadgenActorPool(pool))
+		}
+		spec.Params = append(spec.Params, param)
 	}
 	return spec
 }

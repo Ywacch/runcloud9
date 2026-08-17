@@ -460,6 +460,24 @@ func TestLoadgenEndpointsFromYAML_matchLegacyGoMap(t *testing.T) {
 	}
 }
 
+func TestLoadgenActorParamsFromYAML(t *testing.T) {
+	t.Parallel()
+
+	params, ok := LoadgenParams("social-feed")
+	if !ok || len(params) != 2 {
+		t.Fatalf("social-feed params: ok=%v len=%d", ok, len(params))
+	}
+	if params[0].Key != "celebrityPostPct" || params[0].Default != 5 {
+		t.Fatalf("celebrityPostPct: %+v", params[0])
+	}
+	if len(params[0].Pools) != 2 || params[0].Pools[0].Name != "celebrity" {
+		t.Fatalf("pools: %+v", params[0].Pools)
+	}
+	if params[1].Key != "readAfterPostBoost" || params[1].Min == nil || *params[1].Min != 1 {
+		t.Fatalf("readAfterPostBoost: %+v", params[1])
+	}
+}
+
 func TestSocialFeedPull_NoRedisInTopologyOrPreset(t *testing.T) {
 	t.Parallel()
 	sfp := GetTemplate("social-feed-pull")

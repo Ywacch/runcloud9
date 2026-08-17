@@ -757,8 +757,10 @@ func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 	}
 	limitJSONBody(w, r)
 
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
 	var profile loadgen.LoadProfile
-	err := json.NewDecoder(r.Body).Decode(&profile)
+	err := dec.Decode(&profile)
 	if err != nil {
 		if isBodyTooLarge(err) {
 			writeError(w, http.StatusBadRequest, "request body too large")
@@ -786,7 +788,11 @@ func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	profile = loadgen.NormalizeProfile(profile)
+	profile, err = loadgen.ValidateAndNormalizeProfile(profile)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	if profile.BaseURL == "" && row != nil && designHasLoadBalancer(row.Design) {
 		profile.BaseURL = fmt.Sprintf("http://lb.%s.svc.cluster.local:80", namespace)

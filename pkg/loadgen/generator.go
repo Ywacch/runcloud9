@@ -39,12 +39,12 @@ type LocalLoadGenerator struct {
 var _ LoadGenerator = (*LocalLoadGenerator)(nil)
 
 type attackSession struct {
-	cancel  context.CancelFunc
-	profile LoadProfile
-	targets []ResolvedTarget
-	stats   LoadStats
-	mu      sync.RWMutex // protects stats reads
-	recent  LatencyRing
+	cancel   context.CancelFunc
+	profile  LoadProfile
+	targeter vegeta.Targeter
+	stats    LoadStats
+	mu       sync.RWMutex // protects stats reads
+	recent   LatencyRing
 }
 
 // NewLocalLoadGenerator returns an in-process vegeta load generator.
@@ -76,7 +76,7 @@ func resolveLoadgenBaseURL(namespace string, profile LoadProfile) string {
 // but within the cluster, K8s DNS resolves "app-server.{namespace}" just fine.
 func (lg *LocalLoadGenerator) Start(ctx context.Context, namespace string, profile LoadProfile) error {
 	profile = NormalizeProfile(profile)
-	targets, distribution, err := profileToTargets(ctx, namespace, profile)
+	plan, err := profileToTargetPlan(ctx, namespace, profile)
 	if err != nil {
 		return err
 	}
@@ -91,15 +91,15 @@ func (lg *LocalLoadGenerator) Start(ctx context.Context, namespace string, profi
 
 	attackCtx, cancel := context.WithCancel(context.Background())
 	session := &attackSession{
-		cancel:  cancel,
-		profile: profile,
-		targets: targets,
+		cancel:   cancel,
+		profile:  profile,
+		targeter: plan.BuildTargeter(),
 		stats: LoadStats{
 			Active:       true,
 			CurrentRPS:   float64(profile.RPS),
 			TargetRPS:    float64(profile.RPS),
 			StartedAt:    ptrTime(time.Now()),
-			Distribution: copyDist(distribution),
+			Distribution: copyDist(plan.Distribution),
 			StatusCodes:  make(map[string]int),
 		},
 	}
@@ -154,11 +154,11 @@ func (lg *LocalLoadGenerator) GetStats(namespace string) LoadStats {
 func (s *attackSession) run(ctx context.Context, lg *LocalLoadGenerator, namespace string, profile LoadProfile) {
 	attacker := NewVegetaAttacker(profile.RPS)
 
-	targeter := buildTargeterFromResolved(s.targets)
+	targeter := s.targeter
 	rate := vegeta.Rate{Freq: profile.RPS, Per: time.Second}
 	attackDur := profile.AttackDuration()
 
-	slog.Info("loadgen started", "namespace", namespace, "template", profile.Template, "rps", profile.RPS, "targets", len(s.targets))
+	slog.Info("loadgen started", "namespace", namespace, "template", profile.Template, "rps", profile.RPS)
 
 	var cumulative vegeta.Metrics
 	var window vegeta.Metrics

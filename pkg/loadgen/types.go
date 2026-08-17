@@ -25,6 +25,15 @@ func DistributionKey(s EndpointSpec) string {
 	return s.Method + " " + s.PathTemplate
 }
 
+// ResolvedTarget is a fully expanded HTTP target for vegeta (static mode) or one actor tick.
+type ResolvedTarget struct {
+	URL    string `json:"url"`
+	Method string `json:"method"`
+	Body   string `json:"body"`
+	Weight int    `json:"weight"`
+	Key    string `json:"key,omitempty"`
+}
+
 // LoadProfile defines the traffic shape for a deployment.
 // UNDERSTAND: the frontend sends this when starting/updating load.
 // All fields have defaults so the user can start with just "start"
@@ -37,6 +46,8 @@ type LoadProfile struct {
 	BaseURL string `json:"baseUrl,omitempty"`
 	// Distribution optional override: keys are DistributionKey (e.g. "GET /r/{code}") → weight.
 	Distribution map[string]int `json:"distribution"`
+	// ActorParams overrides template-declared actor param defaults (validated against YAML schema).
+	ActorParams map[string]float64 `json:"actorParams,omitempty"`
 }
 
 // AttackDuration returns vegeta attack duration; 0 means run until Stop().
@@ -51,23 +62,23 @@ func (p LoadProfile) AttackDuration() time.Duration {
 // UNDERSTAND: we embed load stats into the existing metrics stream rather than
 // creating a separate WebSocket — one connection per deployment keeps the frontend simple.
 type LoadStats struct {
-	Active          bool           `json:"active"`          // is load running?
-	CurrentRPS      float64        `json:"currentRps"`      // configured RPS (target); legacy alias for TargetRPS
-	TargetRPS       float64        `json:"targetRps"`       // configured RPS (target)
-	ActualRPS       float64        `json:"actualRps"`       // achieved RPS from Vegeta throughput (cumulative)
-	TotalRequests   uint64         `json:"totalRequests"`   // cumulative since start
-	SuccessRate     float64        `json:"successRate"`     // percentage 0-100
-	MeanLatency     float64        `json:"meanLatency"`     // seconds (cumulative run)
-	P99Latency      float64         `json:"p99Latency"`      // seconds (cumulative run)
-	IntervalP99Ms   float64        `json:"intervalP99Ms"`   // p99 ms in last closed 5s window (client-side)
-	IntervalActualRPS float64      `json:"intervalActualRps"` // RPS in last closed 5s window
-	RecentIntervals []LoadIntervalStats `json:"recentIntervals,omitempty"` // last N closed 5s buckets
+	Active            bool                `json:"active"`          // is load running?
+	CurrentRPS        float64             `json:"currentRps"`      // configured RPS (target); legacy alias for TargetRPS
+	TargetRPS         float64             `json:"targetRps"`       // configured RPS (target)
+	ActualRPS         float64             `json:"actualRps"`       // achieved RPS from Vegeta throughput (cumulative)
+	TotalRequests     uint64              `json:"totalRequests"`   // cumulative since start
+	SuccessRate       float64             `json:"successRate"`     // percentage 0-100
+	MeanLatency       float64             `json:"meanLatency"`     // seconds (cumulative run)
+	P99Latency        float64             `json:"p99Latency"`      // seconds (cumulative run)
+	IntervalP99Ms     float64             `json:"intervalP99Ms"`   // p99 ms in last closed 5s window (client-side)
+	IntervalActualRPS float64             `json:"intervalActualRps"` // RPS in last closed 5s window
+	RecentIntervals   []LoadIntervalStats `json:"recentIntervals,omitempty"` // last N closed 5s buckets
 	// RecentLatenciesMs is a snapshot of the last RecentLatenciesCap request latencies (ms, client-observed).
-	RecentLatenciesMs []float64 `json:"recentLatenciesMs,omitempty"`
-	DurationSeconds float64        `json:"durationSeconds"` // elapsed run time in seconds
-	StatusCodes     map[string]int `json:"statusCodes"`     // "200" → count, "500" → count
-	Distribution    map[string]int `json:"distribution"`    // effective weights per DistributionKey
-	StartedAt       *time.Time     `json:"startedAt"`       // nil if not active
+	RecentLatenciesMs []float64      `json:"recentLatenciesMs,omitempty"`
+	DurationSeconds   float64        `json:"durationSeconds"` // elapsed run time in seconds
+	StatusCodes       map[string]int `json:"statusCodes"`     // "200" → count, "500" → count
+	Distribution      map[string]int `json:"distribution"`    // effective weights per DistributionKey
+	StartedAt         *time.Time     `json:"startedAt"`       // nil if not active
 }
 
 // DefaultProfile returns default RPS only. Template and distribution come from the handler or JSON.
@@ -75,9 +86,15 @@ func DefaultProfile() LoadProfile {
 	return LoadProfile{RPS: 50}
 }
 
-// NormalizeProfile applies defaults and merges distribution from template loadgen endpoints when needed.
-// Template must already be set by the API (from the request body or deployment row); this function never invents a template name.
+// NormalizeProfile applies defaults and merges distribution from template loadgen endpoints.
+// Validation errors are ignored; prefer ValidateAndNormalizeProfile at API boundaries.
 func NormalizeProfile(p LoadProfile) LoadProfile {
+	out, _ := ValidateAndNormalizeProfile(p)
+	return out
+}
+
+// ValidateAndNormalizeProfile applies defaults, validates actor params, and merges distribution.
+func ValidateAndNormalizeProfile(p LoadProfile) (LoadProfile, error) {
 	def := DefaultProfile()
 	if p.RPS <= 0 {
 		if p.Template != "" {
@@ -95,12 +112,18 @@ func NormalizeProfile(p LoadProfile) LoadProfile {
 	}
 
 	if p.Template == "" {
-		return p
+		return p, nil
 	}
+
+	values, err := mergeActorParamValues(p.Template, p.ActorParams)
+	if err != nil {
+		return p, err
+	}
+	p.ActorParams = values
 
 	specs, ok := cloneEndpointSpecs(p.Template)
 	if !ok {
-		return p
+		return p, nil
 	}
 
 	base := make(map[string]int, len(specs))
@@ -114,7 +137,7 @@ func NormalizeProfile(p LoadProfile) LoadProfile {
 		}
 	}
 	p.Distribution = base
-	return p
+	return p, nil
 }
 
 // EffectiveDistribution returns the weight map for a resolved spec slice (after overrides).

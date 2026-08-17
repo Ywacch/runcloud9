@@ -37,43 +37,12 @@ func podEndpoint(namespace string) string {
 	return fmt.Sprintf("http://loadgen.%s.svc.cluster.local:9100", namespace)
 }
 
-type podStartRequest struct {
-	RPS             int            `json:"rps"`
-	DurationSeconds int64          `json:"durationSeconds"`
-	Targets         []podTarget    `json:"targets"`
-	Distribution    map[string]int `json:"distribution,omitempty"`
-}
-
-type podTarget struct {
-	URL    string `json:"url"`
-	Method string `json:"method"`
-	Body   string `json:"body"`
-	Weight int    `json:"weight"`
-	Key    string `json:"key,omitempty"`
-}
-
 // Start resolves targets and POSTs /start on the namespace loadgen pod.
 func (p *PodLoadGenerator) Start(ctx context.Context, namespace string, profile LoadProfile) error {
 	profile = NormalizeProfile(profile)
-	targets, distribution, err := profileToTargets(ctx, namespace, profile)
+	body, err := BuildPodStartBody(ctx, namespace, profile)
 	if err != nil {
 		return err
-	}
-
-	body := podStartRequest{
-		RPS:             profile.RPS,
-		DurationSeconds: profile.DurationSeconds,
-		Distribution:    distribution,
-		Targets:         make([]podTarget, 0, len(targets)),
-	}
-	for _, t := range targets {
-		body.Targets = append(body.Targets, podTarget{
-			URL:    t.URL,
-			Method: t.Method,
-			Body:   t.Body,
-			Weight: t.Weight,
-			Key:    t.Key,
-		})
 	}
 
 	raw, err := json.Marshal(body)
