@@ -154,7 +154,8 @@ func TestBuildTargeter_SetsXRequestIDHeader(t *testing.T) {
 func TestLocalLoadGenerator_UpdateNotRunning(t *testing.T) {
 	t.Parallel()
 	lg := NewLocalLoadGenerator()
-	err := lg.Update(context.Background(), "ns-none", 20)
+	rps := 20
+	err := lg.Update(context.Background(), "ns-none", LiveUpdate{RPS: &rps})
 	if err != ErrNotRunning {
 		t.Fatalf("got %v want ErrNotRunning", err)
 	}
@@ -167,7 +168,8 @@ func TestLocalLoadGenerator_UpdateRunning(t *testing.T) {
 	lg.active["ns-live"] = &attackSession{control: NewAttackControl(10)}
 	lg.mu.Unlock()
 
-	if err := lg.Update(context.Background(), "ns-live", 40); err != nil {
+	rps := 40
+	if err := lg.Update(context.Background(), "ns-live", LiveUpdate{RPS: &rps}); err != nil {
 		t.Fatal(err)
 	}
 	lg.mu.Lock()
@@ -175,5 +177,63 @@ func TestLocalLoadGenerator_UpdateRunning(t *testing.T) {
 	lg.mu.Unlock()
 	if got != 40 {
 		t.Fatalf("base rps: got %d want 40", got)
+	}
+}
+
+func TestLocalLoadGenerator_UpdateMixRunning(t *testing.T) {
+	t.Parallel()
+	lg := NewLocalLoadGenerator()
+	control := NewAttackControl(10)
+	control.SetBaseDistribution(map[string]int{
+		"GET /r/{code}": 80,
+		"POST /shorten": 20,
+	})
+	lg.mu.Lock()
+	lg.active["ns-mix"] = &attackSession{
+		control: control,
+		profile: LoadProfile{Template: "url-shortener"},
+	}
+	lg.mu.Unlock()
+
+	mix := map[string]int{
+		"GET /r/{code}": 50,
+		"POST /shorten": 50,
+	}
+	if err := lg.Update(context.Background(), "ns-mix", LiveUpdate{Distribution: mix}); err != nil {
+		t.Fatal(err)
+	}
+	lg.mu.Lock()
+	got := lg.active["ns-mix"].control.BaseDistribution()
+	gen := lg.active["ns-mix"].control.MixGeneration()
+	lg.mu.Unlock()
+	if got["GET /r/{code}"] != 50 || got["POST /shorten"] != 50 {
+		t.Fatalf("base distribution: got %+v", got)
+	}
+	if gen == 0 {
+		t.Fatal("expected mix generation bump")
+	}
+}
+
+func TestValidateLiveDistribution(t *testing.T) {
+	t.Parallel()
+	valid := map[string]int{
+		"GET /r/{code}": 80,
+		"POST /shorten": 20,
+	}
+	if err := ValidateLiveDistribution("url-shortener", valid); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateLiveDistribution("url-shortener", map[string]int{"GET /r/{code}": 0, "POST /shorten": 0}); err == nil {
+		t.Fatal("expected error for all-zero weights")
+	}
+	if err := ValidateLiveDistribution("url-shortener", map[string]int{"GET /r/{code}": 100}); err == nil {
+		t.Fatal("expected error for missing endpoint key")
+	}
+	if err := ValidateLiveDistribution("url-shortener", map[string]int{
+		"GET /r/{code}": 80,
+		"POST /shorten": 20,
+		"GET /nope":     1,
+	}); err == nil {
+		t.Fatal("expected error for unknown key")
 	}
 }

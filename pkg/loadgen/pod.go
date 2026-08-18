@@ -73,15 +73,21 @@ func (p *PodLoadGenerator) Start(ctx context.Context, namespace string, profile 
 }
 
 type rateUpdateBody struct {
-	RPS int `json:"rps"`
+	RPS          *int           `json:"rps,omitempty"`
+	Distribution map[string]int `json:"distribution,omitempty"`
 }
 
 // Update PATCHes /rate on the namespace loadgen pod.
-func (p *PodLoadGenerator) Update(ctx context.Context, namespace string, rps int) error {
-	if err := ValidateLiveRPS(rps); err != nil {
-		return err
+func (p *PodLoadGenerator) Update(ctx context.Context, namespace string, u LiveUpdate) error {
+	if u.RPS == nil && u.Distribution == nil {
+		return fmt.Errorf("loadgen: update requires rps and/or distribution")
 	}
-	raw, err := json.Marshal(rateUpdateBody{RPS: rps})
+	if u.RPS != nil {
+		if err := ValidateLiveRPS(*u.RPS); err != nil {
+			return err
+		}
+	}
+	raw, err := json.Marshal(rateUpdateBody{RPS: u.RPS, Distribution: u.Distribution})
 	if err != nil {
 		return fmt.Errorf("loadgen pod: encode rate: %w", err)
 	}

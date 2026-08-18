@@ -76,9 +76,17 @@ type LoadgenActorParamView struct {
 	Tier    string             `json:"tier,omitempty"`
 }
 
+// LoadgenEndpointView is one endpoint row in the Load UI contract (no bodyTemplate).
+type LoadgenEndpointView struct {
+	Method       string `json:"method"`
+	PathTemplate string `json:"pathTemplate"`
+	Weight       int    `json:"weight"`
+}
+
 // LoadgenConfigView is the Load UI contract for schedules and actor params.
 type LoadgenConfigView struct {
 	DefaultRPS int                     `json:"defaultRps,omitempty"`
+	Endpoints  []LoadgenEndpointView   `json:"endpoints,omitempty"`
 	Params     []LoadgenActorParamView `json:"params,omitempty"`
 	Schedules  []LoadgenSchedule       `json:"schedules,omitempty"`
 }
@@ -92,7 +100,15 @@ func LoadgenConfig(templateID string) (LoadgenConfigView, bool) {
 	lg := t.Loadgen
 	view := LoadgenConfigView{
 		DefaultRPS: lg.DefaultRPS,
+		Endpoints:  make([]LoadgenEndpointView, 0, len(lg.Endpoints)),
 		Params:     make([]LoadgenActorParamView, 0, len(lg.Params)),
+	}
+	for _, ep := range lg.Endpoints {
+		view.Endpoints = append(view.Endpoints, LoadgenEndpointView{
+			Method:       ep.Method,
+			PathTemplate: ep.PathTemplate,
+			Weight:       ep.Weight,
+		})
 	}
 	schedules, ok := LoadgenSchedules(templateID)
 	if ok {

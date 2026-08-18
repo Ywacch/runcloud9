@@ -62,12 +62,13 @@ func RunAttackLoop(opts AttackLoopOpts) {
 
 		var dist map[string]int
 		if rebuild {
-			phaseProfile := ProfileForPhase(opts.Profile, phase)
-			targeter, d, err := opts.BuildTargeter(opts.Ctx, phaseProfile, phase)
+			baseProfile := opts.Profile
+			baseProfile.Distribution = control.BaseDistribution()
+			targeter, d, err := opts.BuildTargeter(opts.Ctx, baseProfile, phase)
 			if err != nil {
 				slog.Warn("loadgen phase targeter build failed", "error", err, "phase", phaseIdx)
 				targeter = func(tgt *vegeta.Target) error { return nil }
-				d = opts.Profile.Distribution
+				d = control.BaseDistribution()
 			}
 			live.Swap(&targeterState{next: targeter, dist: d})
 			dist = d
@@ -91,6 +92,7 @@ func RunAttackLoop(opts AttackLoopOpts) {
 	phase, phaseIdx := runner.Current(time.Now())
 	targetRPS := applyPhase(phase, phaseIdx, true)
 	lastPhaseIdx := phaseIdx
+	lastMixGen := control.MixGeneration()
 
 	attacker := NewVegetaAttacker(attackerRPSBudget(control.BaseRPS(), opts.Profile.Phases))
 	results := attacker.Attack(live.Targeter(), pacer, opts.Profile.AttackDuration(), opts.AttackName)
@@ -128,9 +130,11 @@ func RunAttackLoop(opts AttackLoopOpts) {
 
 		case now := <-tick1s.C:
 			phase, phaseIdx = runner.Current(now)
-			rebuild := phaseIdx != lastPhaseIdx
+			mixGen := control.MixGeneration()
+			rebuild := phaseIdx != lastPhaseIdx || mixGen != lastMixGen
 			targetRPS = applyPhase(phase, phaseIdx, rebuild)
 			lastPhaseIdx = phaseIdx
+			lastMixGen = mixGen
 			vmMu.Lock()
 			if opts.StatsMu != nil {
 				opts.StatsMu.Lock()
@@ -161,29 +165,29 @@ func RunAttackLoop(opts AttackLoopOpts) {
 
 // LocalTargeterBuilder resolves targets from profile for the in-process generator.
 func LocalTargeterBuilder(namespace string) TargeterBuilder {
-	return func(ctx context.Context, profile LoadProfile, phase Phase) (vegeta.Targeter, map[string]int, error) {
-		_ = phase
-		plan, err := profileToTargetPlan(ctx, namespace, profile)
+	return func(ctx context.Context, base LoadProfile, phase Phase) (vegeta.Targeter, map[string]int, error) {
+		phaseProfile := ProfileForPhase(base, phase)
+		plan, err := profileToTargetPlan(ctx, namespace, phaseProfile)
 		if err != nil {
 			return nil, nil, err
 		}
-		return plan.BuildTargeter(), plan.Distribution, nil
+		return plan.BuildTargeter(), EffectiveDistributionMap(base.Distribution, phase), nil
 	}
 }
 
 // PodTargeterBuilder rebuilds a targeter from pod start payload fields.
 func PodTargeterBuilder(body PodStartBody) TargeterBuilder {
-	return func(ctx context.Context, profile LoadProfile, phase Phase) (vegeta.Targeter, map[string]int, error) {
+	return func(ctx context.Context, base LoadProfile, phase Phase) (vegeta.Targeter, map[string]int, error) {
 		_ = ctx
-		_ = profile
+		baseDist := base.Distribution
 		if body.Actor != nil {
 			cfg := *body.Actor
-			cfg.Distribution = EffectiveDistributionMap(body.Distribution, phase)
+			cfg.Distribution = EffectiveDistributionMap(baseDist, phase)
 			cfg.ParamValues = EffectiveActorParamsMap(body.Actor.ParamValues, phase)
 			return BuildTargeterFromPodActor(cfg), cfg.Distribution, nil
 		}
-		targets := applyPhaseToStaticTargets(body.Targets, body.Distribution, phase)
-		return BuildTargeterFromResolved(targets), EffectiveDistributionMap(body.Distribution, phase), nil
+		targets := applyPhaseToStaticTargets(body.Targets, baseDist, phase)
+		return BuildTargeterFromResolved(targets), EffectiveDistributionMap(baseDist, phase), nil
 	}
 }
 
