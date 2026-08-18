@@ -5,5 +5,5 @@
     "ecommerce-worker":  "git-58a67f4",
     "fanout-worker":  "git-58a67f4",
     "caching-proxy":  "git-58a67f4",
-    "loadgen":  "git-58a67f4"
+    "loadgen":  "git-de48f27"
 }
