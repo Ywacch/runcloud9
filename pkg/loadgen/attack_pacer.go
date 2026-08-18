@@ -12,9 +12,13 @@ import (
 var errNoLiveTargeter = errors.New("loadgen: no live targeter")
 
 // AttackControl is the live handle for an in-flight attack. SetBaseRPS changes
-// the user-selected base rate; the attack loop applies the current phase multiplier.
+// the user-selected base rate; SetBaseDistribution changes base endpoint weights.
+// The attack loop applies the current phase multiplier and rebuilds the targeter
+// when the mix generation changes.
 type AttackControl struct {
-	baseRPS atomic.Uint64
+	baseRPS  atomic.Uint64
+	baseDist atomic.Pointer[map[string]int]
+	mixGen   atomic.Uint64
 }
 
 // NewAttackControl returns a control seeded with baseRPS (minimum 1).
@@ -45,6 +49,37 @@ func (c *AttackControl) BaseRPS() int {
 		return 1
 	}
 	return n
+}
+
+// SetBaseDistribution stores a copy of the user-selected base endpoint weights
+// and bumps the mix generation so the attack loop rebuilds the live targeter.
+func (c *AttackControl) SetBaseDistribution(dist map[string]int) {
+	if c == nil {
+		return
+	}
+	copied := copyIntMap(dist)
+	c.baseDist.Store(&copied)
+	c.mixGen.Add(1)
+}
+
+// BaseDistribution returns a copy of the user-selected base endpoint weights.
+func (c *AttackControl) BaseDistribution() map[string]int {
+	if c == nil {
+		return map[string]int{}
+	}
+	p := c.baseDist.Load()
+	if p == nil {
+		return map[string]int{}
+	}
+	return copyIntMap(*p)
+}
+
+// MixGeneration returns a monotonic counter bumped on each SetBaseDistribution.
+func (c *AttackControl) MixGeneration() uint64 {
+	if c == nil {
+		return 0
+	}
+	return c.mixGen.Load()
 }
 
 // ratePacer implements vegeta.Pacer with a live-updatable target RPS.

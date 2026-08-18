@@ -1208,6 +1208,16 @@ func TestHandleGetTemplateLoadgen_socialFeed(t *testing.T) {
 	if !found {
 		t.Fatalf("params missing celebrityPostPct: %+v", view.Params)
 	}
+	if len(view.Endpoints) != 3 {
+		t.Fatalf("endpoints: want 3, got %+v", view.Endpoints)
+	}
+	weights := map[string]int{}
+	for _, ep := range view.Endpoints {
+		weights[ep.Method+" "+ep.PathTemplate] = ep.Weight
+	}
+	if weights["GET /feed/{userId}"] != 60 || weights["POST /post"] != 30 || weights["GET /users/{userId}"] != 10 {
+		t.Fatalf("endpoint weights: %+v", weights)
+	}
 }
 
 func TestHandleGetTemplateLoadgen_unknown(t *testing.T) {
@@ -1277,6 +1287,60 @@ func TestHandleUpdateLoadGen_running(t *testing.T) {
 		t.Fatalf("missing loadgen_rate event: %+v", events)
 	}
 	_ = lg.Stop(context.Background(), "ns-rate")
+}
+
+func TestHandleUpdateLoadGen_mixRunning(t *testing.T) {
+	t.Parallel()
+	lg := loadgen.NewLoadGenerator()
+	bus := metrics.NewEventBus()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, lg, bus)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	start := `{"template":"url-shortener","rps":5,"durationSeconds":30}`
+	req := httptest.NewRequest(http.MethodPost, "/deployments/ns-mix/loadgen", strings.NewReader(start))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("start status: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	patch := `{"distribution":{"GET /r/{code}":50,"POST /shorten":50}}`
+	req = httptest.NewRequest(http.MethodPatch, "/deployments/ns-mix/loadgen", strings.NewReader(patch))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch status: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	events := bus.Drain("ns-mix")
+	found := false
+	for _, e := range events {
+		if e.Kind == "loadgen_mix" && e.Detail["GET /r/{code}"] == "50" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing loadgen_mix event: %+v", events)
+	}
+	_ = lg.Stop(context.Background(), "ns-mix")
+}
+
+func TestHandleUpdateLoadGen_emptyBody(t *testing.T) {
+	t.Parallel()
+	lg := loadgen.NewLoadGenerator()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, lg, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPatch, "/deployments/ns-x/loadgen", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestHandleUpdateLoadGen_badRPS(t *testing.T) {

@@ -102,6 +102,21 @@ func TestAttackControl_setBaseRPS(t *testing.T) {
 	}
 }
 
+func TestAttackControl_setBaseDistribution(t *testing.T) {
+	t.Parallel()
+	c := NewAttackControl(10)
+	c.SetBaseDistribution(map[string]int{"GET /health": 100})
+	gen := c.MixGeneration()
+	c.SetBaseDistribution(map[string]int{"GET /health": 60, "POST /post": 40})
+	got := c.BaseDistribution()
+	if got["GET /health"] != 60 || got["POST /post"] != 40 {
+		t.Fatalf("got %+v", got)
+	}
+	if c.MixGeneration() <= gen {
+		t.Fatal("expected mix generation to increase")
+	}
+}
+
 func TestValidateLiveRPS(t *testing.T) {
 	t.Parallel()
 	if err := ValidateLiveRPS(0); err == nil {

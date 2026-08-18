@@ -893,7 +893,8 @@ func (h *Handler) handleUpdateLoadGen(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	var body struct {
-		RPS int `json:"rps"`
+		RPS          *int           `json:"rps"`
+		Distribution map[string]int `json:"distribution"`
 	}
 	if err := dec.Decode(&body); err != nil {
 		if isBodyTooLarge(err) {
@@ -903,12 +904,23 @@ func (h *Handler) handleUpdateLoadGen(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid json: %v", err))
 		return
 	}
-	if err := loadgen.ValidateLiveRPS(body.RPS); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if body.RPS == nil && len(body.Distribution) == 0 {
+		writeError(w, http.StatusBadRequest, "rps and/or distribution required")
 		return
 	}
+	if body.RPS != nil {
+		if err := loadgen.ValidateLiveRPS(*body.RPS); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 
-	if err := h.loadgen.Update(r.Context(), namespace, body.RPS); err != nil {
+	update := loadgen.LiveUpdate{RPS: body.RPS}
+	if len(body.Distribution) > 0 {
+		update.Distribution = body.Distribution
+	}
+
+	if err := h.loadgen.Update(r.Context(), namespace, update); err != nil {
 		if errors.Is(err, loadgen.ErrNotRunning) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
@@ -918,25 +930,55 @@ func (h *Handler) handleUpdateLoadGen(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.eventBus != nil {
-		h.eventBus.Emit(namespace, metrics.Event{
-			Timestamp:   time.Now(),
-			Type:        "action",
-			Source:      "loadgen",
-			Kind:        "loadgen_rate",
-			Audience:    "both",
-			Title:       "Load generator rate updated",
-			Description: fmt.Sprintf("rps=%d", body.RPS),
-			Detail: map[string]string{
-				"rps": strconv.Itoa(body.RPS),
-			},
-		})
+		now := time.Now()
+		if len(body.Distribution) > 0 {
+			detail := formatDistributionDetail(body.Distribution)
+			if body.RPS != nil {
+				detail["rps"] = strconv.Itoa(*body.RPS)
+			}
+			h.eventBus.Emit(namespace, metrics.Event{
+				Timestamp:   now,
+				Type:        "action",
+				Source:      "loadgen",
+				Kind:        "loadgen_mix",
+				Audience:    "both",
+				Title:       "Load generator mix updated",
+				Description: fmt.Sprintf("distribution updated (%d endpoints)", len(body.Distribution)),
+				Detail:      detail,
+			})
+		} else if body.RPS != nil {
+			h.eventBus.Emit(namespace, metrics.Event{
+				Timestamp:   now,
+				Type:        "action",
+				Source:      "loadgen",
+				Kind:        "loadgen_rate",
+				Audience:    "both",
+				Title:       "Load generator rate updated",
+				Description: fmt.Sprintf("rps=%d", *body.RPS),
+				Detail: map[string]string{
+					"rps": strconv.Itoa(*body.RPS),
+				},
+			})
+		}
 	}
 
+	resp := map[string]any{"status": "updated"}
+	if body.RPS != nil {
+		resp["rps"] = *body.RPS
+	}
+	if len(body.Distribution) > 0 {
+		resp["distribution"] = body.Distribution
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status": "updated",
-		"rps":    body.RPS,
-	})
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func formatDistributionDetail(dist map[string]int) map[string]string {
+	out := make(map[string]string, len(dist))
+	for k, v := range dist {
+		out[k] = strconv.Itoa(v)
+	}
+	return out
 }
 
 func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request) {

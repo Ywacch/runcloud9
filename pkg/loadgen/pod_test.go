@@ -59,7 +59,7 @@ func TestPodLoadGenerator_StartStopGetStats(t *testing.T) {
 	if err := p.Start(context.Background(), "ns-test", profile); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if err := p.Update(context.Background(), "ns-test", 80); err != nil {
+	if err := p.Update(context.Background(), "ns-test", LiveUpdate{RPS: intPtr(80)}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	stats := p.GetStats("ns-test")
@@ -70,3 +70,5 @@ func TestPodLoadGenerator_StartStopGetStats(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 }
+
+func intPtr(n int) *int { return &n }

@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -24,6 +25,8 @@ type server struct {
 	cancel    context.CancelFunc
 	startedAt *time.Time
 	control   *loadgen.AttackControl
+
+	allowedDistKeys map[string]struct{}
 
 	statsMu sync.RWMutex
 	stats   loadgen.LoadStats
@@ -105,7 +108,9 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	s.running = true
 	s.cancel = cancel
 	control := loadgen.NewAttackControl(body.RPS)
+	control.SetBaseDistribution(body.Distribution)
 	s.control = control
+	s.allowedDistKeys = distKeySet(body.Distribution)
 	now := time.Now()
 	s.startedAt = &now
 
@@ -130,15 +135,28 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleRate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		RPS int `json:"rps"`
+		RPS          *int           `json:"rps"`
+		Distribution map[string]int `json:"distribution"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
-	if err := loadgen.ValidateLiveRPS(body.RPS); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if body.RPS == nil && len(body.Distribution) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rps and/or distribution required"})
 		return
+	}
+	if body.RPS != nil {
+		if err := loadgen.ValidateLiveRPS(*body.RPS); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	if len(body.Distribution) > 0 {
+		if err := validatePodDistribution(s.allowedDistKeys, body.Distribution); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 
 	s.mu.Lock()
@@ -147,10 +165,22 @@ func (s *server) handleRate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "load not running"})
 		return
 	}
-	s.control.SetBaseRPS(body.RPS)
+	if body.RPS != nil {
+		s.control.SetBaseRPS(*body.RPS)
+	}
+	if len(body.Distribution) > 0 {
+		s.control.SetBaseDistribution(body.Distribution)
+	}
 	s.mu.Unlock()
 
-	writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "rps": body.RPS})
+	resp := map[string]any{"status": "updated"}
+	if body.RPS != nil {
+		resp["rps"] = *body.RPS
+	}
+	if len(body.Distribution) > 0 {
+		resp["distribution"] = body.Distribution
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *server) handleStop(w http.ResponseWriter, r *http.Request) {
@@ -225,4 +255,37 @@ func copyIntMap(m map[string]int) map[string]int {
 		out[k] = v
 	}
 	return out
+}
+
+func distKeySet(m map[string]int) map[string]struct{} {
+	out := make(map[string]struct{}, len(m))
+	for k := range m {
+		out[k] = struct{}{}
+	}
+	return out
+}
+
+func validatePodDistribution(allowed map[string]struct{}, dist map[string]int) error {
+	if len(allowed) == 0 {
+		return fmt.Errorf("loadgen: no distribution keys configured")
+	}
+	for key := range allowed {
+		if _, ok := dist[key]; !ok {
+			return fmt.Errorf("loadgen: distribution missing endpoint %q", key)
+		}
+	}
+	sum := 0
+	for key, weight := range dist {
+		if _, ok := allowed[key]; !ok {
+			return fmt.Errorf("loadgen: unknown distribution key %q", key)
+		}
+		if weight < 0 {
+			return fmt.Errorf("loadgen: distribution weight for %q must be >= 0", key)
+		}
+		sum += weight
+	}
+	if sum <= 0 {
+		return fmt.Errorf("loadgen: distribution weights must sum to greater than 0")
+	}
+	return nil
 }

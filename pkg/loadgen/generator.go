@@ -24,8 +24,14 @@ import (
 type LoadGenerator interface {
 	Start(ctx context.Context, namespace string, profile LoadProfile) error
 	Stop(ctx context.Context, namespace string) error
-	Update(ctx context.Context, namespace string, rps int) error
+	Update(ctx context.Context, namespace string, u LiveUpdate) error
 	GetStats(namespace string) LoadStats
+}
+
+// LiveUpdate carries optional live RPS and/or endpoint-mix changes for a running attack.
+type LiveUpdate struct {
+	RPS          *int
+	Distribution map[string]int // nil = do not change mix
 }
 
 // ErrNotRunning is returned by Update when no attack is active for the namespace.
@@ -103,6 +109,7 @@ func (lg *LocalLoadGenerator) Start(ctx context.Context, namespace string, profi
 	attackCtx, cancel := context.WithCancel(context.Background())
 	now := time.Now()
 	control := NewAttackControl(profile.RPS)
+	control.SetBaseDistribution(profile.Distribution)
 	session := &attackSession{
 		cancel:    cancel,
 		control:   control,
@@ -124,11 +131,16 @@ func (lg *LocalLoadGenerator) Start(ctx context.Context, namespace string, profi
 	return nil
 }
 
-// Update changes the base RPS of a running attack without stopping it.
-func (lg *LocalLoadGenerator) Update(ctx context.Context, namespace string, rps int) error {
+// Update changes the base RPS and/or endpoint mix of a running attack without stopping it.
+func (lg *LocalLoadGenerator) Update(ctx context.Context, namespace string, u LiveUpdate) error {
 	_ = ctx
-	if err := ValidateLiveRPS(rps); err != nil {
-		return err
+	if u.RPS == nil && u.Distribution == nil {
+		return fmt.Errorf("loadgen: update requires rps and/or distribution")
+	}
+	if u.RPS != nil {
+		if err := ValidateLiveRPS(*u.RPS); err != nil {
+			return err
+		}
 	}
 	lg.mu.Lock()
 	session, ok := lg.active[namespace]
@@ -136,7 +148,17 @@ func (lg *LocalLoadGenerator) Update(ctx context.Context, namespace string, rps 
 	if !ok || session == nil || session.control == nil {
 		return ErrNotRunning
 	}
-	session.control.SetBaseRPS(rps)
+	if u.Distribution != nil {
+		if err := ValidateLiveDistribution(session.profile.Template, u.Distribution); err != nil {
+			return err
+		}
+	}
+	if u.RPS != nil {
+		session.control.SetBaseRPS(*u.RPS)
+	}
+	if u.Distribution != nil {
+		session.control.SetBaseDistribution(u.Distribution)
+	}
 	return nil
 }
 
@@ -447,6 +469,44 @@ func ValidateLiveRPS(rps int) error {
 	}
 	if rps > maxLiveRPS {
 		return fmt.Errorf("loadgen: rps must be at most %d", maxLiveRPS)
+	}
+	return nil
+}
+
+// ValidateLiveDistribution rejects unknown keys, negative weights, or all-zero mixes.
+// Every endpoint declared for templateID must appear in dist.
+func ValidateLiveDistribution(templateID string, dist map[string]int) error {
+	if templateID == "" {
+		return fmt.Errorf("loadgen: template is required for distribution validation")
+	}
+	specs, ok := cloneEndpointSpecs(templateID)
+	if !ok {
+		return fmt.Errorf("loadgen: unknown template %q", templateID)
+	}
+	if len(dist) == 0 {
+		return fmt.Errorf("loadgen: distribution must not be empty")
+	}
+	expected := make(map[string]struct{}, len(specs))
+	for _, s := range specs {
+		expected[DistributionKey(s)] = struct{}{}
+	}
+	for key := range expected {
+		if _, present := dist[key]; !present {
+			return fmt.Errorf("loadgen: distribution missing endpoint %q", key)
+		}
+	}
+	sum := 0
+	for key, weight := range dist {
+		if _, present := expected[key]; !present {
+			return fmt.Errorf("loadgen: unknown distribution key %q", key)
+		}
+		if weight < 0 {
+			return fmt.Errorf("loadgen: distribution weight for %q must be >= 0", key)
+		}
+		sum += weight
+	}
+	if sum <= 0 {
+		return fmt.Errorf("loadgen: distribution weights must sum to greater than 0")
 	}
 	return nil
 }
