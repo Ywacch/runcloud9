@@ -7,9 +7,9 @@ import (
 
 const defaultEventsSummaryMax = 10
 
-// BuildEventsSummary scans downsampled session history (oldest → newest) for threshold and
-// cascade events. Each ruleId appears at most once, using the latest snapshot's copy. The slice
-// is sorted with cascades before thresholds, then by timestamp descending, capped at maxEntries
+// BuildEventsSummary scans downsampled session history (oldest → newest) for threshold, cascade,
+// and invariant events. Each ruleId appears at most once, using the latest snapshot's copy. The slice
+// is sorted with cascades before invariants before thresholds, then by timestamp descending, capped at maxEntries
 // (if maxEntries <= 0, 10 is used). Each map is JSON-friendly for metrics_summary persistence.
 func BuildEventsSummary(hist []DeploymentMetrics, maxEntries int) []map[string]any {
 	if maxEntries <= 0 {
@@ -28,7 +28,7 @@ func BuildEventsSummary(hist []DeploymentMetrics, maxEntries int) []map[string]a
 	byRule := make(map[string]acc)
 	for _, snap := range hist {
 		for _, ev := range snap.Events {
-			if ev.Type != "threshold" && ev.Type != "cascade" {
+			if ev.Type != "threshold" && ev.Type != "cascade" && ev.Type != "invariant" {
 				continue
 			}
 			if ev.RuleID == "" {
@@ -51,15 +51,9 @@ func BuildEventsSummary(hist []DeploymentMetrics, maxEntries int) []map[string]a
 		out = append(out, v)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		ti, tj := out[i].typ, out[j].typ
-		if ti != tj {
-			if ti == "cascade" {
-				return true
-			}
-			if tj == "cascade" {
-				return false
-			}
-			return ti < tj
+		ri, rj := eventSummaryRank(out[i].typ), eventSummaryRank(out[j].typ)
+		if ri != rj {
+			return ri < rj
 		}
 		return out[i].ts.After(out[j].ts)
 	})
@@ -80,4 +74,17 @@ func BuildEventsSummary(hist []DeploymentMetrics, maxEntries int) []map[string]a
 		}
 	}
 	return rows
+}
+
+func eventSummaryRank(typ string) int {
+	switch typ {
+	case "cascade":
+		return 0
+	case "invariant":
+		return 1
+	case "threshold":
+		return 2
+	default:
+		return 3
+	}
 }

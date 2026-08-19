@@ -56,6 +56,48 @@ func TestBuildEventsSummary_DedupSortCap(t *testing.T) {
 	}
 }
 
+func TestBuildEventsSummary_RetainsInvariant(t *testing.T) {
+	t.Parallel()
+	ts := time.Now()
+	hist := []DeploymentMetrics{{
+		Timestamp: ts,
+		Events: []Event{{
+			Timestamp: ts,
+			Type:      "invariant",
+			RuleID:    "oversell",
+			Title:     "Oversell",
+			Narrative: "sold > capacity",
+		}},
+	}}
+	got := BuildEventsSummary(hist, 10)
+	if len(got) != 1 {
+		t.Fatalf("want 1 row, got %d", len(got))
+	}
+	if got[0]["type"] != "invariant" || got[0]["ruleId"] != "oversell" {
+		t.Fatalf("row: %#v", got[0])
+	}
+}
+
+func TestBuildEventsSummary_InvariantSortOrder(t *testing.T) {
+	t.Parallel()
+	ts := time.Now()
+	hist := []DeploymentMetrics{{
+		Timestamp: ts,
+		Events: []Event{
+			{Timestamp: ts, Type: "threshold", RuleID: "db_latency", Title: "DB"},
+			{Timestamp: ts, Type: "invariant", RuleID: "oversell", Title: "Over"},
+			{Timestamp: ts, Type: "cascade", RuleID: "cascade_cache_db", Title: "Cas"},
+		},
+	}}
+	got := BuildEventsSummary(hist, 10)
+	if len(got) != 3 {
+		t.Fatalf("want 3 rows, got %d", len(got))
+	}
+	if got[0]["type"] != "cascade" || got[1]["type"] != "invariant" || got[2]["type"] != "threshold" {
+		t.Fatalf("sort order: %#v", got)
+	}
+}
+
 func TestBuildEventsSummary_SkipsActionAndEmptyRule(t *testing.T) {
 	t.Parallel()
 	ts := time.Now()

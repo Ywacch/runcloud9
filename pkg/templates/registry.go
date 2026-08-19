@@ -61,6 +61,8 @@ type TemplateSpec struct {
 	Introspection introspect.Spec `json:"introspection,omitempty"`
 	// PrometheusMetrics defines template-specific PromQL for templateMetrics (from YAML profile or inline).
 	PrometheusMetrics *PrometheusMetricsSpec `json:"-"`
+	// InvariantCheckers defines YAML-driven L1 checks against templateMetrics keys.
+	InvariantCheckers []InvariantRule `json:"-"`
 }
 
 // PresetNode is a fully-configured node for canvas population.
@@ -144,6 +146,7 @@ type templateDef struct {
 	Introspection        introspect.Spec        `yaml:"introspection"`
 	PrometheusMetricsRef string                 `yaml:"prometheusMetricsRef"`
 	PrometheusMetrics    *PrometheusMetricsSpec `yaml:"prometheusMetrics"`
+	InvariantCheckers    []InvariantRule        `yaml:"invariantCheckers"`
 }
 
 type presetYAML struct {
@@ -309,6 +312,13 @@ func defToSpec(def *templateDef) TemplateSpec {
 	}
 	if pm := resolvePrometheusMetrics(def); pm != nil {
 		spec.PrometheusMetrics = pm
+	}
+	if len(def.InvariantCheckers) > 0 {
+		rules, err := validateInvariantRules(def.InvariantCheckers)
+		if err != nil {
+			panic(fmt.Sprintf("templates: %s: %v", def.ID, err))
+		}
+		spec.InvariantCheckers = rules
 	}
 	if def.Preset != nil {
 		spec.Preset = presetFromYAML(def.Preset)
