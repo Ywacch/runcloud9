@@ -21,18 +21,18 @@ type LoadgenActorParam struct {
 }
 
 type loadgenActorPoolDef struct {
-	Name         string `yaml:"name"`
-	PoolEndpoint string `yaml:"poolEndpoint"`
-	PoolField    string `yaml:"poolField"`
+	Name         string `yaml:"name" json:"name"`
+	PoolEndpoint string `yaml:"poolEndpoint" json:"poolEndpoint"`
+	PoolField    string `yaml:"poolField" json:"poolField"`
 }
 
 type loadgenActorParamDef struct {
-	Key     string                `yaml:"key"`
-	Type    string                `yaml:"type"`
-	Default float64               `yaml:"default"`
-	Min     *float64              `yaml:"min"`
-	Max     *float64              `yaml:"max"`
-	Pools   []loadgenActorPoolDef `yaml:"pools"`
-	ApplyTo []string              `yaml:"applyTo"`
-	Tier    string                `yaml:"tier"`
+	Key     string                `yaml:"key" json:"key"`
+	Type    string                `yaml:"type" json:"type"`
+	Default float64               `yaml:"default" json:"default"`
+	Min     *float64              `yaml:"min" json:"min,omitempty"`
+	Max     *float64              `yaml:"max" json:"max,omitempty"`
+	Pools   []loadgenActorPoolDef `yaml:"pools" json:"pools,omitempty"`
+	ApplyTo []string              `yaml:"applyTo" json:"applyTo,omitempty"`
+	Tier    string                `yaml:"tier" json:"tier,omitempty"`
 }

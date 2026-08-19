@@ -11,21 +11,24 @@ import (
 // storytelling is jsonb matching StorytellingSpec (roles / edges / journeys / narrativeContext).
 // supportsWorker is derived from worker_image_key (same as embedded YAML).
 type cloudTemplateRow struct {
-	ID             string          `json:"id"`
-	Name           string          `json:"name"`
-	Description    string          `json:"description"`
-	Components     int             `json:"components"`
-	Bottleneck     string          `json:"bottleneck"`
-	Available      bool            `json:"available"`
-	Premium        bool            `json:"premium"`
-	Tags           []string        `json:"tags"`
-	Simulatable    bool            `json:"simulatable"`
-	Deployable     bool            `json:"deployable"`
-	ImageKey       string          `json:"image_key"`
-	WorkerImageKey string          `json:"worker_image_key"`
-	Topology       json.RawMessage `json:"topology"`
-	Seed           json.RawMessage `json:"seed"`
-	Storytelling   json.RawMessage `json:"storytelling"`
+	ID                string          `json:"id"`
+	Name              string          `json:"name"`
+	Description       string          `json:"description"`
+	Components        int             `json:"components"`
+	Bottleneck        string          `json:"bottleneck"`
+	Available         bool            `json:"available"`
+	Premium           bool            `json:"premium"`
+	Tags              []string        `json:"tags"`
+	Simulatable       bool            `json:"simulatable"`
+	Deployable        bool            `json:"deployable"`
+	ImageKey          string          `json:"image_key"`
+	WorkerImageKey    string          `json:"worker_image_key"`
+	Topology          json.RawMessage `json:"topology"`
+	Seed              json.RawMessage `json:"seed"`
+	Storytelling      json.RawMessage `json:"storytelling"`
+	Loadgen           json.RawMessage `json:"loadgen"`
+	PrometheusMetrics json.RawMessage `json:"prometheus_metrics"`
+	InvariantCheckers json.RawMessage `json:"invariant_checkers"`
 }
 
 type topologyJSONEntry struct {
@@ -91,18 +94,41 @@ func (row *cloudTemplateRow) toTemplateDef() (*templateDef, error) {
 		}
 		def.Storytelling = &story
 	}
+	if len(row.Loadgen) > 0 && string(row.Loadgen) != "null" {
+		var lg loadgenDef
+		if err := json.Unmarshal(row.Loadgen, &lg); err != nil {
+			return nil, err
+		}
+		def.Loadgen = &lg
+	}
+	if len(row.PrometheusMetrics) > 0 && string(row.PrometheusMetrics) != "null" {
+		var pm PrometheusMetricsSpec
+		if err := json.Unmarshal(row.PrometheusMetrics, &pm); err != nil {
+			return nil, err
+		}
+		def.PrometheusMetrics = &pm
+	}
+	if len(row.InvariantCheckers) > 0 && string(row.InvariantCheckers) != "null" {
+		var rules []InvariantRule
+		if err := json.Unmarshal(row.InvariantCheckers, &rules); err != nil {
+			return nil, err
+		}
+		def.InvariantCheckers = rules
+	}
 	return def, nil
 }
 
 // cloudTemplatesSelect is the PostgREST column list for premium template rows.
-const cloudTemplatesSelect = "id,name,description,components,bottleneck,available,premium,tags,simulatable,deployable,image_key,worker_image_key,topology,seed,storytelling"
+const cloudTemplatesSelect = "id,name,description,components,bottleneck,available,premium,tags,simulatable,deployable,image_key,worker_image_key,topology,seed,storytelling,loadgen,prometheus_metrics,invariant_checkers"
 
 // FetchRemoteTemplates loads premium rows from Supabase cloud_templates.
 // On failure (network, missing table, parse error) it logs and returns an empty slice — no error —
 // so self-hosted and local runs without premium data keep working.
 //
 // Requires cloud_templates.storytelling (jsonb, nullable) for edge/role/journey parity with
-// embedded YAML. If the column is missing, the select fails and premium rows are skipped.
+// embedded YAML. Optional jsonb columns loadgen, prometheus_metrics, and invariant_checkers
+// supply premium template load/metrics/invariant config. If storytelling is missing, the select
+// fails and premium rows are skipped.
 func FetchRemoteTemplates(client *supabase.Client) ([]TemplateSpec, error) {
 	if client == nil {
 		return []TemplateSpec{}, nil

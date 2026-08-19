@@ -17,17 +17,17 @@ type LoadgenPhaseSpec struct {
 }
 
 type loadgenScheduleDef struct {
-	ID     string            `yaml:"id"`
-	Label  string            `yaml:"label"`
-	Phases []loadgenPhaseDef `yaml:"phases"`
+	ID     string            `yaml:"id" json:"id"`
+	Label  string            `yaml:"label" json:"label"`
+	Phases []loadgenPhaseDef `yaml:"phases" json:"phases"`
 }
 
 type loadgenPhaseDef struct {
-	DurationSeconds int                `yaml:"durationSeconds"`
-	RpsMultiplier   float64            `yaml:"rpsMultiplier"`
-	EndpointBoost   map[string]float64 `yaml:"endpointBoost"`
-	ActorOverride   map[string]float64 `yaml:"actorOverride"`
-	Note            string             `yaml:"note"`
+	DurationSeconds int                `yaml:"durationSeconds" json:"durationSeconds"`
+	RpsMultiplier   float64            `yaml:"rpsMultiplier" json:"rpsMultiplier"`
+	EndpointBoost   map[string]float64 `yaml:"endpointBoost" json:"endpointBoost,omitempty"`
+	ActorOverride   map[string]float64 `yaml:"actorOverride" json:"actorOverride,omitempty"`
+	Note            string             `yaml:"note" json:"note,omitempty"`
 }
 
 // GetLoadgenSchedule returns one schedule by id for templateID.
