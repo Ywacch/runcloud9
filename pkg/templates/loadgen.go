@@ -20,20 +20,20 @@ type LoadgenSpec struct {
 }
 
 type loadgenEndpointDef struct {
-	Method       string `yaml:"method"`
-	PathTemplate string `yaml:"pathTemplate"`
-	ParamName    string `yaml:"paramName"`
-	PoolEndpoint string `yaml:"poolEndpoint"`
-	PoolField    string `yaml:"poolField"`
-	BodyTemplate string `yaml:"bodyTemplate"`
-	Weight       int    `yaml:"weight"`
+	Method       string `yaml:"method" json:"method"`
+	PathTemplate string `yaml:"pathTemplate" json:"pathTemplate"`
+	ParamName    string `yaml:"paramName" json:"paramName"`
+	PoolEndpoint string `yaml:"poolEndpoint" json:"poolEndpoint"`
+	PoolField    string `yaml:"poolField" json:"poolField"`
+	BodyTemplate string `yaml:"bodyTemplate" json:"bodyTemplate"`
+	Weight       int    `yaml:"weight" json:"weight"`
 }
 
 type loadgenDef struct {
-	DefaultRps int                    `yaml:"defaultRps"`
-	Endpoints  []loadgenEndpointDef   `yaml:"endpoints"`
-	Params     []loadgenActorParamDef `yaml:"params"`
-	Schedules  []loadgenScheduleDef   `yaml:"schedules"`
+	DefaultRps int                    `yaml:"defaultRps" json:"defaultRps"`
+	Endpoints  []loadgenEndpointDef   `yaml:"endpoints" json:"endpoints"`
+	Params     []loadgenActorParamDef `yaml:"params" json:"params"`
+	Schedules  []loadgenScheduleDef   `yaml:"schedules" json:"schedules"`
 }
 
 // LoadgenEndpoints returns a deep copy of endpoint specs for templateID.

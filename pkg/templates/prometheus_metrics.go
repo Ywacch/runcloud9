@@ -10,22 +10,22 @@ const NSSelectorPlaceholder = "<<ns>>"
 
 // PrometheusMetricQueryDef is one PromQL query published as templateMetrics[key].
 type PrometheusMetricQueryDef struct {
-	Key  string `yaml:"key"`
-	Expr string `yaml:"expr"`
+	Key  string `yaml:"key" json:"key"`
+	Expr string `yaml:"expr" json:"expr"`
 }
 
 // PrometheusMetricAugmentDef copies a value from a collected component path into templateMetrics.
 type PrometheusMetricAugmentDef struct {
-	Key            string `yaml:"key"`
-	Component      string `yaml:"component"`
-	Path           string `yaml:"path"`
-	OnlyIfPositive bool   `yaml:"onlyIfPositive,omitempty"`
+	Key            string `yaml:"key" json:"key"`
+	Component      string `yaml:"component" json:"component"`
+	Path           string `yaml:"path" json:"path"`
+	OnlyIfPositive bool   `yaml:"onlyIfPositive,omitempty" json:"onlyIfPositive,omitempty"`
 }
 
 // PrometheusMetricsSpec lists template-specific PromQL and optional component augments.
 type PrometheusMetricsSpec struct {
-	Queries  []PrometheusMetricQueryDef   `yaml:"queries"`
-	Augments []PrometheusMetricAugmentDef `yaml:"augments,omitempty"`
+	Queries  []PrometheusMetricQueryDef   `yaml:"queries" json:"queries"`
+	Augments []PrometheusMetricAugmentDef `yaml:"augments,omitempty" json:"augments,omitempty"`
 }
 
 var augmentPathPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*(\.[A-Za-z][A-Za-z0-9]*)*$`)
