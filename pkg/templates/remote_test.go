@@ -170,18 +170,14 @@ func TestCloudTemplateRow_toTemplateDef_PremiumConfigJSONB(t *testing.T) {
 	}
 
 	spec := defToSpec(def)
-	restore := ReplaceLoadedTemplatesForTest([]TemplateSpec{spec})
-	defer restore()
-
-	view, ok := LoadgenConfig("ticket-drop")
-	if !ok {
-		t.Fatal("LoadgenConfig not found")
+	if spec.Loadgen == nil || len(spec.Loadgen.Schedules) != 1 {
+		t.Fatalf("spec loadgen schedules: %+v", spec.Loadgen)
 	}
-	if len(view.Schedules) != 1 || view.Schedules[0].ID != "drop" {
-		t.Fatalf("schedules: %+v", view.Schedules)
+	if spec.Loadgen.Schedules[0].ID != "drop" {
+		t.Fatalf("schedules: %+v", spec.Loadgen.Schedules)
 	}
-	if len(view.Endpoints) != 2 {
-		t.Fatalf("endpoints: %+v", view.Endpoints)
+	if len(spec.Loadgen.Endpoints) != 2 {
+		t.Fatalf("endpoints: %+v", spec.Loadgen.Endpoints)
 	}
 	if spec.PrometheusMetrics == nil || spec.PrometheusMetrics.Queries[0].Key != "ticket.oversell" {
 		t.Fatalf("spec prometheus: %+v", spec.PrometheusMetrics)
