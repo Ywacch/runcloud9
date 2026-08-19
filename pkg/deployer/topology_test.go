@@ -966,3 +966,53 @@ func TestDeriveEnvVars_ReadThroughNormalizesSTRATEGY(t *testing.T) {
 		t.Fatalf("DisplayCacheStrategyForApp: got %q want write-through", got)
 	}
 }
+
+func TestDeriveEnvVars_AppServerPurchaseMode(t *testing.T) {
+	t.Parallel()
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{{
+			ID:     "a",
+			Type:   "app-server",
+			Name:   "Ticket API",
+			Config: map[string]any{"purchaseMode": "safe"},
+		}},
+	}
+	env := DeriveEnvVars(design.Nodes[0], design)
+	if env["PURCHASE_MODE"] != "safe" {
+		t.Fatalf("PURCHASE_MODE: got %q want safe", env["PURCHASE_MODE"])
+	}
+}
+
+func TestDeriveEnvVars_AppServerInventoryMode(t *testing.T) {
+	t.Parallel()
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{{
+			ID:     "a",
+			Type:   "app-server",
+			Name:   "Shop API",
+			Config: map[string]any{"inventoryMode": "pessimistic"},
+		}},
+	}
+	env := DeriveEnvVars(design.Nodes[0], design)
+	if env["INVENTORY_MODE"] != "pessimistic" {
+		t.Fatalf("INVENTORY_MODE: got %q want pessimistic", env["INVENTORY_MODE"])
+	}
+}
+
+func TestDeriveEnvVars_AppServerOmitsModeWhenUnset(t *testing.T) {
+	t.Parallel()
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{{
+			ID:   "a",
+			Type: "app-server",
+			Name: "API",
+		}},
+	}
+	env := DeriveEnvVars(design.Nodes[0], design)
+	if _, ok := env["PURCHASE_MODE"]; ok {
+		t.Fatalf("expected PURCHASE_MODE absent, got %q", env["PURCHASE_MODE"])
+	}
+	if _, ok := env["INVENTORY_MODE"]; ok {
+		t.Fatalf("expected INVENTORY_MODE absent, got %q", env["INVENTORY_MODE"])
+	}
+}

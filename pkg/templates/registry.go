@@ -151,18 +151,18 @@ type templateDef struct {
 
 type presetYAML struct {
 	Nodes []struct {
-		ID       string         `yaml:"id"`
-		Type     string         `yaml:"type"`
-		Position [3]float64     `yaml:"position"`
-		Label    string         `yaml:"label"`
-		Config   map[string]any `yaml:"config"`
-	} `yaml:"nodes"`
+		ID       string         `yaml:"id" json:"id"`
+		Type     string         `yaml:"type" json:"type"`
+		Position [3]float64     `yaml:"position" json:"position"`
+		Label    string         `yaml:"label" json:"label"`
+		Config   map[string]any `yaml:"config" json:"config"`
+	} `yaml:"nodes" json:"nodes"`
 	Edges []struct {
-		ID       string `yaml:"id"`
-		SourceID string `yaml:"sourceId"`
-		TargetID string `yaml:"targetId"`
-		Protocol string `yaml:"protocol"`
-	} `yaml:"edges"`
+		ID       string `yaml:"id" json:"id"`
+		SourceID string `yaml:"sourceId" json:"sourceId"`
+		TargetID string `yaml:"targetId" json:"targetId"`
+		Protocol string `yaml:"protocol" json:"protocol"`
+	} `yaml:"edges" json:"edges"`
 }
 
 // embeddedFree is the in-repo YAML definitions (always available).
