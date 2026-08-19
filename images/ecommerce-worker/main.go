@@ -18,6 +18,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
+	"github.com/ywacch/cloud9/pkg/templateapp/tracemq"
 )
 
 var (
@@ -89,7 +91,7 @@ func processOrder(ctx context.Context, pool *pgxpool.Pool, order orderMessage) e
 	if err != nil {
 		return err
 	}
-	logWorkerOp(ctx, "db_stock_update", dbStart)
+	trace.LogWorker(ctx, "db_stock_update", dbStart)
 	if tag.RowsAffected() == 0 {
 		_, err = tx.Exec(ctx, `UPDATE orders SET status = 'failed' WHERE id = $1`, order.OrderID)
 		if err != nil {
@@ -273,12 +275,12 @@ func main() {
 				continue
 			}
 
-			jobCtx := ctxFromDelivery(ctx, msg)
+			jobCtx := tracemq.ContextFromDelivery(ctx, msg)
 			if err := processOrder(jobCtx, pool, order); err != nil {
 				workerErrorsTotal.Inc()
-				slog.Error("order processing failed", "order_id", order.OrderID, "error", err, "request_id", requestIDFrom(jobCtx))
+				slog.Error("order processing failed", "order_id", order.OrderID, "error", err, "request_id", trace.RequestID(jobCtx))
 			} else {
-				logWorkerOp(jobCtx, "process_order", start)
+				trace.LogWorker(jobCtx, "process_order", start)
 				workerProcessedTotal.Inc()
 			}
 			workerProcessingDuration.Observe(time.Since(start).Seconds())

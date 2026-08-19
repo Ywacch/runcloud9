@@ -1,14 +1,17 @@
-FROM golang:1.24-alpine AS builder
-WORKDIR /app
+# Build from repo root: docker build -f images/caching-proxy/Dockerfile .
+FROM golang:1.25-alpine AS builder
+WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o caching-proxy .
+COPY pkg ./pkg
+COPY images/caching-proxy/go.mod images/caching-proxy/go.sum ./images/caching-proxy/
+WORKDIR /src/images/caching-proxy
+RUN go mod download
+COPY images/caching-proxy/ ./
+RUN CGO_ENABLED=0 GOOS=linux go build -o /caching-proxy .
 
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates
-WORKDIR /app
-COPY --from=builder /app/caching-proxy .
+COPY --from=builder /caching-proxy /caching-proxy
 EXPOSE 8081
-CMD ["./caching-proxy"]
-
+CMD ["/caching-proxy"]

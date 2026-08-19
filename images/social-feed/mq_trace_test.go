@@ -5,15 +5,18 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
+	"github.com/ywacch/cloud9/pkg/templateapp/tracemq"
 )
 
 func TestAmqpTraceHeaders_sampled(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/post", nil)
 	req.Header.Set("X-Request-ID", "rid-1")
 	req.Header.Set("X-Trace-Sample", "1")
-	req = withRequestContext(req)
+	req = trace.ContextFromRequest(req)
 
-	h := amqpTraceHeaders(req.Context())
+	h := tracemq.Headers(req.Context())
 	if h["x-request-id"] != "rid-1" {
 		t.Fatalf("x-request-id: %+v", h)
 	}
@@ -25,9 +28,9 @@ func TestAmqpTraceHeaders_sampled(t *testing.T) {
 func TestAmqpTraceHeaders_unsampled(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/post", nil)
 	req.Header.Set("X-Request-ID", "rid-2")
-	req = withRequestContext(req)
+	req = trace.ContextFromRequest(req)
 
-	h := amqpTraceHeaders(req.Context())
+	h := tracemq.Headers(req.Context())
 	if h["x-request-id"] != "rid-2" {
 		t.Fatalf("x-request-id: %+v", h)
 	}
@@ -37,7 +40,7 @@ func TestAmqpTraceHeaders_unsampled(t *testing.T) {
 }
 
 func TestAmqpTraceHeaders_empty(t *testing.T) {
-	h := amqpTraceHeaders(context.Background())
+	h := tracemq.Headers(context.Background())
 	if h != nil {
 		t.Fatalf("want nil headers, got %+v", h)
 	}

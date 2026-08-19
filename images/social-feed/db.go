@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 )
 
 // ErrUsernameTaken is returned when CreateUser hits the unique username constraint.
@@ -202,7 +203,7 @@ func (db *DB) GetUser(ctx context.Context, id int) (User, error) {
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("get_user").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "get_user", start)
+		trace.LogDB(ctx, "get_user", start)
 	}()
 	var u User
 	err := db.pool.QueryRow(ctx, `SELECT id, username, bio FROM users WHERE id=$1`, id).Scan(&u.ID, &u.Username, &u.Bio)
@@ -216,7 +217,7 @@ func (db *DB) InsertPost(ctx context.Context, userID int, content string) (Post,
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("insert_post").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "insert_post", start)
+		trace.LogDB(ctx, "insert_post", start)
 	}()
 	var p Post
 	err := db.pool.QueryRow(ctx,
@@ -230,7 +231,7 @@ func (db *DB) GetFeedPull(ctx context.Context, userID, limit int) ([]FeedItem, e
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("get_feed_pull").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "get_feed_pull", start)
+		trace.LogDB(ctx, "get_feed_pull", start)
 	}()
 	// follows has PRIMARY KEY (follower_id, following_id) — no DISTINCT needed.
 	rows, err := db.pool.Query(ctx, `
@@ -262,7 +263,7 @@ func (db *DB) Follow(ctx context.Context, followerID, followingID int) error {
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("follow").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "follow", start)
+		trace.LogDB(ctx, "follow", start)
 	}()
 	_, err := db.pool.Exec(ctx,
 		`INSERT INTO follows (follower_id, following_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
@@ -276,7 +277,7 @@ func (db *DB) Unfollow(ctx context.Context, followerID, followingID int) error {
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("unfollow").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "unfollow", start)
+		trace.LogDB(ctx, "unfollow", start)
 	}()
 	_, err := db.pool.Exec(ctx,
 		`DELETE FROM follows WHERE follower_id = $1 AND following_id = $2`,
@@ -290,7 +291,7 @@ func (db *DB) CreateUser(ctx context.Context, username string) (User, error) {
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("create_user").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "create_user", start)
+		trace.LogDB(ctx, "create_user", start)
 	}()
 	var u User
 	err := db.pool.QueryRow(ctx,
@@ -312,7 +313,7 @@ func (db *DB) SearchUsersByUsername(ctx context.Context, query string, limit int
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("search_users").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "search_users", start)
+		trace.LogDB(ctx, "search_users", start)
 	}()
 	if limit <= 0 {
 		limit = 20
@@ -349,7 +350,7 @@ func (db *DB) ListUsers(ctx context.Context, limit int) ([]User, error) {
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("list_users").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "list_users", start)
+		trace.LogDB(ctx, "list_users", start)
 	}()
 	if limit <= 0 {
 		limit = 20
@@ -377,7 +378,7 @@ func (db *DB) GetFollowers(ctx context.Context, userID int) ([]int, error) {
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("get_followers").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "get_followers", start)
+		trace.LogDB(ctx, "get_followers", start)
 	}()
 	rows, err := db.pool.Query(ctx,
 		`SELECT DISTINCT follower_id FROM follows WHERE following_id = $1`,

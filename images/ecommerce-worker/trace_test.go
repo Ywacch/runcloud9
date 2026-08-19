@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
+	"github.com/ywacch/cloud9/pkg/templateapp/tracemq"
 )
 
 func TestCtxFromDelivery_roundTrip(t *testing.T) {
@@ -12,11 +14,11 @@ func TestCtxFromDelivery_roundTrip(t *testing.T) {
 		"x-request-id":   "rid-order",
 		"x-trace-sample": "1",
 	}}
-	ctx := ctxFromDelivery(context.Background(), d)
-	if requestIDFrom(ctx) != "rid-order" {
-		t.Fatalf("request id: %q", requestIDFrom(ctx))
+	ctx := tracemq.ContextFromDelivery(context.Background(), d)
+	if trace.RequestID(ctx) != "rid-order" {
+		t.Fatalf("request id: %q", trace.RequestID(ctx))
 	}
-	if !sampledFrom(ctx) {
+	if !trace.Sampled(ctx) {
 		t.Fatal("expected sampled")
 	}
 }
@@ -24,8 +26,8 @@ func TestCtxFromDelivery_roundTrip(t *testing.T) {
 func TestShouldTrace_sampleWithoutVerbose(t *testing.T) {
 	t.Setenv("LOG_VERBOSE", "")
 	d := amqp.Delivery{Headers: amqp.Table{"x-request-id": "rid", "x-trace-sample": "1"}}
-	ctx := ctxFromDelivery(context.Background(), d)
-	if !shouldTrace(ctx) {
+	ctx := tracemq.ContextFromDelivery(context.Background(), d)
+	if !trace.ShouldTrace(ctx) {
 		t.Fatal("expected shouldTrace true")
 	}
 }
@@ -33,8 +35,8 @@ func TestShouldTrace_sampleWithoutVerbose(t *testing.T) {
 func TestShouldTrace_neither(t *testing.T) {
 	t.Setenv("LOG_VERBOSE", "")
 	d := amqp.Delivery{Headers: amqp.Table{"x-request-id": "rid"}}
-	ctx := ctxFromDelivery(context.Background(), d)
-	if shouldTrace(ctx) {
+	ctx := tracemq.ContextFromDelivery(context.Background(), d)
+	if trace.ShouldTrace(ctx) {
 		t.Fatal("expected shouldTrace false")
 	}
 }

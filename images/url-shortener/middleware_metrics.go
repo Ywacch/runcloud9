@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 )
 
 // Instrumenting at middleware level means every handler gets
@@ -12,7 +14,7 @@ import (
 // pathPattern must be a low-cardinality route template (e.g. "/r"), not r.URL.Path.
 func withMetrics(pathPattern string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r = withRequestContext(r)
+		r = trace.ContextFromRequest(r)
 		start := time.Now()
 		rw := &statusResponseWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rw, r)
@@ -35,7 +37,7 @@ func withMetrics(pathPattern string, next http.Handler) http.Handler {
 		if rid := r.Header.Get("X-Request-ID"); rid != "" {
 			attrs = append(attrs, "request_id", rid)
 		}
-		if verboseLogsEnabled() || r.Header.Get("X-Trace-Sample") == "1" {
+		if trace.VerboseEnabled() || r.Header.Get("X-Trace-Sample") == "1" {
 			slog.Info("request handled", attrs...)
 		}
 	})
