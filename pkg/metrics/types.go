@@ -20,12 +20,12 @@ type DeploymentMetrics struct {
 	LoadGen         *loadgen.LoadStats          `json:"loadgen,omitempty"`
 }
 
-// Event annotates the metrics timeline (loadgen, thresholds, cascades, runtime).
-// Type remains "action" | "threshold" | "cascade". Workload anchors (loadgen/chaos)
+// Event annotates the metrics timeline (loadgen, thresholds, cascades, invariants, runtime).
+// Type remains "action" | "threshold" | "cascade" | "invariant". Workload anchors (loadgen/chaos)
 // keep Type "action" and set Kind/Detail/Audience for L2 causal evidence.
 type Event struct {
 	Timestamp time.Time `json:"timestamp"`
-	Type      string    `json:"type"` // "action" | "threshold" | "cascade"
+	Type      string    `json:"type"` // "action" | "threshold" | "cascade" | "invariant"
 	Source    string    `json:"source"`
 	Component string    `json:"component,omitempty"`
 	// Kind identifies a workload anchor when set (e.g. "loadgen_start", "loadgen_stop", "chaos_inject").

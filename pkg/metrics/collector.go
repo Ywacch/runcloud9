@@ -47,6 +47,7 @@ type MetricsCollector struct {
 	eventBus        *EventBus
 	thresholds      *ThresholdDetector
 	cascade         *CascadeDetector
+	invariants      *InvariantChecker
 	historyMu       sync.RWMutex
 	history         map[string]*RingBuffer // namespace → last 300 snapshots
 	clientLatencyMu sync.Mutex
@@ -70,6 +71,7 @@ func NewMetricsCollector(prometheusURL string, lg loadgen.LoadGenerator, clients
 		eventBus:      eventBus,
 		thresholds:    NewThresholdDetector(),
 		cascade:       NewCascadeDetector(),
+		invariants:    NewInvariantChecker(),
 		mqRates:       make(map[string]rabbitCounterSnapshot),
 	}
 }
@@ -95,7 +97,7 @@ func (c *MetricsCollector) debugCompare(component, metric string, primary, fallb
 		component, metric, primary, primarySource, fallback, fallbackSource, diff)
 }
 
-// Cleanup removes per-namespace event and threshold state (call when a deployment ends).
+// Cleanup removes per-namespace event, threshold, cascade, and invariant state (call when a deployment ends).
 func (c *MetricsCollector) Cleanup(namespace string) {
 	if c == nil {
 		return
@@ -108,6 +110,9 @@ func (c *MetricsCollector) Cleanup(namespace string) {
 	}
 	if c.cascade != nil {
 		c.cascade.Cleanup(namespace)
+	}
+	if c.invariants != nil {
+		c.invariants.Cleanup(namespace)
 	}
 	c.historyMu.Lock()
 	if c.history != nil {
@@ -1066,6 +1071,9 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	}
 	if c.cascade != nil {
 		ev = append(ev, c.cascade.Eval(namespace, dm, topo, tmpl)...)
+	}
+	if c.invariants != nil {
+		ev = append(ev, c.invariants.Eval(namespace, dm, topo, tmpl)...)
 	}
 	dm.Events = ev
 
