@@ -93,7 +93,7 @@ func TestCloudTemplatesSelectIncludesStorytelling(t *testing.T) {
 
 func TestCloudTemplatesSelectIncludesPremiumConfigColumns(t *testing.T) {
 	t.Parallel()
-	for _, col := range []string{"loadgen", "prometheus_metrics", "invariant_checkers"} {
+	for _, col := range []string{"loadgen", "prometheus_metrics", "invariant_checkers", "preset", "preset_lite", "introspection"} {
 		if !strings.Contains(cloudTemplatesSelect, col) {
 			t.Fatalf("select missing %s: %q", col, cloudTemplatesSelect)
 		}
@@ -188,6 +188,52 @@ func TestCloudTemplateRow_toTemplateDef_PremiumConfigJSONB(t *testing.T) {
 	}
 	if len(spec.InvariantCheckers) != 1 || spec.InvariantCheckers[0].ID != "oversell" {
 		t.Fatalf("spec invariants: %+v", spec.InvariantCheckers)
+	}
+}
+
+func TestCloudTemplateRow_toTemplateDef_PresetAndIntrospectionJSONB(t *testing.T) {
+	t.Parallel()
+
+	presetRaw := json.RawMessage(`{
+		"nodes": [
+			{"id": "app-1", "type": "compute", "position": [-1, 0.3, 0], "label": "App Server", "config": {"replicas": 1, "instanceSize": "small"}},
+			{"id": "db-1", "type": "database", "position": [2, 0.3, 0], "label": "PostgreSQL", "config": {"engine": "postgresql", "storageGB": 10, "maxConnections": 100}}
+		],
+		"edges": [
+			{"id": "e-app-db", "sourceId": "app-1", "targetId": "db-1", "protocol": "tcp"}
+		]
+	}`)
+	introRaw := json.RawMessage(`{
+		"db": {"engine": "postgres", "tables": ["events", "purchases"]}
+	}`)
+
+	row := cloudTemplateRow{
+		ID:            "ticket-drop",
+		Name:          "Ticket Drop",
+		Available:     true,
+		Premium:       true,
+		ImageKey:      "ticket-drop",
+		Preset:        presetRaw,
+		Introspection: introRaw,
+	}
+
+	def, err := row.toTemplateDef()
+	if err != nil {
+		t.Fatalf("toTemplateDef: %v", err)
+	}
+	if def.Preset == nil || len(def.Preset.Nodes) != 2 {
+		t.Fatalf("preset nodes: %+v", def.Preset)
+	}
+	if def.Introspection == nil || def.Introspection["db"].Engine != "postgres" {
+		t.Fatalf("introspection: %+v", def.Introspection)
+	}
+
+	spec := defToSpec(def)
+	if spec.Preset == nil || len(spec.Preset.Nodes) != 2 {
+		t.Fatalf("spec preset: %+v", spec.Preset)
+	}
+	if spec.Introspection["db"].Tables[0] != "events" {
+		t.Fatalf("spec introspection: %+v", spec.Introspection)
 	}
 }
 

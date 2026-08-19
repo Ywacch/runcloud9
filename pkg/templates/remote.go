@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/supabase-community/supabase-go"
+	"github.com/ywacch/cloud9/pkg/introspect"
 )
 
 // cloudTemplateRow matches PostgREST JSON for table cloud_templates (snake_case columns).
@@ -29,6 +30,9 @@ type cloudTemplateRow struct {
 	Loadgen           json.RawMessage `json:"loadgen"`
 	PrometheusMetrics json.RawMessage `json:"prometheus_metrics"`
 	InvariantCheckers json.RawMessage `json:"invariant_checkers"`
+	Preset            json.RawMessage `json:"preset"`
+	PresetLite        json.RawMessage `json:"preset_lite"`
+	Introspection     json.RawMessage `json:"introspection"`
 }
 
 type topologyJSONEntry struct {
@@ -115,11 +119,32 @@ func (row *cloudTemplateRow) toTemplateDef() (*templateDef, error) {
 		}
 		def.InvariantCheckers = rules
 	}
+	if len(row.Preset) > 0 && string(row.Preset) != "null" {
+		var p presetYAML
+		if err := json.Unmarshal(row.Preset, &p); err != nil {
+			return nil, err
+		}
+		def.Preset = &p
+	}
+	if len(row.PresetLite) > 0 && string(row.PresetLite) != "null" {
+		var p presetYAML
+		if err := json.Unmarshal(row.PresetLite, &p); err != nil {
+			return nil, err
+		}
+		def.PresetLite = &p
+	}
+	if len(row.Introspection) > 0 && string(row.Introspection) != "null" {
+		var intro introspect.Spec
+		if err := json.Unmarshal(row.Introspection, &intro); err != nil {
+			return nil, err
+		}
+		def.Introspection = intro
+	}
 	return def, nil
 }
 
 // cloudTemplatesSelect is the PostgREST column list for premium template rows.
-const cloudTemplatesSelect = "id,name,description,components,bottleneck,available,premium,tags,simulatable,deployable,image_key,worker_image_key,topology,seed,storytelling,loadgen,prometheus_metrics,invariant_checkers"
+const cloudTemplatesSelect = "id,name,description,components,bottleneck,available,premium,tags,simulatable,deployable,image_key,worker_image_key,topology,seed,storytelling,loadgen,prometheus_metrics,invariant_checkers,preset,preset_lite,introspection"
 
 // FetchRemoteTemplates loads premium rows from Supabase cloud_templates.
 // On failure (network, missing table, parse error) it logs and returns an empty slice — no error —

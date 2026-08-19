@@ -545,6 +545,12 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 			// WRITE_BEHIND_INTERVAL is only for caching-proxy (canonical write-behind), not url-shortener.
 			env["STAMPEDE_PROTECTION"] = configString(node.Config, "stampedeProtection", "false")
 		}
+		if mode := configString(node.Config, "inventoryMode", ""); mode != "" {
+			env["INVENTORY_MODE"] = mode
+		}
+		if mode := configString(node.Config, "purchaseMode", ""); mode != "" {
+			env["PURCHASE_MODE"] = mode
+		}
 		if hasProxyCacheConn {
 			// App-driven proxy writes carry a TTL in the request body; keep it
 			// on the same cache-node value as proxy miss-fill so the two paths
