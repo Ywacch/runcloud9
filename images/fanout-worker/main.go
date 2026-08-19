@@ -21,6 +21,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/redis/go-redis/v9"
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
+	"github.com/ywacch/cloud9/pkg/templateapp/tracemq"
 )
 
 var (
@@ -129,7 +131,7 @@ func fanoutPost(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, msg 
 	if err := pool.QueryRow(ctx, `SELECT username FROM users WHERE id = $1`, msg.UserID).Scan(&username); err != nil {
 		return fmt.Errorf("db user lookup: %w", err)
 	}
-	logWorkerOp(ctx, "db_user_lookup", dbStart)
+	trace.LogWorker(ctx, "db_user_lookup", dbStart)
 
 	dbStart = time.Now()
 	rows, err := pool.Query(ctx, `SELECT follower_id FROM follows WHERE following_id = $1`, msg.UserID)
@@ -149,7 +151,7 @@ func fanoutPost(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, msg 
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("db follower rows: %w", err)
 	}
-	logWorkerOp(ctx, "db_follower_lookup", dbStart)
+	trace.LogWorker(ctx, "db_follower_lookup", dbStart)
 
 	workerFanoutSize.Observe(float64(len(followers)))
 	workerWriteTotal.WithLabelValues("redis").Add(float64(len(followers)))
@@ -168,7 +170,7 @@ func fanoutPost(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, msg 
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("redis timeline pipeline: %w", err)
 	}
-	logWorkerOp(ctx, "redis_timeline_write", redisStart)
+	trace.LogWorker(ctx, "redis_timeline_write", redisStart)
 	return nil
 }
 
@@ -178,7 +180,7 @@ func processDelivery(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client,
 		workerProcessingDuration.Observe(time.Since(start).Seconds())
 	}()
 
-	ctx = ctxFromDelivery(ctx, d)
+	ctx = tracemq.ContextFromDelivery(ctx, d)
 
 	var msg fanoutMessage
 	if err := json.Unmarshal(d.Body, &msg); err != nil {
@@ -190,9 +192,9 @@ func processDelivery(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client,
 	if err := fanoutPost(ctx, pool, rdb, msg, timelineTTL); err != nil {
 		reason := classifyFanoutError(err)
 		workerErrorsTotal.WithLabelValues(reason).Inc()
-		slog.Error("fanout failed", "post_id", msg.PostID, "author_id", msg.UserID, "reason", reason, "error", err, "request_id", requestIDFrom(ctx))
+		slog.Error("fanout failed", "post_id", msg.PostID, "author_id", msg.UserID, "reason", reason, "error", err, "request_id", trace.RequestID(ctx))
 	} else {
-		logWorkerOp(ctx, "fanout", start)
+		trace.LogWorker(ctx, "fanout", start)
 		workerProcessedTotal.Inc()
 	}
 	return d.DeliveryTag

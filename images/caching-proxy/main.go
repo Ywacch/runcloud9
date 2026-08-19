@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 )
 
 type Config struct {
@@ -114,7 +115,7 @@ func (s *Server) routes() *http.ServeMux {
 
 func withTrace(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		next(w, withRequestContext(r))
+		next(w, trace.ContextFromRequest(r))
 	}
 }
 
@@ -146,11 +147,11 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	val, err := s.redis.Get(ctx, code).Result()
 	if err == nil {
-		logProxyOp(ctx, "cache_get_hit", code, start)
+		trace.LogProxy(ctx, "cache_get_hit", code, start)
 		writeJSON(w, http.StatusOK, map[string]string{"value": val, "source": "cache"})
 		return
 	}
-	logProxyOp(ctx, "cache_get_miss", code, start)
+	trace.LogProxy(ctx, "cache_get_miss", code, start)
 	if !errors.Is(err, redis.Nil) {
 		slog.Warn("redis GET failed", "code", code, "error", err)
 		// treat as miss -> DB fallback depends on strategy
@@ -159,7 +160,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	// Cache miss: template-driven DB read-through (queries.yaml mounted at deploy time).
 	dbStart := time.Now()
 	payload, dbErr := proxyReadThrough(ctx, s.db.pool, s.rules, code)
-	logProxyOp(ctx, "db_read_through", code, dbStart)
+	trace.LogProxy(ctx, "db_read_through", code, dbStart)
 	if errors.Is(dbErr, errNoMatchingProxyRule) {
 		jsonError(w, http.StatusNotFound, "no matching cache key rule")
 		return
@@ -242,7 +243,7 @@ func (s *Server) handleSet(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusInternalServerError, msg)
 			return
 		}
-		logProxyOp(ctx, "cache_set", code, start)
+		trace.LogProxy(ctx, "cache_set", code, start)
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	case "write-behind":
 		// Opaque JSON cache populate (ecommerce/feeds): no URL validation.
@@ -254,7 +255,7 @@ func (s *Server) handleSet(w http.ResponseWriter, r *http.Request) {
 		if err := storePendingWrite(ctx, s.redis, code, req.Value); err != nil {
 			slog.Warn("redis SET wb failed", "code", code, "error", err)
 		}
-		logProxyOp(ctx, "cache_set", code, start)
+		trace.LogProxy(ctx, "cache_set", code, start)
 		// DB write happens in background.
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	default:
@@ -279,7 +280,7 @@ func (s *Server) handleDel(w http.ResponseWriter, r *http.Request) {
 	if err := s.redis.Del(ctx, code).Err(); err != nil {
 		slog.Warn("redis DEL failed", "code", code, "error", err)
 	}
-	logProxyOp(ctx, "cache_del", code, start)
+	trace.LogProxy(ctx, "cache_del", code, start)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 )
 
 type URLStats struct {
@@ -26,7 +27,7 @@ func (db *DB) InsertURL(ctx context.Context, code, original string) (inserted bo
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("insert_url").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "insert_url", start)
+		trace.LogDB(ctx, "insert_url", start)
 	}()
 	tag, err := db.pool.Exec(ctx, `
 		INSERT INTO urls (code, original)
@@ -43,7 +44,7 @@ func (db *DB) GetURL(ctx context.Context, code string) (URLStats, error) {
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("get_url").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "get_url", start)
+		trace.LogDB(ctx, "get_url", start)
 	}()
 	row := db.pool.QueryRow(ctx, `
 		SELECT code, original, created_at
@@ -62,7 +63,7 @@ func (db *DB) URLExists(ctx context.Context, code string) (bool, error) {
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("url_exists").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "url_exists", start)
+		trace.LogDB(ctx, "url_exists", start)
 	}()
 	var exists bool
 	err := db.pool.QueryRow(ctx, `

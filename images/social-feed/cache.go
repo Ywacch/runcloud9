@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 )
 
 type Cache struct {
@@ -29,17 +30,17 @@ func (c *Cache) Get(ctx context.Context, key string) (string, bool) {
 	start := time.Now()
 	val, err := c.client.Get(ctx, key).Result()
 	if err == redis.Nil || err != nil {
-		logCacheGet(ctx, key, false, start)
+		trace.LogCacheGet(ctx, key, false, start)
 		return "", false
 	}
-	logCacheGet(ctx, key, true, start)
+	trace.LogCacheGet(ctx, key, true, start)
 	return val, true
 }
 
 func (c *Cache) Set(ctx context.Context, key string, value string, ttl time.Duration) error {
 	start := time.Now()
 	err := c.client.Set(ctx, key, value, ttl).Err()
-	logCacheSet(ctx, key, start)
+	trace.LogCacheSet(ctx, key, start)
 	return err
 }
 
@@ -49,7 +50,7 @@ func (c *Cache) Delete(ctx context.Context, keys ...string) error {
 	}
 	start := time.Now()
 	err := c.client.Del(ctx, keys...).Err()
-	logCacheDelete(ctx, start)
+	trace.LogCacheDelete(ctx, start)
 	return err
 }
 

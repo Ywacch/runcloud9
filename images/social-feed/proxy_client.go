@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 )
 
 // URLStats mirrors the proxy /stats payload shape.
@@ -51,7 +53,7 @@ func (c *ProxyClient) Get(ctx context.Context, code string) (value string, sourc
 	if err != nil {
 		return "", "", false, err
 	}
-	setRequestIDHeader(req, ctx)
+	trace.SetOutboundHeaders(req, ctx)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -96,7 +98,7 @@ func (c *ProxyClient) Set(ctx context.Context, code, value string, ttl time.Dura
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	setRequestIDHeader(req, ctx)
+	trace.SetOutboundHeaders(req, ctx)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -123,7 +125,7 @@ func (c *ProxyClient) Exists(ctx context.Context, code string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	setRequestIDHeader(req, ctx)
+	trace.SetOutboundHeaders(req, ctx)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -149,7 +151,7 @@ func (c *ProxyClient) Increment(ctx context.Context, code string) error {
 	if err != nil {
 		return err
 	}
-	setRequestIDHeader(req, ctx)
+	trace.SetOutboundHeaders(req, ctx)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -176,7 +178,7 @@ func (c *ProxyClient) Stats(ctx context.Context, code string) (URLStats, bool, e
 	if err != nil {
 		return URLStats{}, false, err
 	}
-	setRequestIDHeader(req, ctx)
+	trace.SetOutboundHeaders(req, ctx)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -214,7 +216,7 @@ func (c *ProxyClient) Health(ctx context.Context) (status string, redis string, 
 	if err != nil {
 		return "", "", "", err
 	}
-	setRequestIDHeader(req, ctx)
+	trace.SetOutboundHeaders(req, ctx)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

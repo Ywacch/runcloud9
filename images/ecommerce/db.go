@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 )
 
 var (
@@ -129,7 +130,7 @@ func (db *DB) ListProducts(ctx context.Context) ([]Product, error) {
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("list_products").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "list_products", start)
+		trace.LogDB(ctx, "list_products", start)
 	}()
 	rows, err := db.pool.Query(ctx, `SELECT id, name, price::float8, stock FROM products ORDER BY id`)
 	if err != nil {
@@ -152,7 +153,7 @@ func (db *DB) GetProduct(ctx context.Context, id int) (Product, error) {
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("get_product").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "get_product", start)
+		trace.LogDB(ctx, "get_product", start)
 	}()
 	var p Product
 	err := db.pool.QueryRow(ctx,
@@ -169,7 +170,7 @@ func (db *DB) CheckoutOptimistic(ctx context.Context, productID, quantity int) (
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("checkout_optimistic").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "checkout_optimistic", start)
+		trace.LogDB(ctx, "checkout_optimistic", start)
 	}()
 
 	tx, err := db.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -209,7 +210,7 @@ func (db *DB) CheckoutPessimistic(ctx context.Context, productID, quantity int) 
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("checkout_pessimistic").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "checkout_pessimistic", start)
+		trace.LogDB(ctx, "checkout_pessimistic", start)
 	}()
 
 	tx, err := db.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -251,7 +252,7 @@ func (db *DB) InsertPendingOrder(ctx context.Context, productID, quantity int) (
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("insert_pending_order").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "insert_pending_order", start)
+		trace.LogDB(ctx, "insert_pending_order", start)
 	}()
 	var orderID int
 	err := db.pool.QueryRow(ctx,
@@ -265,7 +266,7 @@ func (db *DB) GetOrder(ctx context.Context, id int) (Order, error) {
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("get_order").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "get_order", start)
+		trace.LogDB(ctx, "get_order", start)
 	}()
 	var o Order
 	err := db.pool.QueryRow(ctx,
@@ -282,7 +283,7 @@ func (db *DB) FulfillOrder(ctx context.Context, orderID int) error {
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("fulfill_order").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "fulfill_order", start)
+		trace.LogDB(ctx, "fulfill_order", start)
 	}()
 	_, err := db.pool.Exec(ctx, `UPDATE orders SET status='fulfilled' WHERE id=$1`, orderID)
 	return err
@@ -292,7 +293,7 @@ func (db *DB) DecrementStock(ctx context.Context, productID, quantity int) error
 	start := time.Now()
 	defer func() {
 		dbQueryDuration.WithLabelValues("decrement_stock").Observe(time.Since(start).Seconds())
-		logDBOp(ctx, "decrement_stock", start)
+		trace.LogDB(ctx, "decrement_stock", start)
 	}()
 	tag, err := db.pool.Exec(ctx,
 		`UPDATE products SET stock = stock - $2 WHERE id = $1 AND stock >= $2`,

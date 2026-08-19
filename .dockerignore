@@ -9,9 +9,21 @@ infra
 *.tfstate.*
 terraform-key.json
 images
-# loadgen image builds from repo root (replace => ../..); allow only that module.
+# Repo-root image builds (replace => ../..); allow only modules that use this pattern.
 !images/loadgen
 !images/loadgen/**
+!images/url-shortener
+!images/url-shortener/**
+!images/social-feed
+!images/social-feed/**
+!images/ecommerce
+!images/ecommerce/**
+!images/fanout-worker
+!images/fanout-worker/**
+!images/ecommerce-worker
+!images/ecommerce-worker/**
+!images/caching-proxy
+!images/caching-proxy/**
 docs
 **/__pycache__
 *.md
