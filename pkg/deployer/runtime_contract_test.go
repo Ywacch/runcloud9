@@ -197,7 +197,7 @@ func TestValidateRuntimeContract_Table(t *testing.T) {
 			wantErr: "",
 		},
 		{
-			name:       "legacy ip_hash accepted after normalize to round-robin",
+			name:       "legacy ip_hash accepted as ip_hash",
 			templateID: "url-shortener",
 			design: DeploymentDesign{
 				Template: "url-shortener",

@@ -99,7 +99,8 @@ func ReconcileLBUpstream(ctx context.Context, clientset kubernetes.Interface, na
 	if weighted {
 		weights = nginxWeightsForHosts(ctx, clientset, namespace, upstreamHosts)
 	}
-	nginxConf := spec.nginxConfigWeighted(upstreamHosts, algo, weights)
+	rate := rateLimitPerIP(lbNode.Config)
+	nginxConf := spec.nginxConf(upstreamHosts, algo, weights, rate)
 
 	cm, err := buildLBConfigMap(lbConfigInput{
 		algo:            algo,
@@ -184,7 +185,8 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 	if weighted {
 		weights = nginxWeightsForHosts(ctx, k.clientset, cfg.Namespace, upstreamHosts)
 	}
-	nginxConf := spec.nginxConfigWeighted(upstreamHosts, algo, weights)
+	rate := rateLimitPerIP(cfg.Node.Config)
+	nginxConf := spec.nginxConf(upstreamHosts, algo, weights, rate)
 
 	cm, err := buildLBConfigMap(lbConfigInput{
 		algo:            algo,
@@ -288,12 +290,18 @@ func (s LBSpec) nginxConfig(backends []string, algorithm string) string {
 }
 
 func (s LBSpec) nginxConfigWeighted(backends []string, algorithm string, weights []int) string {
+	return s.nginxConf(backends, algorithm, weights, 0)
+}
+
+func (s LBSpec) nginxConf(backends []string, algorithm string, weights []int, rateLimit int) string {
 	var upstreamExtra string
 	switch normalizeLBAlgorithm(algorithm) {
 	case lbAlgoLeastConn:
 		upstreamExtra = "        least_conn;\n"
 	case lbAlgoRandom:
 		upstreamExtra = "        random;\n"
+	case lbAlgoIPHash:
+		upstreamExtra = "        ip_hash;\n"
 	default:
 		upstreamExtra = ""
 	}
@@ -312,11 +320,20 @@ func (s LBSpec) nginxConfigWeighted(backends []string, algorithm string, weights
 			fmt.Fprintf(&b, "        server %s:8080;\n", host)
 		}
 	}
+	limitZone := ""
+	limitLoc := ""
+	if rateLimit > 0 {
+		limitZone = fmt.Sprintf("    limit_req_zone $binary_remote_addr zone=perip:1m rate=%dr/s;\n", rateLimit)
+		limitLoc = "limit_req zone=perip burst=0 nodelay;\n            "
+	}
 	return fmt.Sprintf(`events {
     worker_connections %d;
 }
 http {
-    upstream backends {
+    set_real_ip_from 0.0.0.0/0;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+%s    upstream backends {
 %s%s        keepalive %d;
     }
 
@@ -327,8 +344,10 @@ http {
             allow all;
         }
         location / {
-            proxy_http_version 1.1;
+            %sproxy_http_version 1.1;
             proxy_set_header Connection "";
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Real-IP $remote_addr;
             proxy_connect_timeout 5s;
             proxy_send_timeout 60s;
             proxy_read_timeout 60s;
@@ -336,7 +355,7 @@ http {
         }
     }
 }
-`, s.WorkerConnections, upstreamExtra, b.String(), s.UpstreamKeepalive)
+`, s.WorkerConnections, limitZone, upstreamExtra, b.String(), s.UpstreamKeepalive, limitLoc)
 }
 
 // nginxWeightsForHosts maps upstream pod IPs to nginx weights from instance-size labels.

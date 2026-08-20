@@ -54,6 +54,9 @@ func TestLBSpec_nginxConfig(t *testing.T) {
 	if !strings.Contains(rr, "upstream backends") || !strings.Contains(rr, "proxy_pass http://backends") {
 		t.Fatalf("round-robin config: %s", rr)
 	}
+	if !strings.Contains(rr, "real_ip_header") || !strings.Contains(rr, "set_real_ip_from") {
+		t.Fatalf("round-robin config missing real_ip: %s", rr)
+	}
 	if !strings.Contains(rr, "location /nginx_status") || !strings.Contains(rr, "stub_status") {
 		t.Fatalf("round-robin config missing stub_status: %s", rr)
 	}
@@ -71,10 +74,9 @@ func TestLBSpec_nginxConfig(t *testing.T) {
 		t.Fatalf("random: %s", rnd)
 	}
 
-	// Legacy ip_hash normalizes to round-robin (no sticky directive).
-	legacy := spec.nginxConfig(backends, "ip_hash")
-	if strings.Contains(legacy, "ip_hash") || strings.Contains(legacy, "random;") || strings.Contains(legacy, "least_conn") {
-		t.Fatalf("ip_hash should normalize to round-robin: %s", legacy)
+	ipHash := spec.nginxConfig(backends, "ip_hash")
+	if !strings.Contains(ipHash, "ip_hash;") {
+		t.Fatalf("ip_hash should emit sticky directive: %s", ipHash)
 	}
 
 	multi := spec.nginxConfig([]string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}, "least_conn")
@@ -113,6 +115,32 @@ func TestLBSpec_nginxConfigWeighted(t *testing.T) {
 	}
 	if !strings.Contains(mixed, "server 10.0.0.2:8080 weight=1;") {
 		t.Fatalf("expected weight=1 on small backend: %s", mixed)
+	}
+}
+
+func TestLBSpec_nginxConf_rateLimit(t *testing.T) {
+	t.Parallel()
+	spec := DefaultLBSpec()
+	backends := []string{"10.0.0.1"}
+
+	off := spec.nginxConf(backends, "round-robin", nil, 0)
+	if strings.Contains(off, "limit_req") || strings.Contains(off, "rate=") {
+		t.Fatalf("rate=0 should omit limit_req: %s", off)
+	}
+
+	limited := spec.nginxConf(backends, "round-robin", nil, 5)
+	if !strings.Contains(limited, "rate=5r/s") {
+		t.Fatalf("expected rate=5r/s: %s", limited)
+	}
+	if !strings.Contains(limited, "limit_req zone=perip") {
+		t.Fatalf("expected limit_req zone=perip: %s", limited)
+	}
+	parts := strings.Split(limited, "location / {")
+	if len(parts) != 2 {
+		t.Fatalf("expected location / block: %s", limited)
+	}
+	if strings.Contains(parts[0], "limit_req zone=perip") {
+		t.Fatalf("limit_req must not apply to /nginx_status: %s", limited)
 	}
 }
 

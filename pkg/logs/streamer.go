@@ -162,7 +162,7 @@ func streamPodLogs(ctx context.Context, clientset kubernetes.Interface, namespac
 		}
 
 		line := scanner.Text()
-		logLine := parseLine(line, component)
+		logLine := parseLine(line, component, podName)
 
 		// Non-blocking send.
 		// UNDERSTAND: if the WebSocket writer is slow (client tab backgrounded),
@@ -182,11 +182,12 @@ func streamPodLogs(ctx context.Context, clientset kubernetes.Interface, namespac
 // Falls back to a plain-text LogLine if parsing fails.
 // UNDERSTAND: app-server emits JSON (slog.NewJSONHandler). Postgres and Redis
 // emit plain text. We handle both gracefully.
-func parseLine(line, component string) LogLine {
+func parseLine(line, component, podName string) LogLine {
 	var parsed map[string]any
 	if err := json.Unmarshal([]byte(line), &parsed); err == nil {
 		ll := LogLine{
 			Component: component,
+			Pod:       podName,
 			Timestamp: time.Now(),
 			Level:     "info",
 			Fields:    make(map[string]any),
@@ -217,6 +218,7 @@ func parseLine(line, component string) LogLine {
 	return LogLine{
 		Timestamp: time.Now(),
 		Component: component,
+		Pod:       podName,
 		Level:     "info",
 		Message:   line,
 	}

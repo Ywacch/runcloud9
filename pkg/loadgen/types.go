@@ -27,11 +27,12 @@ func DistributionKey(s EndpointSpec) string {
 
 // ResolvedTarget is a fully expanded HTTP target for vegeta (static mode) or one actor tick.
 type ResolvedTarget struct {
-	URL    string `json:"url"`
-	Method string `json:"method"`
-	Body   string `json:"body"`
-	Weight int    `json:"weight"`
-	Key    string `json:"key,omitempty"`
+	URL        string `json:"url"`
+	Method     string `json:"method"`
+	Body       string `json:"body"`
+	Weight     int    `json:"weight"`
+	Key        string `json:"key,omitempty"`
+	ParamValue string `json:"paramValue,omitempty"`
 }
 
 // LoadProfile defines the traffic shape for a deployment.
@@ -66,16 +67,16 @@ func (p LoadProfile) AttackDuration() time.Duration {
 // UNDERSTAND: we embed load stats into the existing metrics stream rather than
 // creating a separate WebSocket — one connection per deployment keeps the frontend simple.
 type LoadStats struct {
-	Active            bool                `json:"active"`          // is load running?
-	CurrentRPS        float64             `json:"currentRps"`      // configured RPS (target); legacy alias for TargetRPS
-	TargetRPS         float64             `json:"targetRps"`       // configured RPS (target)
-	ActualRPS         float64             `json:"actualRps"`       // achieved RPS from Vegeta throughput (cumulative)
-	TotalRequests     uint64              `json:"totalRequests"`   // cumulative since start
-	SuccessRate       float64             `json:"successRate"`     // percentage 0-100
-	MeanLatency       float64             `json:"meanLatency"`     // seconds (cumulative run)
-	P99Latency        float64             `json:"p99Latency"`      // seconds (cumulative run)
-	IntervalP99Ms     float64             `json:"intervalP99Ms"`   // p99 ms in last closed 5s window (client-side)
-	IntervalActualRPS float64             `json:"intervalActualRps"` // RPS in last closed 5s window
+	Active            bool                `json:"active"`                    // is load running?
+	CurrentRPS        float64             `json:"currentRps"`                // configured RPS (target); legacy alias for TargetRPS
+	TargetRPS         float64             `json:"targetRps"`                 // configured RPS (target)
+	ActualRPS         float64             `json:"actualRps"`                 // achieved RPS from Vegeta throughput (cumulative)
+	TotalRequests     uint64              `json:"totalRequests"`             // cumulative since start
+	SuccessRate       float64             `json:"successRate"`               // percentage 0-100
+	MeanLatency       float64             `json:"meanLatency"`               // seconds (cumulative run)
+	P99Latency        float64             `json:"p99Latency"`                // seconds (cumulative run)
+	IntervalP99Ms     float64             `json:"intervalP99Ms"`             // p99 ms in last closed 5s window (client-side)
+	IntervalActualRPS float64             `json:"intervalActualRps"`         // RPS in last closed 5s window
 	RecentIntervals   []LoadIntervalStats `json:"recentIntervals,omitempty"` // last N closed 5s buckets
 	// RecentLatenciesMs is a snapshot of the last RecentLatenciesCap request latencies (ms, client-observed).
 	RecentLatenciesMs []float64      `json:"recentLatenciesMs,omitempty"`

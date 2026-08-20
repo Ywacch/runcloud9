@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/ywacch/cloud9/pkg/loadgen"
 )
 
 var hopByHopResponseHeaders = map[string]struct{}{
@@ -37,10 +38,15 @@ func proxyRequestID(r *http.Request) string {
 }
 
 // proxyRESTHeaders builds outbound headers for the K8s service proxy request.
-func proxyRESTHeaders(r *http.Request, requestID string) map[string]string {
+func proxyRESTHeaders(r *http.Request, requestID, seed string) map[string]string {
 	h := map[string]string{
 		"X-Request-ID":   requestID,
 		"X-Trace-Sample": "1",
+	}
+	tmp := make(http.Header)
+	loadgen.ApplyClientIdentityHeaders(tmp, seed)
+	if xff := tmp.Get("X-Forwarded-For"); xff != "" {
+		h["X-Forwarded-For"] = xff
 	}
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		h["Content-Type"] = ct
@@ -49,6 +55,49 @@ func proxyRESTHeaders(r *http.Request, requestID string) map[string]string {
 		h["Accept"] = accept
 	}
 	return h
+}
+
+// playgroundClientSeed picks a stable virtual-client identity for playground proxy requests.
+func playgroundClientSeed(requestID, ownerUserID, proxyPath string) string {
+	if id := playgroundPathUserID(proxyPath); id != "" {
+		return id
+	}
+	if ownerUserID != "" {
+		return ownerUserID
+	}
+	return requestID
+}
+
+// playgroundPathUserID returns the social-feed path identity, else "".
+// Matches only feed/{id} and users/{id} where id is digits.
+func playgroundPathUserID(proxyPath string) string {
+	path := strings.Trim(strings.TrimPrefix(proxyPath, "/"), "/")
+	if path == "" {
+		return ""
+	}
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 {
+		return ""
+	}
+	switch parts[0] {
+	case "feed", "users":
+		if isDigitsOnly(parts[1]) {
+			return parts[1]
+		}
+	}
+	return ""
+}
+
+func isDigitsOnly(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func cacheServiceHTTPPort(design map[string]any) int {
@@ -102,6 +151,9 @@ func resolveIntrospectRedisHost(design map[string]any) string {
 func resolveProxyTarget(component string, design map[string]any) (host string, port int, err error) {
 	switch component {
 	case "app-server":
+		if designHasLoadBalancer(design) {
+			return "lb", 80, nil
+		}
 		return "app-server", 8080, nil
 	case "lb":
 		return "lb", 80, nil
@@ -177,8 +229,10 @@ func (h *Handler) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Route via K8s API server service proxy so local-dev (outside cluster DNS) also works.
-	svcTarget := fmt.Sprintf("%s:%d", svcHost, svcPort)
+	requestID := proxyRequestID(r)
 	proxyPath = strings.TrimPrefix(proxyPath, "/")
+	seed := playgroundClientSeed(requestID, row.UserID, proxyPath)
+	svcTarget := fmt.Sprintf("%s:%d", svcHost, svcPort)
 	restReq := h.clientset.CoreV1().RESTClient().
 		Verb(r.Method).
 		Namespace(namespace).
@@ -191,8 +245,7 @@ func (h *Handler) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if len(body) > 0 {
 		restReq = restReq.Body(bytes.NewReader(body))
 	}
-	requestID := proxyRequestID(r)
-	for k, v := range proxyRESTHeaders(r, requestID) {
+	for k, v := range proxyRESTHeaders(r, requestID, seed) {
 		restReq = restReq.SetHeader(k, v)
 	}
 	w.Header().Set("X-Request-ID", requestID)

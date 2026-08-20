@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/ywacch/cloud9/pkg/loadgen"
 )
 
 func TestProxyRequestID_preservesClientHeader(t *testing.T) {
@@ -34,12 +35,17 @@ func TestProxyRESTHeaders_includesRequestID(t *testing.T) {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Request-ID", "persona-trace-1")
 
-	h := proxyRESTHeaders(req, proxyRequestID(req))
+	h := proxyRESTHeaders(req, proxyRequestID(req), "owner-u1")
 	if h["X-Request-ID"] != "persona-trace-1" {
 		t.Fatalf("X-Request-ID: got %q", h["X-Request-ID"])
 	}
 	if h["X-Trace-Sample"] != "1" {
 		t.Fatalf("X-Trace-Sample: got %q, want 1", h["X-Trace-Sample"])
+	}
+	wantXFF := make(http.Header)
+	loadgen.ApplyClientIdentityHeaders(wantXFF, "owner-u1")
+	if h["X-Forwarded-For"] != wantXFF.Get("X-Forwarded-For") {
+		t.Fatalf("X-Forwarded-For: got %q want %q", h["X-Forwarded-For"], wantXFF.Get("X-Forwarded-For"))
 	}
 	if h["Content-Type"] != "application/json" {
 		t.Fatalf("Content-Type: got %q", h["Content-Type"])
@@ -132,6 +138,60 @@ func TestHandleProxy_OPTIONS_generatesRequestIDWhenMissing(t *testing.T) {
 	}
 	if _, err := uuid.Parse(got); err != nil {
 		t.Fatalf("expected UUID X-Request-ID, got %q: %v", got, err)
+	}
+}
+
+func TestResolveProxyTarget_appServerViaLB(t *testing.T) {
+	t.Parallel()
+	designWithLB := map[string]any{
+		"nodes": []any{
+			map[string]any{"type": "lb", "config": map[string]any{}},
+			map[string]any{"type": "app-server", "config": map[string]any{}},
+		},
+	}
+	host, port, err := resolveProxyTarget("app-server", designWithLB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host != "lb" || port != 80 {
+		t.Fatalf("got %q:%d want lb:80", host, port)
+	}
+
+	host, port, err = resolveProxyTarget("app-server", map[string]any{
+		"nodes": []any{map[string]any{"type": "app-server"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host != "app-server" || port != 8080 {
+		t.Fatalf("got %q:%d want app-server:8080", host, port)
+	}
+
+	host, port, err = resolveProxyTarget("cache", designWithLB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host != "cache" {
+		t.Fatalf("cache should not route via lb, got %q", host)
+	}
+}
+
+func TestPlaygroundClientSeed(t *testing.T) {
+	t.Parallel()
+	if got := playgroundClientSeed("rid", "u1", "feed/42"); got != "42" {
+		t.Fatalf("feed path: got %q want 42", got)
+	}
+	if got := playgroundClientSeed("rid", "u1", "users/7"); got != "7" {
+		t.Fatalf("users path: got %q want 7", got)
+	}
+	if got := playgroundClientSeed("rid", "u1", "shorten"); got != "u1" {
+		t.Fatalf("owner fallback: got %q want u1", got)
+	}
+	if got := playgroundClientSeed("rid-only", "", "shorten"); got != "rid-only" {
+		t.Fatalf("requestID fallback: got %q want rid-only", got)
+	}
+	if got := playgroundPathUserID("user-pool"); got != "" {
+		t.Fatalf("user-pool should not match, got %q", got)
 	}
 }
 

@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	vegeta "github.com/tsenart/vegeta/v12/lib"
 )
 
 func TestMergeActorParamValues_rejectsUnknownKey(t *testing.T) {
@@ -105,6 +107,34 @@ func TestActorModel_segmentSkew(t *testing.T) {
 	}
 	if alphaHits < 80 {
 		t.Fatalf("expected ~100%% alpha segment hits at skewPct=100, got %d/100", alphaHits)
+	}
+}
+
+func TestActorModel_stickyVirtualClientIP(t *testing.T) {
+	t.Parallel()
+	specs := []EndpointSpec{
+		{Method: http.MethodGet, PathTemplate: "/feed/{userId}", ParamName: "userId", Weight: 100},
+	}
+	m := newActorModel("http://test", specs, nil, map[string][]string{"userId": {"42"}}, nil, nil, nil)
+	targeter := m.targeter()
+
+	var a, b vegeta.Target
+	if err := targeter(&a); err != nil {
+		t.Fatalf("targeter: %v", err)
+	}
+	if err := targeter(&b); err != nil {
+		t.Fatalf("targeter: %v", err)
+	}
+	xffA := a.Header.Get("X-Forwarded-For")
+	xffB := b.Header.Get("X-Forwarded-For")
+	if xffA == "" || xffB == "" {
+		t.Fatalf("want X-Forwarded-For, got %q and %q", xffA, xffB)
+	}
+	if xffA != xffB {
+		t.Fatalf("same userId should stick: %q vs %q", xffA, xffB)
+	}
+	if virtualClientIP("42") == virtualClientIP("99") {
+		t.Fatal("different userIds should map to different virtual IPs")
 	}
 }
 

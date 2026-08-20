@@ -11,6 +11,7 @@ import (
 
 	vegeta "github.com/tsenart/vegeta/v12/lib"
 )
+
 // profileToTargetPlan resolves template endpoints into a static or actor-driven attack plan.
 // profile must already be normalized (call ValidateAndNormalizeProfile first).
 func profileToTargetPlan(ctx context.Context, namespace string, profile LoadProfile) (TargetPlan, error) {
@@ -99,6 +100,7 @@ func expandStaticTargets(baseURL string, specs []EndpointSpec, pools map[string]
 func replacePathParam(pathTemplate, placeholder, value string) string {
 	return strings.Replace(pathTemplate, placeholder, value, 1)
 }
+
 // profileToTargets resolves static targets for callers that do not use actor mode.
 func profileToTargets(ctx context.Context, namespace string, profile LoadProfile) ([]ResolvedTarget, map[string]int, error) {
 	plan, err := profileToTargetPlan(ctx, namespace, profile)
@@ -177,6 +179,7 @@ func newWeightedTargeter(list []resolvedWeighted, total int) vegeta.Targeter {
 			endpointKey = selected.Method + " " + selected.URL
 		}
 		ApplyTraceSampleHeaders(h, rid, endpointKey, nil, TraceSampleRate())
+		ApplyClientIdentityHeaders(h, rid)
 		if selected.Body != "" {
 			body := strings.ReplaceAll(selected.Body, "{{.Rand}}", strconv.Itoa(rand.Intn(1_000_000)))
 			if strings.Contains(selected.Body, "{{.Param}}") {

@@ -149,6 +149,10 @@ func TestBuildTargeter_SetsXRequestIDHeader(t *testing.T) {
 	if rida == ridb {
 		t.Fatalf("expected unique IDs per request, got duplicate %q", rida)
 	}
+	xff := a.Header.Get("X-Forwarded-For")
+	if xff == "" {
+		t.Fatalf("want X-Forwarded-For on target, got empty")
+	}
 }
 
 func TestLocalLoadGenerator_UpdateNotRunning(t *testing.T) {

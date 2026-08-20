@@ -121,6 +121,11 @@ func (m *ActorModel) targeter() vegeta.Targeter {
 			endpointKey = selected.Method + " " + selected.URL
 		}
 		ApplyTraceSampleHeaders(h, rid, endpointKey, nil, TraceSampleRate())
+		xffSeed := rid
+		if selected.ParamValue != "" {
+			xffSeed = selected.ParamValue
+		}
+		ApplyClientIdentityHeaders(h, xffSeed)
 		if selected.Body != "" {
 			body := strings.ReplaceAll(selected.Body, "{{.Rand}}", strconv.Itoa(rand.Intn(1_000_000)))
 			tgt.Body = []byte(body)
@@ -170,11 +175,12 @@ func (m *ActorModel) nextResolved() ResolvedTarget {
 		m.lastWrite[spec.ParamName] = paramValue
 	}
 	return ResolvedTarget{
-		URL:    m.baseURL + path,
-		Method: spec.Method,
-		Body:   body,
-		Weight: entry.weight,
-		Key:    entry.key,
+		URL:        m.baseURL + path,
+		Method:     spec.Method,
+		Body:       body,
+		Weight:     entry.weight,
+		Key:        entry.key,
+		ParamValue: paramValue,
 	}
 }
 
@@ -238,13 +244,13 @@ func segmentPoolKey(endpoint, field, segment string) string {
 
 // PodActorConfig serializes actor-mode loadgen settings for the in-namespace pod.
 type PodActorConfig struct {
-	BaseURL       string             `json:"baseURL"`
-	Endpoints     []EndpointSpec     `json:"endpoints"`
-	Distribution  map[string]int     `json:"distribution"`
-	Pools         map[string][]string `json:"pools"`
-	SegmentPools  map[string][]string `json:"segmentPools"`
-	ParamDefs     []ActorParam       `json:"paramDefs"`
-	ParamValues   map[string]float64 `json:"paramValues"`
+	BaseURL      string              `json:"baseURL"`
+	Endpoints    []EndpointSpec      `json:"endpoints"`
+	Distribution map[string]int      `json:"distribution"`
+	Pools        map[string][]string `json:"pools"`
+	SegmentPools map[string][]string `json:"segmentPools"`
+	ParamDefs    []ActorParam        `json:"paramDefs"`
+	ParamValues  map[string]float64  `json:"paramValues"`
 }
 
 // BuildTargeterFromPodActor reconstructs an actor targeter in the loadgen pod.

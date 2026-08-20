@@ -100,3 +100,26 @@ func TestDiscoverPodLogStreams_DeduplicatesPodContainer(t *testing.T) {
 		t.Fatalf("expected one deduplicated stream, got %d (%+v)", len(streams), streams)
 	}
 }
+
+func TestParseLine_setsPod(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, line, component, pod string
+	}{
+		{name: "json", line: `{"msg":"request handled","level":"info"}`, component: "app-server", pod: "app-server-abc"},
+		{name: "plaintext", line: "LOG: ready", component: "db", pod: "postgres-0"},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := parseLine(tc.line, tc.component, tc.pod)
+			if got.Pod != tc.pod {
+				t.Fatalf("Pod = %q want %q", got.Pod, tc.pod)
+			}
+			if got.Component != tc.component {
+				t.Fatalf("Component = %q want %q", got.Component, tc.component)
+			}
+		})
+	}
+}
