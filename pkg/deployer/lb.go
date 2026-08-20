@@ -324,7 +324,8 @@ func (s LBSpec) nginxConf(backends []string, algorithm string, weights []int, ra
 	limitLoc := ""
 	if rateLimit > 0 {
 		limitZone = fmt.Sprintf("    limit_req_zone $binary_remote_addr zone=perip:1m rate=%dr/s;\n", rateLimit)
-		limitLoc = "limit_req zone=perip burst=0 nodelay;\n            "
+		// Omit burst= (nginx rejects explicit burst=0). Default burst is 0: excess requests 503 immediately.
+		limitLoc = "limit_req zone=perip nodelay;\n            "
 	}
 	return fmt.Sprintf(`events {
     worker_connections %d;

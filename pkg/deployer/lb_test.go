@@ -132,8 +132,11 @@ func TestLBSpec_nginxConf_rateLimit(t *testing.T) {
 	if !strings.Contains(limited, "rate=5r/s") {
 		t.Fatalf("expected rate=5r/s: %s", limited)
 	}
-	if !strings.Contains(limited, "limit_req zone=perip") {
-		t.Fatalf("expected limit_req zone=perip: %s", limited)
+	if !strings.Contains(limited, "limit_req zone=perip nodelay") {
+		t.Fatalf("expected limit_req zone=perip nodelay: %s", limited)
+	}
+	if strings.Contains(limited, "burst=") {
+		t.Fatalf("explicit burst= is invalid at 0 and not needed: %s", limited)
 	}
 	parts := strings.Split(limited, "location / {")
 	if len(parts) != 2 {
