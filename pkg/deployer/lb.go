@@ -94,7 +94,12 @@ func ReconcileLBUpstream(ctx context.Context, clientset kubernetes.Interface, na
 	}
 
 	logicalBackends := lbBackends(lbNode, design)
-	nginxConf := spec.nginxConfig(upstreamHosts, algo)
+	weighted := configBool(lbNode.Config, "weightByInstanceSize")
+	var weights []int
+	if weighted {
+		weights = nginxWeightsForHosts(ctx, clientset, namespace, upstreamHosts)
+	}
+	nginxConf := spec.nginxConfigWeighted(upstreamHosts, algo, weights)
 
 	cm, err := buildLBConfigMap(lbConfigInput{
 		algo:            algo,
@@ -174,7 +179,12 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 	appReplicas := appServerDesiredReplicas(cfg.Node, cfg.Design)
 	upstreamHosts, endpointSnap := k.waitResolveAppServerUpstream(ctx, cfg.Namespace, appReplicas, spec)
 	serviceFallback := isUpstreamServiceFallback(upstreamHosts, endpointSnap)
-	nginxConf := spec.nginxConfig(upstreamHosts, algo)
+	weighted := configBool(cfg.Node.Config, "weightByInstanceSize")
+	var weights []int
+	if weighted {
+		weights = nginxWeightsForHosts(ctx, k.clientset, cfg.Namespace, upstreamHosts)
+	}
+	nginxConf := spec.nginxConfigWeighted(upstreamHosts, algo, weights)
 
 	cm, err := buildLBConfigMap(lbConfigInput{
 		algo:            algo,
@@ -274,6 +284,10 @@ func (k *K8sDeployer) reloadLBDeployment(ctx context.Context, namespace string) 
 // algorithm: round-robin (default), least_conn, random — directives other than the default
 // must appear inside upstream {}.
 func (s LBSpec) nginxConfig(backends []string, algorithm string) string {
+	return s.nginxConfigWeighted(backends, algorithm, nil)
+}
+
+func (s LBSpec) nginxConfigWeighted(backends []string, algorithm string, weights []int) string {
 	var upstreamExtra string
 	switch normalizeLBAlgorithm(algorithm) {
 	case lbAlgoLeastConn:
@@ -283,9 +297,20 @@ func (s LBSpec) nginxConfig(backends []string, algorithm string) string {
 	default:
 		upstreamExtra = ""
 	}
+	useWeights := len(weights) == len(backends) && len(weights) > 0 && !weightsAllEqual(weights)
+	for _, w := range weights {
+		if w <= 0 {
+			useWeights = false
+			break
+		}
+	}
 	var b strings.Builder
-	for _, host := range backends {
-		fmt.Fprintf(&b, "        server %s:8080;\n", host)
+	for i, host := range backends {
+		if useWeights {
+			fmt.Fprintf(&b, "        server %s:8080 weight=%d;\n", host, weights[i])
+		} else {
+			fmt.Fprintf(&b, "        server %s:8080;\n", host)
+		}
 	}
 	return fmt.Sprintf(`events {
     worker_connections %d;
@@ -312,6 +337,39 @@ http {
     }
 }
 `, s.WorkerConnections, upstreamExtra, b.String(), s.UpstreamKeepalive)
+}
+
+// nginxWeightsForHosts maps upstream pod IPs to nginx weights from instance-size labels.
+func nginxWeightsForHosts(ctx context.Context, clientset kubernetes.Interface, namespace string, upstreamHosts []string) []int {
+	if len(upstreamHosts) == 0 {
+		return nil
+	}
+	list, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app=app-server,deployment=%s", namespace),
+	})
+	if err != nil {
+		return nil
+	}
+	ipToWeight := make(map[string]int, len(list.Items))
+	for _, p := range list.Items {
+		if p.Status.PodIP == "" {
+			continue
+		}
+		size := p.Labels[instanceSizeLabelKey]
+		if size == "" {
+			return nil
+		}
+		ipToWeight[p.Status.PodIP] = nginxWeightForSize(size)
+	}
+	weights := make([]int, len(upstreamHosts))
+	for i, host := range upstreamHosts {
+		w, ok := ipToWeight[host]
+		if !ok {
+			return nil
+		}
+		weights[i] = w
+	}
+	return weights
 }
 
 // resolveAppServerUpstream returns nginx upstream hosts (pod IPs when available, else service name).

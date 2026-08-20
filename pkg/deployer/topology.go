@@ -596,6 +596,18 @@ func cacheRedisStrategyForApp(cacheNode DeploymentNode) string {
 	return cacheNodeStrategy(cacheNode)
 }
 
+func configBool(config map[string]any, key string) bool {
+	if config == nil {
+		return false
+	}
+	v, ok := config[key]
+	if !ok {
+		return false
+	}
+	b, ok := v.(bool)
+	return ok && b
+}
+
 func configString(config map[string]any, key, defaultVal string) string {
 	if config == nil {
 		return defaultVal

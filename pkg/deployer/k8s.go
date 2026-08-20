@@ -488,69 +488,78 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 	return k.waitForReady(ctx, cfg.Namespace, "redis", replicas)
 }
 
-func (k *K8sDeployer) deployAppServer(ctx context.Context, cfg DeployConfig, resources corev1.ResourceRequirements, replicas int32) error {
+func (k *K8sDeployer) deployAppServer(ctx context.Context, cfg DeployConfig, _ corev1.ResourceRequirements, replicas int32) error {
 	envVars := DeriveEnvVars(cfg.Node, cfg.Design)
+	sizes := instanceSizesFromConfig(cfg.Node.Config, int(replicas))
+	groups := sizeGroups(sizes)
 
-	// Image is a placeholder for now — Week 6 replaces with pre-built template images.
-	labels := map[string]string{"app": "app-server", "deployment": cfg.Namespace}
-
-	// These annotations are how Prometheus discovers which pods to scrape.
+	svcSelector := map[string]string{"app": "app-server", "deployment": cfg.Namespace}
 	appAnnotations := map[string]string{
 		"prometheus.io/scrape": "true",
 		"prometheus.io/port":   "8080",
 		"prometheus.io/path":   "/metrics",
 	}
 
-	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "app-server", Namespace: cfg.Namespace},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr(replicas),
-			Selector: &metav1.LabelSelector{MatchLabels: labels},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: appAnnotations},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{{
-						Name:            "app-server",
-						Image:           appServerImage(cfg.Design.Template),
-						ImagePullPolicy: corev1.PullAlways,
-						Ports:           []corev1.ContainerPort{{ContainerPort: 8080}},
-						Resources:       resources,
-						// UNDERSTAND: readiness reflects only that the app can accept traffic
-						// (/health/ready is dependency-free); liveness (/health/live) restarts
-						// the container only when the process itself is wedged. This decouples
-						// PodReady from transient Redis/DB slowness that used to drain the LB.
-						ReadinessProbe: templateReadyProbe(8080, 3, 5, 8, 3),
-						LivenessProbe:  templateLiveProbe(8080),
-						Env:            envMapToK8s(envVars),
-					}},
+	for i, group := range groups {
+		depName := "app-server"
+		if i > 0 {
+			depName = "app-server-" + group.Size
+		}
+		labels := map[string]string{
+			"app":                "app-server",
+			"deployment":         cfg.Namespace,
+			instanceSizeLabelKey: group.Size,
+		}
+		res := ResolveNodeResources("app-server", map[string]any{
+			"instanceSize":    group.Size,
+			"resourceProfile": normalizeInstanceSize(group.Size),
+		})
+		dep := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: depName, Namespace: cfg.Namespace},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: ptr(group.Count),
+				Selector: &metav1.LabelSelector{MatchLabels: labels},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: appAnnotations},
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{
+							Name:            "app-server",
+							Image:           appServerImage(cfg.Design.Template),
+							ImagePullPolicy: corev1.PullAlways,
+							Ports:           []corev1.ContainerPort{{ContainerPort: 8080}},
+							Resources:       res,
+							ReadinessProbe:  templateReadyProbe(8080, 3, 5, 8, 3),
+							LivenessProbe:   templateLiveProbe(8080),
+							Env:             envMapToK8s(envVars),
+						}},
+					},
 				},
 			},
-		},
-	}
-	_, err := k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{})
-	if err != nil {
-		return fmt.Errorf("create deployment: %w", err)
+		}
+		if _, err := k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil {
+			return fmt.Errorf("create deployment %s: %w", depName, err)
+		}
 	}
 
 	svcApp := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: "app-server", Namespace: cfg.Namespace},
 		Spec: corev1.ServiceSpec{
 			Type:     corev1.ServiceTypeClusterIP,
-			Selector: labels,
+			Selector: svcSelector,
 			Ports:    []corev1.ServicePort{{Port: 8080, TargetPort: intstr.FromInt32(8080)}},
 		},
 	}
-	_, err = k.clientset.CoreV1().Services(cfg.Namespace).Create(ctx, svcApp, metav1.CreateOptions{})
-	if err != nil {
+	if _, err := k.clientset.CoreV1().Services(cfg.Namespace).Create(ctx, svcApp, metav1.CreateOptions{}); err != nil {
 		return fmt.Errorf("create service: %w", err)
 	}
 
-	return k.waitForReady(ctx, cfg.Namespace, "app-server", replicas)
+	return k.waitForReady(ctx, cfg.Namespace, "app-server", int32(len(sizes)))
 }
 
-func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, resources corev1.ResourceRequirements, replicas int32) error {
+func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, _ corev1.ResourceRequirements, replicas int32) error {
 	envVars := DeriveEnvVars(cfg.Node, cfg.Design)
-	labels := map[string]string{"app": "worker", "deployment": cfg.Namespace}
+	sizes := instanceSizesFromConfig(cfg.Node.Config, int(replicas))
+	groups := sizeGroups(sizes)
 	workerAnnotations := map[string]string{
 		"prometheus.io/scrape": "true",
 		"prometheus.io/port":   "8080",
@@ -558,40 +567,55 @@ func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, resour
 	}
 	img := workerImage(cfg.Design.Template)
 
-	ctr := corev1.Container{
-		Name:            "worker",
-		Image:           img,
-		ImagePullPolicy: corev1.PullAlways,
-		Ports:           []corev1.ContainerPort{{ContainerPort: 8080}},
-		Resources:       resources,
-		Env:             envMapToK8s(envVars),
-		ReadinessProbe:  templateHTTPReadinessProbe(8080, 5, 5, 10, 5),
-	}
-	// busybox exits immediately without a long-running command — keep pod Ready for QA placeholders.
-	if img == imageBusybox || strings.HasSuffix(img, "/"+imageBusybox) {
-		ctr.Command = []string{"sleep", "infinity"}
-		ctr.Ports = nil
-		ctr.ReadinessProbe = nil
-	}
+	for i, group := range groups {
+		depName := "worker"
+		if i > 0 {
+			depName = "worker-" + group.Size
+		}
+		labels := map[string]string{
+			"app":                "worker",
+			"deployment":         cfg.Namespace,
+			instanceSizeLabelKey: group.Size,
+		}
+		res := ResolveNodeResources("worker", map[string]any{
+			"instanceSize":    group.Size,
+			"resourceProfile": normalizeInstanceSize(group.Size),
+		})
 
-	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: cfg.Namespace},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr(replicas),
-			Selector: &metav1.LabelSelector{MatchLabels: labels},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: workerAnnotations},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{ctr},
+		ctr := corev1.Container{
+			Name:            "worker",
+			Image:           img,
+			ImagePullPolicy: corev1.PullAlways,
+			Ports:           []corev1.ContainerPort{{ContainerPort: 8080}},
+			Resources:       res,
+			Env:             envMapToK8s(envVars),
+			ReadinessProbe:  templateHTTPReadinessProbe(8080, 5, 5, 10, 5),
+		}
+		if img == imageBusybox || strings.HasSuffix(img, "/"+imageBusybox) {
+			ctr.Command = []string{"sleep", "infinity"}
+			ctr.Ports = nil
+			ctr.ReadinessProbe = nil
+		}
+
+		dep := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: depName, Namespace: cfg.Namespace},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: ptr(group.Count),
+				Selector: &metav1.LabelSelector{MatchLabels: labels},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: workerAnnotations},
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{ctr},
+					},
 				},
 			},
-		},
+		}
+		if _, err := k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil {
+			return fmt.Errorf("create worker deployment %s: %w", depName, err)
+		}
 	}
-	_, err := k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{})
-	if err != nil {
-		return fmt.Errorf("create worker deployment: %w", err)
-	}
-	return k.waitForReady(ctx, cfg.Namespace, "worker", replicas)
+
+	return k.waitForReady(ctx, cfg.Namespace, "worker", int32(len(sizes)))
 }
 
 func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, resources corev1.ResourceRequirements, replicas int32) error {

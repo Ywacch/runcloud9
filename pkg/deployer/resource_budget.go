@@ -95,6 +95,10 @@ func SumDesignResources(design DeploymentDesign, userTier string) ResourceBudget
 		if !isDeployableNodeType(node.Type) {
 			continue
 		}
+		if node.Type == "app-server" || node.Type == "worker" {
+			addPerCopyBudget(&total, node)
+			continue
+		}
 		replicas := replicasForBudget(node)
 		if replicas < 1 {
 			replicas = 1
@@ -208,6 +212,31 @@ func replicasForBudget(node DeploymentNode) int32 {
 		return n
 	default:
 		return parseReplicaCount(node.Config, 1)
+	}
+}
+
+func addPerCopyBudget(total *ResourceBudget, node DeploymentNode) {
+	replicas := replicasForBudget(node)
+	if replicas < 1 {
+		replicas = 1
+	}
+	sizes := instanceSizesFromConfig(node.Config, int(replicas))
+	groups := sizeGroups(sizes)
+	name := strings.TrimSpace(node.Name)
+	if name == "" {
+		name = node.Type
+	}
+	for _, g := range groups {
+		cfg := map[string]any{
+			"instanceSize":    g.Size,
+			"resourceProfile": normalizeInstanceSize(g.Size),
+		}
+		res := ResolveNodeResources(node.Type, cfg)
+		label := fmt.Sprintf("%s %s", name, g.Size)
+		if g.Count > 1 {
+			label = fmt.Sprintf("%s %s×%d", name, g.Size, g.Count)
+		}
+		addRequirements(total, label, res, g.Count)
 	}
 }
 
