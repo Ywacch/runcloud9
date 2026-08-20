@@ -101,6 +101,9 @@ func ResolveNodeResources(nodeType string, config map[string]interface{}) corev1
 	if prof := configString(config, "resourceProfile", ""); prof != "" {
 		return ResourceProfile(prof)
 	}
+	if size := configString(config, "instanceSize", ""); size != "" {
+		return ResourceProfile(normalizeInstanceSize(size))
+	}
 	return ComponentDefaultResources(nodeType)
 }
 

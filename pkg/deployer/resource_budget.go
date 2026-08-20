@@ -227,7 +227,10 @@ func addPerCopyBudget(total *ResourceBudget, node DeploymentNode) {
 		name = node.Type
 	}
 	for _, g := range groups {
-		cfg := map[string]any{"instanceSize": g.Size}
+		cfg := map[string]any{
+			"instanceSize":    g.Size,
+			"resourceProfile": normalizeInstanceSize(g.Size),
+		}
 		res := ResolveNodeResources(node.Type, cfg)
 		label := fmt.Sprintf("%s %s", name, g.Size)
 		if g.Count > 1 {

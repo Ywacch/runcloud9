@@ -510,7 +510,10 @@ func (k *K8sDeployer) deployAppServer(ctx context.Context, cfg DeployConfig, _ c
 			"deployment":         cfg.Namespace,
 			instanceSizeLabelKey: group.Size,
 		}
-		res := ResolveNodeResources("app-server", map[string]any{"instanceSize": group.Size})
+		res := ResolveNodeResources("app-server", map[string]any{
+			"instanceSize":    group.Size,
+			"resourceProfile": normalizeInstanceSize(group.Size),
+		})
 		dep := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Name: depName, Namespace: cfg.Namespace},
 			Spec: appsv1.DeploymentSpec{
@@ -574,7 +577,10 @@ func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, _ core
 			"deployment":         cfg.Namespace,
 			instanceSizeLabelKey: group.Size,
 		}
-		res := ResolveNodeResources("worker", map[string]any{"instanceSize": group.Size})
+		res := ResolveNodeResources("worker", map[string]any{
+			"instanceSize":    group.Size,
+			"resourceProfile": normalizeInstanceSize(group.Size),
+		})
 
 		ctr := corev1.Container{
 			Name:            "worker",
