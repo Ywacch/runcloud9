@@ -983,6 +983,44 @@ func TestDeriveEnvVars_AppServerPurchaseMode(t *testing.T) {
 	}
 }
 
+func TestDeriveEnvVars_AppServerTicketDropSeed(t *testing.T) {
+	t.Parallel()
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{{
+			ID:   "a",
+			Type: "app-server",
+			Name: "Ticket API",
+			Config: map[string]any{
+				"seedEventName":     "Midnight Arena — Floor",
+				"seedEventCapacity": 120,
+			},
+		}},
+	}
+	env := DeriveEnvVars(design.Nodes[0], design)
+	if env["SEED_EVENT_NAME"] != "Midnight Arena — Floor" {
+		t.Fatalf("SEED_EVENT_NAME: got %q", env["SEED_EVENT_NAME"])
+	}
+	if env["SEED_EVENT_CAPACITY"] != "120" {
+		t.Fatalf("SEED_EVENT_CAPACITY: got %q want 120", env["SEED_EVENT_CAPACITY"])
+	}
+}
+
+func TestDeriveEnvVars_AppServerOptimisticPurchaseMode(t *testing.T) {
+	t.Parallel()
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{{
+			ID:     "a",
+			Type:   "app-server",
+			Name:   "Ticket API",
+			Config: map[string]any{"purchaseMode": "optimistic"},
+		}},
+	}
+	env := DeriveEnvVars(design.Nodes[0], design)
+	if env["PURCHASE_MODE"] != "optimistic" {
+		t.Fatalf("PURCHASE_MODE: got %q want optimistic", env["PURCHASE_MODE"])
+	}
+}
+
 func TestDeriveEnvVars_AppServerInventoryMode(t *testing.T) {
 	t.Parallel()
 	design := DeploymentDesign{

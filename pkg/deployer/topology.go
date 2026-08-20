@@ -551,6 +551,12 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 		if mode := configString(node.Config, "purchaseMode", ""); mode != "" {
 			env["PURCHASE_MODE"] = mode
 		}
+		if name := strings.TrimSpace(configString(node.Config, "seedEventName", "")); name != "" {
+			env["SEED_EVENT_NAME"] = name
+		}
+		if cap, ok := positiveIntConfig(node.Config, "seedEventCapacity"); ok {
+			env["SEED_EVENT_CAPACITY"] = cap
+		}
 		if hasProxyCacheConn {
 			// App-driven proxy writes carry a TTL in the request body; keep it
 			// on the same cache-node value as proxy miss-fill so the two paths
