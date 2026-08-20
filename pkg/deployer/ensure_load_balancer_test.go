@@ -104,15 +104,3 @@ func findNodeByID(d DeploymentDesign, id string) *DeploymentNode {
 	}
 	return nil
 }
-
-func configBool(config map[string]interface{}, key string) bool {
-	if config == nil {
-		return false
-	}
-	v, ok := config[key]
-	if !ok {
-		return false
-	}
-	b, ok := v.(bool)
-	return ok && b
-}

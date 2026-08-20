@@ -92,6 +92,30 @@ func TestLBSpec_nginxConfig(t *testing.T) {
 	}
 }
 
+func TestLBSpec_nginxConfigWeighted(t *testing.T) {
+	t.Parallel()
+	spec := DefaultLBSpec()
+	backends := []string{"10.0.0.1", "10.0.0.2"}
+
+	off := spec.nginxConfigWeighted(backends, "round-robin", nil)
+	if strings.Contains(off, "weight=") {
+		t.Fatalf("nil weights should omit weight=: %s", off)
+	}
+
+	uniform := spec.nginxConfigWeighted(backends, "round-robin", []int{1, 1})
+	if strings.Contains(uniform, "weight=") {
+		t.Fatalf("uniform weights should omit weight=: %s", uniform)
+	}
+
+	mixed := spec.nginxConfigWeighted(backends, "round-robin", []int{4, 1})
+	if !strings.Contains(mixed, "server 10.0.0.1:8080 weight=4;") {
+		t.Fatalf("expected weight=4 on large backend: %s", mixed)
+	}
+	if !strings.Contains(mixed, "server 10.0.0.2:8080 weight=1;") {
+		t.Fatalf("expected weight=1 on small backend: %s", mixed)
+	}
+}
+
 func TestAppServerDesiredReplicas(t *testing.T) {
 	t.Parallel()
 	lb := DeploymentNode{ID: "lb1", Type: "lb", Name: "LB"}

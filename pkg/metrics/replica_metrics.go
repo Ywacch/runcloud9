@@ -37,9 +37,15 @@ func (c *MetricsCollector) listAppServerPods(ctx context.Context, ns string) (na
 	if c == nil || c.clientset == nil {
 		return nil, ready, counts
 	}
-	dep, err := c.clientset.AppsV1().Deployments(ns).Get(ctx, "app-server", metav1.GetOptions{})
-	if err == nil && dep.Spec.Replicas != nil {
-		counts.Desired = *dep.Spec.Replicas
+	depList, err := c.clientset.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=app-server",
+	})
+	if err == nil {
+		for _, dep := range depList.Items {
+			if dep.Spec.Replicas != nil {
+				counts.Desired += *dep.Spec.Replicas
+			}
+		}
 	}
 	list, err := c.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("app=app-server,deployment=%s", ns),

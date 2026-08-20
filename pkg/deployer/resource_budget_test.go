@@ -41,6 +41,43 @@ func TestSumDesignResources_urlShortenerDefaults(t *testing.T) {
 	assertQuantityEqual(t, got.Memory, "1408Mi", "memory total")
 }
 
+func TestSumDesignResources_mixedInstanceSizes(t *testing.T) {
+	t.Parallel()
+
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{
+				ID:   "app1",
+				Type: "app-server",
+				Name: "App Server",
+				Config: map[string]interface{}{
+					"replicas":      2,
+					"instanceSize":  "large",
+					"instanceSizes": []any{"large", "small"},
+				},
+			},
+		},
+	}
+	got := SumDesignResources(design, "explorer")
+	twoLarge := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{
+				ID:   "app1",
+				Type: "app-server",
+				Name: "App Server",
+				Config: map[string]interface{}{
+					"replicas":     2,
+					"instanceSize": "large",
+				},
+			},
+		},
+	}
+	gotTwoLarge := SumDesignResources(twoLarge, "explorer")
+	if got.CPU.Cmp(gotTwoLarge.CPU) >= 0 {
+		t.Fatalf("mixed large+small CPU %v should be less than 2× large %v", got.CPU, gotTwoLarge.CPU)
+	}
+}
+
 func TestSumDesignResources_urlShortenerLite(t *testing.T) {
 	t.Parallel()
 
