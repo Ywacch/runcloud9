@@ -9,7 +9,8 @@ import "time"
 type LogLine struct {
 	Timestamp time.Time      `json:"timestamp"`
 	Component string         `json:"component"` // "db" | "cache" | "app-server"
-	Level     string         `json:"level"`     // "info" | "warn" | "error" | "debug"
+	Pod       string         `json:"pod,omitempty"`
+	Level     string         `json:"level"` // "info" | "warn" | "error" | "debug"
 	Message   string         `json:"message"`
 	Fields    map[string]any `json:"fields,omitempty"` // extra structured fields
 }

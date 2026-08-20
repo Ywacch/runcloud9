@@ -208,15 +208,15 @@ func (s *attackSession) run(ctx context.Context, lg *LocalLoadGenerator, namespa
 	slog.Info("loadgen started", "namespace", namespace, "template", profile.Template, "rps", profile.RPS, "schedule", profile.ScheduleID)
 
 	RunAttackLoop(AttackLoopOpts{
-		Ctx:             ctx,
-		Profile:         profile,
-		Namespace:       namespace,
-		BuildTargeter:   LocalTargeterBuilder(namespace),
-		Stats:           &s.stats,
-		StatsMu:         &s.mu,
-		Recent:          &s.recent,
-		Control:         control,
-		AttackName:      "cloud9-loadgen",
+		Ctx:           ctx,
+		Profile:       profile,
+		Namespace:     namespace,
+		BuildTargeter: LocalTargeterBuilder(namespace),
+		Stats:         &s.stats,
+		StatsMu:       &s.mu,
+		Recent:        &s.recent,
+		Control:       control,
+		AttackName:    "cloud9-loadgen",
 		OnNaturalFinish: func() {
 			lg.finish(namespace, s)
 			slog.Info("loadgen attack finished", "namespace", namespace)
@@ -421,6 +421,7 @@ func buildTargeter(baseURL string, specs []EndpointSpec, pools map[string][]stri
 		rid := fmt.Sprintf("%x", rand.Uint64())
 		h := http.Header{}
 		ApplyTraceSampleHeaders(h, rid, DistributionKey(selected), nil, TraceSampleRate())
+		ApplyClientIdentityHeaders(h, rid)
 		if selected.BodyTemplate != "" {
 			body := strings.ReplaceAll(selected.BodyTemplate, "{{.Rand}}", fmt.Sprintf("%d", rand.Intn(1000000)))
 			if selected.ParamName != "" {

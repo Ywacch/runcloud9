@@ -646,3 +646,20 @@ func positiveIntConfig(config map[string]any, key string) (string, bool) {
 	}
 	return strconv.Itoa(n), true
 }
+
+// rateLimitPerIP parses lb config rateLimitPerIp. Missing, zero, invalid, or negative → 0 (off).
+// Values above 100 clamp to 100.
+func rateLimitPerIP(config map[string]any) int {
+	raw := configString(config, "rateLimitPerIp", "")
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return 0
+	}
+	if n > 100 {
+		return 100
+	}
+	return n
+}

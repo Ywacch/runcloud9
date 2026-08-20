@@ -1,17 +1,18 @@
 package deployer
 
 // Live LB algorithms emit real nginx upstream methods that session loadgen can demonstrate.
-// ip_hash is intentionally excluded: loadgen is one client IP and sticky-IP pins all traffic.
 const (
 	lbAlgoRoundRobin = "round-robin"
 	lbAlgoLeastConn  = "least_conn"
 	lbAlgoRandom     = "random"
+	lbAlgoIPHash     = "ip_hash"
 )
 
 var liveLBAlgorithms = map[string]struct{}{
 	lbAlgoRoundRobin: {},
 	lbAlgoLeastConn:  {},
 	lbAlgoRandom:     {},
+	lbAlgoIPHash:     {},
 }
 
 // normalizeLBAlgorithm maps aliases and legacy values onto the live allowlist.
@@ -25,8 +26,7 @@ func normalizeLBAlgorithm(raw string) string {
 	case "random":
 		return lbAlgoRandom
 	case "ip-hash", "ip_hash", "iphash":
-		// Legacy sticky-IP: not teachable under single-IP loadgen.
-		return lbAlgoRoundRobin
+		return lbAlgoIPHash
 	default:
 		return raw
 	}
@@ -39,5 +39,5 @@ func isLiveLBAlgorithm(algo string) bool {
 
 // liveLBAlgorithmList returns a stable, human-readable allowlist for error messages.
 func liveLBAlgorithmList() string {
-	return "round-robin, least_conn, or random"
+	return "round-robin, least_conn, random, or ip_hash"
 }
