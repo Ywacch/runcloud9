@@ -1,6 +1,8 @@
 package api
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/ywacch/cloud9/pkg/loadgen"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 func TestProxyRequestID_preservesClientHeader(t *testing.T) {
@@ -192,6 +195,88 @@ func TestPlaygroundClientSeed(t *testing.T) {
 	}
 	if got := playgroundPathUserID("user-pool"); got != "" {
 		t.Fatalf("user-pool should not match, got %q", got)
+	}
+}
+
+func TestNormalizeProxyUpstream(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		statusCode int
+		body       []byte
+		err        error
+		wantCode   int
+		wantFailed bool
+	}{
+		{
+			name:       "success",
+			statusCode: http.StatusCreated,
+			body:       []byte(`{"code":"abc"}`),
+			wantCode:   http.StatusCreated,
+		},
+		{
+			name:       "429 with body",
+			statusCode: http.StatusTooManyRequests,
+			body:       []byte("rate limited"),
+			err:        fmt.Errorf("unexpected status"),
+			wantCode:   http.StatusTooManyRequests,
+		},
+		{
+			name:       "429 from APIStatus",
+			statusCode: 0,
+			err:        apierrors.NewTooManyRequests("rate", 0),
+			wantCode:   http.StatusTooManyRequests,
+		},
+		{
+			name:       "transport failure",
+			statusCode: 0,
+			err:        fmt.Errorf("connection refused"),
+			wantCode:   http.StatusBadGateway,
+			wantFailed: true,
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := normalizeProxyUpstream(tc.statusCode, tc.body, tc.err)
+			if got.statusCode != tc.wantCode {
+				t.Fatalf("statusCode: got %d want %d", got.statusCode, tc.wantCode)
+			}
+			if got.failed != tc.wantFailed {
+				t.Fatalf("failed: got %v want %v", got.failed, tc.wantFailed)
+			}
+			if !tc.wantFailed && string(got.body) != string(tc.body) {
+				t.Fatalf("body: got %q want %q", got.body, tc.body)
+			}
+		})
+	}
+}
+
+func TestWriteProxyUpstream_passes429(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	t.Setenv("ALLOWED_ORIGINS", "")
+	up := normalizeProxyUpstream(http.StatusTooManyRequests, []byte("limited"), errors.New("upstream 429"))
+	writeProxyUpstream(rec, req, up)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status: got %d want 429", rec.Code)
+	}
+	if got := rec.Body.String(); got != "limited" {
+		t.Fatalf("body: got %q want limited", got)
+	}
+}
+
+func TestWriteProxyUpstream_transport502(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	t.Setenv("ALLOWED_ORIGINS", "")
+	up := normalizeProxyUpstream(0, nil, errors.New("connection refused"))
+	writeProxyUpstream(rec, req, up)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status: got %d want 502", rec.Code)
 	}
 }
 
