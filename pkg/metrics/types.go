@@ -210,7 +210,7 @@ type ComponentMetrics struct {
 	StorageIO     *StorageIO `json:"storageIo,omitempty"`
 	// RuntimeHealth is populated from the Kubernetes API when clientset is configured.
 	RuntimeHealth *RuntimeHealth `json:"runtimeHealth,omitempty"`
-	// Layers splits cache (and future multi-process components) by role when proxy mode is active.
+	// Layers splits cache proxy/backing-store or Postgres primary/replica instances by role.
 	Layers []ComponentLayerMetrics `json:"layers,omitempty"`
 	// Freshness tags signal groups (throughput, containerCpu, containerMem, connections,
 	// queue) with their collection tier and nominal lag. See freshness.go.
@@ -240,6 +240,8 @@ type ComponentLayerMetrics struct {
 	EvictionsPerSec   float64 `json:"evictionsPerSec,omitempty"`
 	ExpirationsPerSec float64 `json:"expirationsPerSec,omitempty"`
 	RestartCount      int32   `json:"restartCount,omitempty"`
+	// ReplicationLagSeconds is primary-side replay lag on replica layers (seconds).
+	ReplicationLagSeconds float64 `json:"replicationLagSeconds,omitempty"`
 	// Freshness tags containerCpu / containerMem for this layer (proxy vs backing store
 	// can sit on different tiers). See freshness.go.
 	Freshness map[string]SignalFreshness `json:"freshness,omitempty"`

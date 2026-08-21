@@ -29,6 +29,7 @@ const (
 	SignalContainerMem = "containerMem" // MemoryBytes
 	SignalConnections  = "connections"  // ActiveConnections / DbActiveConnections
 	SignalQueue        = "queue"        // QueueDepth / MessagesReady / MessagesUnacked
+	SignalReplication  = "replication"  // ReplicationLagSeconds on Postgres replica layers
 )
 
 // SignalFreshness tags one signal group on a component or layer with its
@@ -117,7 +118,7 @@ var componentSignalTiers = map[string]map[string]FreshnessTier{
 	"app-server": {SignalThroughput: FreshnessRate},
 	"worker":     {SignalThroughput: FreshnessRate},
 	"cache":      {SignalThroughput: FreshnessRate},
-	"db":         {SignalThroughput: FreshnessRate, SignalConnections: FreshnessRate},
+	"db":         {SignalThroughput: FreshnessRate, SignalConnections: FreshnessRate, SignalReplication: FreshnessRate},
 	"lb":         {SignalThroughput: FreshnessRate, SignalConnections: FreshnessDirect},
 	"mq":         {SignalThroughput: FreshnessDirect, SignalQueue: FreshnessDirect},
 }
@@ -141,12 +142,16 @@ func annotateFreshness(dm *DeploymentMetrics) {
 		cm.Freshness = fresh
 		for i := range cm.Layers {
 			layer := &cm.Layers[i]
-			layer.Freshness = map[string]SignalFreshness{
+			layerFresh := map[string]SignalFreshness{
 				SignalContainerCPU: signalFreshness(
 					tierForResourceSource(layer.CPUSource, layer.CPUIsEstimated), layer.CPUSource),
 				SignalContainerMem: signalFreshness(
 					tierForResourceSource(layer.MemSource, layer.MemIsEstimated), layer.MemSource),
 			}
+			if name == "db" && layer.Role == dbLayerRoleReplica {
+				layerFresh[SignalReplication] = signalFreshness(FreshnessRate, "prometheus_gauge")
+			}
+			layer.Freshness = layerFresh
 		}
 		dm.Components[name] = cm
 	}

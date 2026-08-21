@@ -41,7 +41,7 @@ func componentKeyForAppLabel(app string) string {
 		return "app-server"
 	case "worker":
 		return "worker"
-	case "postgres":
+	case "postgres", "postgres-replica":
 		return "db"
 	case "rabbitmq":
 		return "mq"
