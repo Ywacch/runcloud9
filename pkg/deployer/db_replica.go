@@ -17,7 +17,7 @@ const (
 	dbReplicaDeploymentName = "postgres-replica"
 	dbReplicaServiceName    = "db-replica"
 	dbReplicaDataVolumeName = "pgdata"
-	dbReplicaEphemeralSize  = "200Mi"
+	dbReplicaEphemeralSize  = "500Mi"
 )
 
 // postgresPrimaryCommand returns the postgres primary command, including sync flags when configured.
