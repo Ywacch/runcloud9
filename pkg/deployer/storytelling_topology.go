@@ -7,18 +7,20 @@ import (
 // StorytellingTopology summarizes canvas node presence and primary cache strategy
 // for metrics narratives and UI. Derived only from the saved deployment design.
 type StorytellingTopology struct {
-	HasLB         bool
-	HasMQ         bool
-	HasWorker     bool
-	HasCache      bool
-	CacheStrategy string
-	Template      string
-	HasDB         bool
-	DBEngine      string
-	DBRole        string
-	CacheEngine   string
-	CacheRole     string
-	HasProxyCache bool
+	HasLB            bool
+	HasMQ            bool
+	HasWorker        bool
+	HasCache         bool
+	CacheStrategy    string
+	Template         string
+	HasDB            bool
+	DBEngine         string
+	DBRole           string
+	ReadReplicaCount int
+	ReplicationMode  string
+	CacheEngine      string
+	CacheRole        string
+	HasProxyCache    bool
 }
 
 // StorytellingTopologyFromDesign walks design nodes (load_balancer, message_queue, worker, cache).
@@ -44,9 +46,13 @@ func StorytellingTopologyFromDesign(d *DeploymentDesign, template string) Storyt
 			if eng := configStringFromNodeConfig(n.Config, "engine"); eng != "" {
 				t.DBEngine = eng
 			}
-			if mode := configStringFromNodeConfig(n.Config, "replicationMode"); mode != "" && mode != "none" {
-				t.DBRole = "replica"
+			t.ReadReplicaCount = int(parseReadReplicaCount(n.Config))
+			if mode, err := parseReplicationMode(n.Config); err == nil {
+				t.ReplicationMode = mode
+			} else {
+				t.ReplicationMode = "async"
 			}
+			t.DBRole = "primary"
 		case "cache":
 			t.HasCache = true
 			t.CacheEngine = "redis"

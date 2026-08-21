@@ -569,7 +569,11 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 		}
 	case "db":
 		env["DB_ENGINE"] = configString(node.Config, "engine", "postgresql")
-		env["DB_REPLICATION"] = configString(node.Config, "replicationMode", "none")
+		if mode, err := parseReplicationMode(node.Config); err == nil {
+			env["DB_REPLICATION"] = mode
+		} else {
+			env["DB_REPLICATION"] = "async"
+		}
 	case "cache":
 		if cacheProxy {
 			env["STRATEGY"] = cacheNodeStrategy(node)
