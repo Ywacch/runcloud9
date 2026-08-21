@@ -18,7 +18,10 @@ const (
 	dbReplicaPodSelector     = "postgres-replica.*"
 	dbPrimaryPodSelector     = "postgres.*"
 	// postgresExporterReplayLagMetric is from deployer custom query block replication_replay_lag.
-	postgresExporterReplayLagMetric = "pg_replication_replay_lag_replay_lag_seconds"
+	// postgres-exporter v0.16.0 names custom metrics {block}_{column} without a pg_ prefix.
+	postgresExporterReplayLagMetric = "replication_replay_lag_replay_lag_seconds"
+	// postgresExporterReplicaLagFallbackMetric is the built-in replica lag gauge on standby pods.
+	postgresExporterReplicaLagFallbackMetric = "pg_replication_lag_seconds"
 )
 
 // dbReplicaLayerSplit holds per-instance Postgres layers when read replicas are deployed.
@@ -75,8 +78,8 @@ func postgresPrimaryReplayLagByAppQuery(ns string) string {
 // postgresReplicaLagFallbackByPodQuery is used when the primary custom series is absent.
 func postgresReplicaLagFallbackByPodQuery(ns string) string {
 	return fmt.Sprintf(
-		`max by (pod) (pg_replication_lag{namespace=%q,pod=~%q})`,
-		ns, dbReplicaPodSelector,
+		`max by (pod) (%s{namespace=%q,pod=~%q})`,
+		postgresExporterReplicaLagFallbackMetric, ns, dbReplicaPodSelector,
 	)
 }
 
@@ -122,7 +125,12 @@ func (c *MetricsCollector) buildDBPrimaryLayer(ctx context.Context, ns string) C
 	return layer
 }
 
-func (c *MetricsCollector) buildDBReplicaLayer(ctx context.Context, ns, podName string, lagSeconds float64) ComponentLayerMetrics {
+func replicationLagSecondsPtr(seconds float64) *float64 {
+	v := seconds
+	return &v
+}
+
+func (c *MetricsCollector) buildDBReplicaLayer(ctx context.Context, ns, podName string, lagSeconds *float64) ComponentLayerMetrics {
 	layer := ComponentLayerMetrics{
 		ID:                    podName,
 		Role:                  dbLayerRoleReplica,
@@ -164,7 +172,11 @@ func (c *MetricsCollector) collectDBReplicaLayers(ctx context.Context, ns string
 	lagByPod := c.replicaLagByPod(ctx, ns, names)
 	out.replicas = make([]ComponentLayerMetrics, 0, len(names))
 	for _, podName := range names {
-		out.replicas = append(out.replicas, c.buildDBReplicaLayer(ctx, ns, podName, lagByPod[podName]))
+		var lag *float64
+		if seconds, ok := lagByPod[podName]; ok {
+			lag = replicationLagSecondsPtr(seconds)
+		}
+		out.replicas = append(out.replicas, c.buildDBReplicaLayer(ctx, ns, podName, lag))
 	}
 	return out
 }

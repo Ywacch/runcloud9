@@ -14,7 +14,7 @@ const (
 )
 
 // postgresExporterQueriesYAML exposes primary-side pg_stat_replication.replay_lag in seconds.
-// Query block name replication_replay_lag → metric pg_replication_replay_lag_replay_lag_seconds.
+// Query block replication_replay_lag → metric replication_replay_lag_replay_lag_seconds (no pg_ prefix).
 const postgresExporterQueriesYAML = `replication_replay_lag:
   master: true
   query: |
