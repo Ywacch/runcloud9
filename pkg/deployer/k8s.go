@@ -726,6 +726,18 @@ func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, 
 		})
 	}
 
+	var volumes []corev1.Volume
+	if postgresReplicationHBAEnabled(cfg) {
+		hbaCM := postgresReplicationHBAConfigMap(cfg.Namespace)
+		if _, err := k.clientset.CoreV1().ConfigMaps(cfg.Namespace).Create(ctx, hbaCM, metav1.CreateOptions{}); err != nil {
+			if !errors.IsAlreadyExists(err) {
+				return fmt.Errorf("create postgres replication hba configmap: %w", err)
+			}
+		}
+		containers[0].VolumeMounts = append(containers[0].VolumeMounts, postgresReplicationHBAVolumeMount())
+		volumes = append(volumes, postgresReplicationHBAVolume())
+	}
+
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: spec.AppLabel, Namespace: cfg.Namespace},
 		Spec: appsv1.DeploymentSpec{
@@ -734,6 +746,7 @@ func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, 
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: podAnnotations},
 				Spec: corev1.PodSpec{
+					Volumes:    volumes,
 					Containers: containers,
 				},
 			},
