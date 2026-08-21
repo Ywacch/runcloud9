@@ -60,7 +60,7 @@ func TestLBSpec_nginxConfig(t *testing.T) {
 	if !strings.Contains(rr, "location /nginx_status") || !strings.Contains(rr, "stub_status") {
 		t.Fatalf("round-robin config missing stub_status: %s", rr)
 	}
-	if strings.Contains(rr, "least_conn") || strings.Contains(rr, "random") || strings.Contains(rr, "ip_hash") {
+	if strings.Contains(rr, "least_conn") || strings.Contains(rr, "random") || strings.Contains(rr, "ip_hash") || strings.Contains(rr, "least_time") {
 		t.Fatalf("unexpected alg directives in round-robin: %s", rr)
 	}
 
@@ -77,6 +77,11 @@ func TestLBSpec_nginxConfig(t *testing.T) {
 	ipHash := spec.nginxConfig(backends, "ip_hash")
 	if !strings.Contains(ipHash, "ip_hash;") {
 		t.Fatalf("ip_hash should emit sticky directive: %s", ipHash)
+	}
+
+	leastTime := spec.nginxConfig(backends, "least_time")
+	if !strings.Contains(leastTime, "least_time header;") {
+		t.Fatalf("least_time: %s", leastTime)
 	}
 
 	multi := spec.nginxConfig([]string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}, "least_conn")
@@ -124,13 +129,16 @@ func TestLBSpec_nginxConf_rateLimit(t *testing.T) {
 	backends := []string{"10.0.0.1"}
 
 	off := spec.nginxConf(backends, "round-robin", nil, 0)
-	if strings.Contains(off, "limit_req") || strings.Contains(off, "rate=") {
+	if strings.Contains(off, "limit_req") || strings.Contains(off, "rate=") || strings.Contains(off, "limit_req_status") {
 		t.Fatalf("rate=0 should omit limit_req: %s", off)
 	}
 
 	limited := spec.nginxConf(backends, "round-robin", nil, 5)
 	if !strings.Contains(limited, "rate=5r/s") {
 		t.Fatalf("expected rate=5r/s: %s", limited)
+	}
+	if !strings.Contains(limited, "limit_req_status 429") {
+		t.Fatalf("expected limit_req_status 429: %s", limited)
 	}
 	if !strings.Contains(limited, "limit_req zone=perip nodelay") {
 		t.Fatalf("expected limit_req zone=perip nodelay: %s", limited)

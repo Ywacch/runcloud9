@@ -16,7 +16,9 @@ func TestNormalizeLBAlgorithm(t *testing.T) {
 		{in: "ip_hash", want: "ip_hash"},
 		{in: "ip-hash", want: "ip_hash"},
 		{in: "iphash", want: "ip_hash"},
-		{in: "least_time", want: "least_time"}, // unknown kept for validate reject
+		{in: "least_time", want: "least_time"},
+		{in: "least-time", want: "least_time"},
+		{in: "least-response-time", want: "least_time"},
 	}
 	for _, tc := range tests {
 		tc := tc
@@ -31,10 +33,7 @@ func TestNormalizeLBAlgorithm(t *testing.T) {
 
 func TestIsLiveLBAlgorithm(t *testing.T) {
 	t.Parallel()
-	if !isLiveLBAlgorithm("random") || !isLiveLBAlgorithm("least_conn") || !isLiveLBAlgorithm("round-robin") || !isLiveLBAlgorithm("ip_hash") {
+	if !isLiveLBAlgorithm("random") || !isLiveLBAlgorithm("least_conn") || !isLiveLBAlgorithm("round-robin") || !isLiveLBAlgorithm("ip_hash") || !isLiveLBAlgorithm("least_time") {
 		t.Fatal("expected live allowlist membership")
-	}
-	if isLiveLBAlgorithm("least_time") {
-		t.Fatal("Plus methods must not be live")
 	}
 }
