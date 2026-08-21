@@ -8,15 +8,30 @@ import (
 
 const virtualClientPoolSize = 254
 
-// virtualClientIP maps seed to a stable TEST-NET-2 address in 198.51.100.1..198.51.100.254.
+const defaultVirtualClientIP = "198.18.1.1"
+
+// virtualClientSubnets are RFC 2544 prefixes (198.18.0.0/15) chosen so nginx ip_hash,
+// which hashes only the first three IPv4 octets, maps virtual clients to different
+// app-server replicas at 2 and 3 replica counts. The last octet is for limit_req
+// ($binary_remote_addr), not for ip_hash routing.
+var virtualClientSubnets = []struct{ a, b, c byte }{
+	{198, 18, 1},
+	{198, 18, 2},
+	{198, 18, 0},
+}
+
+// virtualClientIP maps seed to a stable virtual client address.
 func virtualClientIP(seed string) string {
 	if seed == "" {
-		return "198.51.100.1"
+		return defaultVirtualClientIP
 	}
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(seed))
-	n := h.Sum64() % virtualClientPoolSize
-	return fmt.Sprintf("198.51.100.%d", 1+n)
+	n := h.Sum64()
+	subnetCount := uint64(len(virtualClientSubnets))
+	sub := virtualClientSubnets[n%subnetCount]
+	last := 1 + int((n/subnetCount)%virtualClientPoolSize)
+	return fmt.Sprintf("%d.%d.%d.%d", sub.a, sub.b, sub.c, last)
 }
 
 // ApplyClientIdentityHeaders sets X-Forwarded-For to a sticky virtual client IP derived from seed.
