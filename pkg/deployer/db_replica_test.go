@@ -122,8 +122,8 @@ func TestDBReplicaServiceSpec_selectorAndPort(t *testing.T) {
 
 	cfg := DeployConfig{Namespace: "cloud9-test-ns"}
 	svc := dbReplicaServiceSpec(cfg)
-	if svc.Name != dbReplicaServiceName {
-		t.Fatalf("service name: got %q want %q", svc.Name, dbReplicaServiceName)
+	if svc.Name != DBReplicaServiceName {
+		t.Fatalf("service name: got %q want %q", svc.Name, DBReplicaServiceName)
 	}
 	if got := svc.Spec.Selector["app"]; got != dbReplicaAppLabel {
 		t.Fatalf("selector app: got %q want %q", got, dbReplicaAppLabel)

@@ -15,7 +15,7 @@ import (
 const (
 	dbReplicaAppLabel       = "postgres-replica"
 	dbReplicaDeploymentName = "postgres-replica"
-	dbReplicaServiceName    = "db-replica"
+	DBReplicaServiceName    = "db-replica"
 	dbReplicaDataVolumeName = "pgdata"
 	dbReplicaEphemeralSize  = "200Mi"
 )
@@ -149,7 +149,7 @@ func dbReplicaServiceSpec(cfg DeployConfig) *corev1.Service {
 	dbSpec := componentRegistry["db"]
 	labels := map[string]string{"app": dbReplicaAppLabel, "deployment": cfg.Namespace}
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: dbReplicaServiceName, Namespace: cfg.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: DBReplicaServiceName, Namespace: cfg.Namespace},
 		Spec: corev1.ServiceSpec{
 			Type:     corev1.ServiceTypeClusterIP,
 			Selector: labels,
