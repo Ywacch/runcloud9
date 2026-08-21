@@ -302,6 +302,8 @@ func (s LBSpec) nginxConf(backends []string, algorithm string, weights []int, ra
 		upstreamExtra = "        random;\n"
 	case lbAlgoIPHash:
 		upstreamExtra = "        ip_hash;\n"
+	case lbAlgoLeastTime:
+		upstreamExtra = "        least_time header;\n"
 	default:
 		upstreamExtra = ""
 	}
@@ -323,8 +325,11 @@ func (s LBSpec) nginxConf(backends []string, algorithm string, weights []int, ra
 	limitZone := ""
 	limitLoc := ""
 	if rateLimit > 0 {
-		limitZone = fmt.Sprintf("    limit_req_zone $binary_remote_addr zone=perip:1m rate=%dr/s;\n", rateLimit)
-		// Omit burst= (nginx rejects explicit burst=0). Default burst is 0: excess requests 503 immediately.
+		limitZone = fmt.Sprintf(
+			"    limit_req_zone $binary_remote_addr zone=perip:1m rate=%dr/s;\n    limit_req_status 429;\n",
+			rateLimit,
+		)
+		// Omit burst= (nginx rejects explicit burst=0). Default burst is 0: excess requests return 429 via limit_req_status.
 		limitLoc = "limit_req zone=perip nodelay;\n            "
 	}
 	return fmt.Sprintf(`events {

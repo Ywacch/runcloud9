@@ -6,6 +6,7 @@ const (
 	lbAlgoLeastConn  = "least_conn"
 	lbAlgoRandom     = "random"
 	lbAlgoIPHash     = "ip_hash"
+	lbAlgoLeastTime  = "least_time"
 )
 
 var liveLBAlgorithms = map[string]struct{}{
@@ -13,6 +14,7 @@ var liveLBAlgorithms = map[string]struct{}{
 	lbAlgoLeastConn:  {},
 	lbAlgoRandom:     {},
 	lbAlgoIPHash:     {},
+	lbAlgoLeastTime:  {},
 }
 
 // normalizeLBAlgorithm maps aliases and legacy values onto the live allowlist.
@@ -27,6 +29,8 @@ func normalizeLBAlgorithm(raw string) string {
 		return lbAlgoRandom
 	case "ip-hash", "ip_hash", "iphash":
 		return lbAlgoIPHash
+	case "least_time", "least-time", "least-response-time":
+		return lbAlgoLeastTime
 	default:
 		return raw
 	}
@@ -39,5 +43,5 @@ func isLiveLBAlgorithm(algo string) bool {
 
 // liveLBAlgorithmList returns a stable, human-readable allowlist for error messages.
 func liveLBAlgorithmList() string {
-	return "round-robin, least_conn, random, or ip_hash"
+	return "round-robin, least_conn, random, ip_hash, or least_time"
 }
