@@ -105,7 +105,15 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 	replicas := parseReplicaCount(cfg.Node.Config, 1)
 
 	switch cfg.Node.Type {
-	case "db", "mq":
+	case "db":
+		if err := k.deployFromRegistry(ctx, cfg, resources, replicas); err != nil {
+			return err
+		}
+		if rr := dbReadReplicaCount(cfg); rr > 0 {
+			return k.deployDBReadReplicas(ctx, cfg, resources, rr)
+		}
+		return nil
+	case "mq":
 		return k.deployFromRegistry(ctx, cfg, resources, replicas)
 	case "cache":
 		return k.deployCache(ctx, cfg, resources, replicas)
@@ -701,7 +709,11 @@ func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, 
 		ReadinessProbe: probe,
 	}}
 	if len(spec.Command) > 0 {
-		containers[0].Command = spec.Command
+		if cfg.Node.Type == "db" {
+			containers[0].Command = postgresPrimaryCommand(cfg.Node.Config)
+		} else {
+			containers[0].Command = spec.Command
+		}
 	}
 	if spec.Exporter != nil {
 		exp := spec.Exporter

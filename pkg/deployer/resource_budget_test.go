@@ -41,6 +41,38 @@ func TestSumDesignResources_urlShortenerDefaults(t *testing.T) {
 	assertQuantityEqual(t, got.Memory, "1408Mi", "memory total")
 }
 
+func TestSumDesignResources_dbReadReplicasIncreaseBudget(t *testing.T) {
+	t.Parallel()
+
+	base := DeploymentDesign{
+		Nodes: []DeploymentNode{{
+			ID:     "db-1",
+			Type:   "db",
+			Name:   "PostgreSQL",
+			Config: map[string]interface{}{"instanceSize": "small"},
+		}},
+	}
+	withReplica := DeploymentDesign{
+		Nodes: []DeploymentNode{{
+			ID:   "db-1",
+			Type: "db",
+			Name: "PostgreSQL",
+			Config: map[string]interface{}{
+				"instanceSize": "small",
+				"readReplicas": 1,
+			},
+		}},
+	}
+	gotBase := SumDesignResources(base, "explorer")
+	gotReplica := SumDesignResources(withReplica, "explorer")
+	if gotReplica.CPU.Cmp(gotBase.CPU) <= 0 {
+		t.Fatalf("db with read replica CPU %v should exceed base %v", gotReplica.CPU, gotBase.CPU)
+	}
+	if gotReplica.Memory.Cmp(gotBase.Memory) <= 0 {
+		t.Fatalf("db with read replica memory %v should exceed base %v", gotReplica.Memory, gotBase.Memory)
+	}
+}
+
 func TestSumDesignResources_mixedInstanceSizes(t *testing.T) {
 	t.Parallel()
 

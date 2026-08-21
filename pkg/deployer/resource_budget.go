@@ -210,6 +210,8 @@ func replicasForBudget(node DeploymentNode) int32 {
 			return 1
 		}
 		return n
+	case "db":
+		return 1 + parseReadReplicaCount(node.Config)
 	default:
 		return parseReplicaCount(node.Config, 1)
 	}
