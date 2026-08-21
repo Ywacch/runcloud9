@@ -257,7 +257,6 @@ func TestWriteProxyUpstream_passes429(t *testing.T) {
 	t.Parallel()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
-	t.Setenv("ALLOWED_ORIGINS", "")
 	up := normalizeProxyUpstream(http.StatusTooManyRequests, []byte("limited"), errors.New("upstream 429"))
 	writeProxyUpstream(rec, req, up)
 	if rec.Code != http.StatusTooManyRequests {
@@ -272,7 +271,6 @@ func TestWriteProxyUpstream_transport502(t *testing.T) {
 	t.Parallel()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
-	t.Setenv("ALLOWED_ORIGINS", "")
 	up := normalizeProxyUpstream(0, nil, errors.New("connection refused"))
 	writeProxyUpstream(rec, req, up)
 	if rec.Code != http.StatusBadGateway {
