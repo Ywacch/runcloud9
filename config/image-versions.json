@@ -5,6 +5,6 @@
     "ecommerce-worker":  "git-bc9255f",
     "fanout-worker":  "git-bc9255f",
     "caching-proxy":  "git-bc9255f",
-    "loadgen":  "git-ee9c9aa",
+    "loadgen":  "git-539c851",
     "ticket-drop": "git-fa82c9b"
 }
