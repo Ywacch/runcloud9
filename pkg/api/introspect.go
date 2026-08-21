@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/introspect"
 	"github.com/ywacch/cloud9/pkg/templates"
 )
@@ -64,7 +65,13 @@ func (h *Handler) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	host, err := resolveIntrospectHost(introSpec.Engine, component, namespace, row.Design)
+	target, err := parseIntrospectTarget(r.URL.Query().Get("target"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	host, err := resolveIntrospectHost(introSpec.Engine, component, namespace, target, row.Design)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -85,8 +92,37 @@ func (h *Handler) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// parseIntrospectTarget normalizes the ?target= query param for introspection routing.
+func parseIntrospectTarget(raw string) (string, error) {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case "", "primary":
+		return "primary", nil
+	case "replica":
+		return "replica", nil
+	default:
+		return "", fmt.Errorf("unknown introspection target %q", raw)
+	}
+}
+
 // resolveIntrospectHost maps engine + component to an in-cluster DNS host.
-func resolveIntrospectHost(engine, component, namespace string, design map[string]any) (string, error) {
+func resolveIntrospectHost(engine, component, namespace, target string, design map[string]any) (string, error) {
+	if target == "replica" {
+		switch engine {
+		case "redis", "rabbitmq":
+			return "", fmt.Errorf("replica target is not supported for %s", engine)
+		case "postgres":
+			if component != "db" {
+				return "", fmt.Errorf("replica target only applies to db component")
+			}
+			if !designHasReadReplicas(design) {
+				return "", fmt.Errorf("deployment has no read replicas configured")
+			}
+			return fmt.Sprintf("%s.%s.svc.cluster.local", deployer.DBReplicaServiceName, namespace), nil
+		default:
+			return "", fmt.Errorf("unsupported engine")
+		}
+	}
+
 	switch engine {
 	case "postgres":
 		svcHost, _, err := resolveProxyTarget(component, design)
@@ -108,6 +144,31 @@ func resolveIntrospectHost(engine, component, namespace string, design map[strin
 	default:
 		return "", fmt.Errorf("unsupported engine")
 	}
+}
+
+// designHasReadReplicas reports whether the stored design has a db node with readReplicas >= 1.
+func designHasReadReplicas(design map[string]any) bool {
+	if design == nil {
+		return false
+	}
+	nodes, ok := design["nodes"].([]any)
+	if !ok {
+		return false
+	}
+	for _, raw := range nodes {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, _ := m["type"].(string); t != "db" {
+			continue
+		}
+		cfg, _ := m["config"].(map[string]any)
+		if deployer.ParseReadReplicaCount(cfg) >= 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func introspectAction(path, namespace, component string) string {

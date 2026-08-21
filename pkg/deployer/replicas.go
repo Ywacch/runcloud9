@@ -34,6 +34,11 @@ func replicaCountFromConfig(config map[string]any, defaultVal, min, max int) (in
 	return int32(n), nil
 }
 
+// ParseReadReplicaCount reads config.readReplicas, defaulting to 0 when unset or invalid.
+func ParseReadReplicaCount(config map[string]any) int32 {
+	return parseReadReplicaCount(config)
+}
+
 // parseReadReplicaCount reads config.readReplicas, defaulting to 0 when unset or invalid.
 func parseReadReplicaCount(config map[string]any) int32 {
 	raw := configString(config, "readReplicas", "0")
