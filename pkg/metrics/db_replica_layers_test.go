@@ -15,6 +15,17 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
+func float64Ptr(v float64) *float64 {
+	return &v
+}
+
+func replicaLagSeconds(layer ComponentLayerMetrics) float64 {
+	if layer.ReplicationLagSeconds == nil {
+		return -1
+	}
+	return *layer.ReplicationLagSeconds
+}
+
 func TestPostgresPrimaryReplayLagByAppQuery(t *testing.T) {
 	t.Parallel()
 	q := postgresPrimaryReplayLagByAppQuery("ns-replica")
@@ -40,7 +51,7 @@ func TestPostgresReplicaLagFallbackByPodQuery(t *testing.T) {
 	if !strings.Contains(q, `pod=~"postgres-replica.*"`) {
 		t.Fatalf("missing replica pod selector: %s", q)
 	}
-	if !strings.Contains(q, "pg_replication_lag") {
+	if !strings.Contains(q, postgresExporterReplicaLagFallbackMetric) {
 		t.Fatalf("missing fallback metric: %s", q)
 	}
 }
@@ -72,7 +83,7 @@ func TestApplyDBReplicaLayers_withReplicas(t *testing.T) {
 			ID:                    "postgres-replica-abc",
 			Role:                  dbLayerRoleReplica,
 			Engine:                dbLayerEnginePostgreSQL,
-			ReplicationLagSeconds: 0.42,
+			ReplicationLagSeconds: float64Ptr(0.42),
 		}},
 	}
 	applyDBReplicaLayers(&cm, split)
@@ -83,7 +94,7 @@ func TestApplyDBReplicaLayers_withReplicas(t *testing.T) {
 		t.Fatalf("primary layer: %+v", cm.Layers[0])
 	}
 	replica := cm.Layers[1]
-	if replica.Role != dbLayerRoleReplica || replica.ReplicationLagSeconds != 0.42 {
+	if replica.Role != dbLayerRoleReplica || replicaLagSeconds(replica) != 0.42 {
 		t.Fatalf("replica layer: %+v", replica)
 	}
 	if cm.BackendReplicas == nil || cm.BackendReplicas.Desired != 1 || cm.BackendReplicas.Ready != 1 {
@@ -155,8 +166,8 @@ func TestCollectDBReplicaLayers_lagFromPrimaryCustomQuery(t *testing.T) {
 
 	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
 	split := c.collectDBReplicaLayers(context.Background(), ns)
-	if split.replicas[0].ReplicationLagSeconds != 1.25 {
-		t.Fatalf("lag: got %v, want 1.25", split.replicas[0].ReplicationLagSeconds)
+	if replicaLagSeconds(split.replicas[0]) != 1.25 {
+		t.Fatalf("lag: got %v, want 1.25", replicaLagSeconds(split.replicas[0]))
 	}
 	if lagQuery == "" {
 		t.Fatal("expected primary replay lag PromQL query")
@@ -201,7 +212,7 @@ func TestCollectDBReplicaLayers_fallbackWhenCustomSeriesMissing(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
 		w.Header().Set("Content-Type", "application/json")
-		if strings.Contains(q, "pg_replication_lag") && strings.Contains(q, "postgres-replica") {
+		if strings.Contains(q, postgresExporterReplicaLagFallbackMetric) && strings.Contains(q, "postgres-replica") {
 			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{replicaPod: "0.75"}))
 			return
 		}
@@ -211,8 +222,8 @@ func TestCollectDBReplicaLayers_fallbackWhenCustomSeriesMissing(t *testing.T) {
 
 	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
 	split := c.collectDBReplicaLayers(context.Background(), ns)
-	if split.replicas[0].ReplicationLagSeconds != 0.75 {
-		t.Fatalf("fallback lag: got %v, want 0.75", split.replicas[0].ReplicationLagSeconds)
+	if replicaLagSeconds(split.replicas[0]) != 0.75 {
+		t.Fatalf("fallback lag: got %v, want 0.75", replicaLagSeconds(split.replicas[0]))
 	}
 }
 
@@ -225,7 +236,7 @@ func TestApplyStorageProfiles_dbPrimaryWithReplicas(t *testing.T) {
 				Layers: []ComponentLayerMetrics{{
 					ID:                    "postgres-replica-xyz",
 					Role:                  dbLayerRoleReplica,
-					ReplicationLagSeconds: 0.5,
+					ReplicationLagSeconds: float64Ptr(0.5),
 				}},
 			},
 		},
@@ -246,7 +257,7 @@ func TestAnnotateFreshness_DBReplicaLayerReplication(t *testing.T) {
 				Component: "db",
 				Layers: []ComponentLayerMetrics{
 					{ID: dbLayerIDPostgresPrimary, Role: dbLayerRolePrimary},
-					{ID: "postgres-replica-1", Role: dbLayerRoleReplica, ReplicationLagSeconds: 0.1},
+					{ID: "postgres-replica-1", Role: dbLayerRoleReplica, ReplicationLagSeconds: float64Ptr(0.1)},
 				},
 			},
 		},
@@ -332,7 +343,7 @@ func TestCollect_StorageProfileWithReplicaLayers(t *testing.T) {
 	if len(db.Layers) != 2 {
 		t.Fatalf("layers: want primary+replica, got %d", len(db.Layers))
 	}
-	if db.Layers[1].ReplicationLagSeconds != 0.05 {
+	if replicaLagSeconds(db.Layers[1]) != 0.05 {
 		t.Fatalf("replica layer: %+v", db.Layers[1])
 	}
 }

@@ -241,7 +241,8 @@ type ComponentLayerMetrics struct {
 	ExpirationsPerSec float64 `json:"expirationsPerSec,omitempty"`
 	RestartCount      int32   `json:"restartCount,omitempty"`
 	// ReplicationLagSeconds is primary-side replay lag on replica layers (seconds).
-	ReplicationLagSeconds float64 `json:"replicationLagSeconds,omitempty"`
+	// Pointer so a successful query of 0 serializes; nil when the series is absent.
+	ReplicationLagSeconds *float64 `json:"replicationLagSeconds,omitempty"`
 	// Freshness tags containerCpu / containerMem for this layer (proxy vs backing store
 	// can sit on different tiers). See freshness.go.
 	Freshness map[string]SignalFreshness `json:"freshness,omitempty"`
