@@ -82,7 +82,7 @@ func dbReplicaDeploymentSpec(cfg DeployConfig, resources corev1.ResourceRequirem
 	initContainer := corev1.Container{
 		Name:    "basebackup",
 		Image:   dbSpec.Image,
-		Command: []string{"sh", "-c", "until pg_isready -h db; do sleep 1; done; exec pg_basebackup -h db -U syscrack -D $PGDATA -Fp -Xs -R -P"},
+		Command: []string{"sh", "-c", "until pg_isready -h db -U syscrack; do sleep 1; done; exec pg_basebackup -h db -U syscrack -D $PGDATA -Fp -Xs -R -P"},
 		Env: []corev1.EnvVar{
 			{Name: "PGDATA", Value: "/var/lib/postgresql/data"},
 		},
