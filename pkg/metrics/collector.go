@@ -1022,6 +1022,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 				c.debugCompare("db", "storage_write_rows", cm.StorageIO.WriteRate, 0,
 					"pg_stat_user_tables ins+upd+del", "none")
 			}
+			dbLayerSplit := c.collectDBReplicaLayers(ctx, ns)
+			applyDBReplicaLayers(&cm, dbLayerSplit)
 			dm.Components["db"] = cm
 		}
 	}
@@ -1046,6 +1048,10 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	if cm, ok := dm.Components["cache"]; ok {
 		syncCacheLayerRestarts(&cm)
 		dm.Components["cache"] = cm
+	}
+	if cm, ok := dm.Components["db"]; ok {
+		syncDBReplicaLayerRestarts(&cm)
+		dm.Components["db"] = cm
 	}
 	// All components and layers are final here; tag per-signal-group freshness.
 	annotateFreshness(dm)

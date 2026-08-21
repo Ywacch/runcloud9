@@ -101,10 +101,13 @@ func TestDBReplicaDeploymentSpec_readReplicaShape(t *testing.T) {
 		t.Fatalf("init containers: got %d want 1", len(podSpec.InitContainers))
 	}
 	initCmd := strings.Join(podSpec.InitContainers[0].Command, " ")
-	for _, want := range []string{"pg_isready -h db -U syscrack", "pg_basebackup", "-h db", "-U syscrack"} {
+	for _, want := range []string{"pg_isready -h db -U syscrack", "pg_basebackup", "-h db", "-U syscrack", "application_name=${HOSTNAME}"} {
 		if !strings.Contains(initCmd, want) {
 			t.Fatalf("init command missing %q: %q", want, initCmd)
 		}
+	}
+	if strings.Contains(initCmd, "exec pg_basebackup") {
+		t.Fatalf("init must not exec pg_basebackup so primary_conninfo can be appended: %q", initCmd)
 	}
 	assertEphemeralStorage(t, podSpec.InitContainers[0].Resources, wantEphemeral)
 

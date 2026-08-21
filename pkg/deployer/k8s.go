@@ -737,6 +737,18 @@ func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, 
 		containers[0].VolumeMounts = append(containers[0].VolumeMounts, postgresReplicationHBAVolumeMount())
 		volumes = append(volumes, postgresReplicationHBAVolume())
 	}
+	if postgresExporterQueriesEnabled(cfg) && spec.Exporter != nil {
+		queriesCM := postgresExporterQueriesConfigMap(cfg.Namespace)
+		if _, err := k.clientset.CoreV1().ConfigMaps(cfg.Namespace).Create(ctx, queriesCM, metav1.CreateOptions{}); err != nil {
+			if !errors.IsAlreadyExists(err) {
+				return fmt.Errorf("create postgres-exporter-queries configmap: %w", err)
+			}
+		}
+		exporterIdx := len(containers) - 1
+		containers[exporterIdx].Args = postgresExporterExtendQueryArgs()
+		containers[exporterIdx].VolumeMounts = append(containers[exporterIdx].VolumeMounts, postgresExporterQueriesVolumeMount())
+		volumes = append(volumes, postgresExporterQueriesVolume())
+	}
 
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: spec.AppLabel, Namespace: cfg.Namespace},
