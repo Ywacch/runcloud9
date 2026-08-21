@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/ywacch/cloud9/pkg/loadgen"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 var hopByHopResponseHeaders = map[string]struct{}{
@@ -136,6 +138,73 @@ func cacheServiceHTTPPort(design map[string]any) int {
 	return 6379
 }
 
+// proxyUpstreamResult normalizes a Kubernetes service proxy response. client-go treats
+// non-2xx upstream statuses as errors while still populating StatusCode in some cases.
+type proxyUpstreamResult struct {
+	statusCode int
+	body       []byte
+	failed     bool
+	errMsg     string
+}
+
+// normalizeProxyUpstream maps K8s service proxy results to an HTTP response for the browser.
+// Transport failures without an HTTP status become 502; upstream 4xx/5xx pass through.
+func normalizeProxyUpstream(statusCode int, body []byte, err error) proxyUpstreamResult {
+	code := proxyUpstreamHTTPStatus(statusCode, err)
+	if err == nil {
+		if code == 0 {
+			code = http.StatusOK
+		}
+		return proxyUpstreamResult{statusCode: code, body: body}
+	}
+	if code == 0 {
+		return proxyUpstreamResult{
+			statusCode: http.StatusBadGateway,
+			failed:     true,
+			errMsg:     fmt.Sprintf("proxy request failed: %v", err),
+		}
+	}
+	return proxyUpstreamResult{statusCode: code, body: body}
+}
+
+func proxyUpstreamHTTPStatus(statusCode int, err error) int {
+	if statusCode > 0 {
+		return statusCode
+	}
+	if err == nil {
+		return 0
+	}
+	var statusErr apierrors.APIStatus
+	if errors.As(err, &statusErr) {
+		if code := int(statusErr.Status().Code); code > 0 {
+			return code
+		}
+	}
+	return 0
+}
+
+func writeProxyUpstream(w http.ResponseWriter, r *http.Request, up proxyUpstreamResult) {
+	if up.failed {
+		writeError(w, up.statusCode, up.errMsg)
+		return
+	}
+	setProxyCORS(w, r)
+	w.Header().Set("X-Cloud9-Proxied", "true")
+	if up.statusCode >= 400 && len(up.body) == 0 {
+		writeError(w, up.statusCode, http.StatusText(up.statusCode))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if up.statusCode > 0 {
+		w.WriteHeader(up.statusCode)
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
+	if len(up.body) > 0 {
+		_, _ = w.Write(up.body)
+	}
+}
+
 // resolveIntrospectRedisHost returns the in-cluster Service name for Redis introspection.
 // Proxy strategies (write-through, write-behind; legacy read-through) expose HTTP on Service "cache"
 // and Redis on Service "redis-internal"; cache-aside uses Service "cache" for Redis directly.
@@ -254,20 +323,6 @@ func (h *Handler) handleProxy(w http.ResponseWriter, r *http.Request) {
 	statusCode := 0
 	result.StatusCode(&statusCode)
 	rawBody, err := result.Raw()
-	if err != nil {
-		if statusCode == 0 {
-			statusCode = http.StatusBadGateway
-		}
-		writeError(w, statusCode, fmt.Sprintf("proxy request failed: %v", err))
-		return
-	}
-	setProxyCORS(w, r)
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Cloud9-Proxied", "true")
-	if statusCode > 0 {
-		w.WriteHeader(statusCode)
-	} else {
-		w.WriteHeader(http.StatusOK)
-	}
-	_, _ = w.Write(rawBody)
+	up := normalizeProxyUpstream(statusCode, rawBody, err)
+	writeProxyUpstream(w, r, up)
 }
