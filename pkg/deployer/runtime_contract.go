@@ -22,6 +22,7 @@ func ValidateRuntimeContract(design DeploymentDesign, tmpl *templates.TemplateSp
 		validateLBAlgorithm,
 		validateAppServerReplicas,
 		validateWorkerReplicas,
+		validateDBReadReplicas,
 		validateProxyQueries,
 		validateAppServerEnv,
 		validateWorkerEnv,
@@ -54,6 +55,43 @@ func validateWorkerReplicas(design DeploymentDesign, _ *templates.TemplateSpec) 
 		}
 		if _, err := replicaCountFromConfig(node.Config, 1, minWorkerReplicas, maxWorkerReplicas); err != nil {
 			return fmt.Errorf("worker %q: %w", node.Name, err)
+		}
+	}
+	return nil
+}
+
+func validateDBReadReplicas(design DeploymentDesign, _ *templates.TemplateSpec) error {
+	for _, node := range design.Nodes {
+		if node.Type != "db" {
+			continue
+		}
+		if parseReplicaCount(node.Config, 1) > 1 {
+			return fmt.Errorf(
+				"database %q primary must stay a singleton; use readReplicas for standbys (replicas=%d)",
+				node.Name,
+				parseReplicaCount(node.Config, 1),
+			)
+		}
+		count, err := readReplicaCountFromConfig(node.Config, minReadReplicas, maxReadReplicas)
+		if err != nil {
+			return fmt.Errorf("database %q: %w", node.Name, err)
+		}
+		engine := dbEngineFromConfig(node.Config)
+		if count > 0 && !dbEngineSupportsStreamingReplicas(engine) {
+			return fmt.Errorf(
+				"database %q engine %q does not support read replicas (readReplicas=%d)",
+				node.Name, engine, count,
+			)
+		}
+		mode, err := parseReplicationMode(node.Config)
+		if err != nil {
+			return fmt.Errorf("database %q: %w", node.Name, err)
+		}
+		if mode == "sync" && count < 1 {
+			return fmt.Errorf(
+				"database %q replicationMode sync requires at least one read replica (readReplicas=%d)",
+				node.Name, count,
+			)
 		}
 	}
 	return nil

@@ -1054,3 +1054,29 @@ func TestDeriveEnvVars_AppServerOmitsModeWhenUnset(t *testing.T) {
 		t.Fatalf("expected INVENTORY_MODE absent, got %q", env["INVENTORY_MODE"])
 	}
 }
+
+func TestDeriveEnvVars_DBReplicationMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		cfg  map[string]interface{}
+		want string
+	}{
+		{name: "default async", cfg: nil, want: "async"},
+		{name: "none maps async", cfg: map[string]interface{}{"replicationMode": "none"}, want: "async"},
+		{name: "sync", cfg: map[string]interface{}{"replicationMode": "sync"}, want: "sync"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			node := DeploymentNode{ID: "db1", Type: "db", Name: "PostgreSQL", Config: tc.cfg}
+			env := DeriveEnvVars(node, DeploymentDesign{})
+			if env["DB_REPLICATION"] != tc.want {
+				t.Fatalf("DB_REPLICATION: got %q want %q", env["DB_REPLICATION"], tc.want)
+			}
+		})
+	}
+}

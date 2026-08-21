@@ -38,14 +38,40 @@ func TestStorytellingTopologyFromDesign_Storage(t *testing.T) {
 		},
 	}
 	got := StorytellingTopologyFromDesign(d, "")
-	if !got.HasDB || got.DBEngine != "postgresql" || got.DBRole != "replica" {
+	if !got.HasDB || got.DBEngine != "postgresql" || got.DBRole != "primary" {
 		t.Fatalf("db: %+v", got)
+	}
+	if got.ReplicationMode != "async" || got.ReadReplicaCount != 0 {
+		t.Fatalf("replication: mode=%q count=%d", got.ReplicationMode, got.ReadReplicaCount)
 	}
 	if got.CacheEngine != "redis" || got.CacheRole != "write-through" {
 		t.Fatalf("cache: engine=%q role=%q", got.CacheEngine, got.CacheRole)
 	}
 	if !got.HasProxyCache {
 		t.Fatal("write-through cache should set HasProxyCache")
+	}
+}
+
+func TestStorytellingTopologyFromDesign_ReadReplicas(t *testing.T) {
+	t.Parallel()
+	d := &DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{Type: "db", Config: map[string]interface{}{
+				"engine":          "postgresql",
+				"replicationMode": "async",
+				"readReplicas":    1,
+			}},
+		},
+	}
+	got := StorytellingTopologyFromDesign(d, "")
+	if got.DBRole != "primary" {
+		t.Fatalf("DBRole: want primary, got %q", got.DBRole)
+	}
+	if got.ReadReplicaCount != 1 {
+		t.Fatalf("ReadReplicaCount: want 1, got %d", got.ReadReplicaCount)
+	}
+	if got.ReplicationMode != "async" {
+		t.Fatalf("ReplicationMode: want async, got %q", got.ReplicationMode)
 	}
 }
 

@@ -230,6 +230,79 @@ func TestValidateRuntimeContract_Table(t *testing.T) {
 			},
 			wantErr: "",
 		},
+		{
+			name:       "db readReplicas at max passes",
+			templateID: "url-shortener",
+			design: DeploymentDesign{
+				Template: "url-shortener",
+				Nodes: []DeploymentNode{
+					{ID: "app1", Type: "app-server", Name: "App"},
+					{ID: "db1", Type: "db", Name: "PostgreSQL", Config: map[string]interface{}{
+						"readReplicas":    2,
+						"replicationMode": "async",
+					}},
+				},
+				Connections: []DeploymentConn{{SourceID: "app1", TargetID: "db1"}},
+			},
+		},
+		{
+			name:       "db readReplicas above max rejected",
+			templateID: "url-shortener",
+			design: DeploymentDesign{
+				Template: "url-shortener",
+				Nodes: []DeploymentNode{
+					{ID: "app1", Type: "app-server", Name: "App"},
+					{ID: "db1", Type: "db", Name: "PostgreSQL", Config: map[string]interface{}{"readReplicas": 3}},
+				},
+				Connections: []DeploymentConn{{SourceID: "app1", TargetID: "db1"}},
+			},
+			wantErr: "readReplicas must be between",
+		},
+		{
+			name:       "sync replication requires read replica",
+			templateID: "url-shortener",
+			design: DeploymentDesign{
+				Template: "url-shortener",
+				Nodes: []DeploymentNode{
+					{ID: "app1", Type: "app-server", Name: "App"},
+					{ID: "db1", Type: "db", Name: "PostgreSQL", Config: map[string]interface{}{
+						"replicationMode": "sync",
+						"readReplicas":    0,
+					}},
+				},
+				Connections: []DeploymentConn{{SourceID: "app1", TargetID: "db1"}},
+			},
+			wantErr: "replicationMode sync requires",
+		},
+		{
+			name:       "non-postgres engine rejects read replicas",
+			templateID: "url-shortener",
+			design: DeploymentDesign{
+				Template: "url-shortener",
+				Nodes: []DeploymentNode{
+					{ID: "app1", Type: "app-server", Name: "App"},
+					{ID: "db1", Type: "db", Name: "MySQL", Config: map[string]interface{}{
+						"engine":       "mysql",
+						"readReplicas": 1,
+					}},
+				},
+				Connections: []DeploymentConn{{SourceID: "app1", TargetID: "db1"}},
+			},
+			wantErr: "does not support read replicas",
+		},
+		{
+			name:       "db primary replicas above one rejected",
+			templateID: "url-shortener",
+			design: DeploymentDesign{
+				Template: "url-shortener",
+				Nodes: []DeploymentNode{
+					{ID: "app1", Type: "app-server", Name: "App"},
+					{ID: "db1", Type: "db", Name: "PostgreSQL", Config: map[string]interface{}{"replicas": 2}},
+				},
+				Connections: []DeploymentConn{{SourceID: "app1", TargetID: "db1"}},
+			},
+			wantErr: "primary must stay a singleton",
+		},
 	}
 
 	for _, tc := range tests {
