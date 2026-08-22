@@ -211,3 +211,15 @@ func TestResolveIntrospectHost_TargetReplica(t *testing.T) {
 		})
 	}
 }
+
+func TestFilterTables_ExcludesPlatformTables(t *testing.T) {
+	t.Parallel()
+	tables := []introspect.TableInfo{
+		{Name: "urls", RowCount: 10},
+		{Name: "_c9_probe", RowCount: 1},
+	}
+	got := filterTables(tables, []string{"urls", "_c9_probe"})
+	if len(got) != 1 || got[0].Name != "urls" {
+		t.Fatalf("filterTables: %+v", got)
+	}
+}

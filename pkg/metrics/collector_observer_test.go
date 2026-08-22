@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ywacch/cloud9/pkg/probes"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -41,6 +42,10 @@ func (r *recordingConsistencyObserver) Stop(namespace string) {
 	}
 	delete(r.started, namespace)
 	r.stopped[namespace]++
+}
+
+func (r *recordingConsistencyObserver) Latest(string) (probes.ProbeResult, bool) {
+	return probes.ProbeResult{}, false
 }
 
 func (r *recordingConsistencyObserver) countStarted(namespace string) int {

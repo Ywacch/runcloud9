@@ -47,6 +47,24 @@ func (p *scriptedProbe) Close() error {
 	return nil
 }
 
+func (p *scriptedProbe) setReadVer(v int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.readVer = v
+}
+
+func (p *scriptedProbe) readVersion() int64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.readVer
+}
+
+func (p *scriptedProbe) isClosed() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.closed
+}
+
 func TestObserver_StartStop_idempotent(t *testing.T) {
 	t.Parallel()
 	primary := &scriptedProbe{readOK: true}
@@ -75,8 +93,8 @@ func TestObserver_StartStop_idempotent(t *testing.T) {
 	o.Stop("ns-idem")
 	o.Stop("ns-idem")
 
-	if !primary.closed || !replica.closed {
-		t.Fatalf("probes not closed: primary=%v replica=%v", primary.closed, replica.closed)
+	if !primary.isClosed() || !replica.isClosed() {
+		t.Fatalf("probes not closed: primary=%v replica=%v", primary.isClosed(), replica.isClosed())
 	}
 }
 
@@ -100,8 +118,8 @@ func TestObserver_loopUpdatesLatest(t *testing.T) {
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		if result, ok := o.Latest("ns-loop"); ok && result.WrittenVersion > 0 {
-			if result.ReplicaVersion != replica.readVer {
-				t.Fatalf("replica version: got %d want %d", result.ReplicaVersion, replica.readVer)
+			if result.ReplicaVersion != replica.readVersion() {
+				t.Fatalf("replica version: got %d want %d", result.ReplicaVersion, replica.readVersion())
 			}
 			if result.RYWStalenessVersions != StalenessVersions(result.WrittenVersion, result.ReplicaVersion) {
 				t.Fatalf("staleness: %+v", result)
@@ -134,7 +152,7 @@ func TestObserver_monotonicViolation(t *testing.T) {
 		return r.WrittenVersion > 0 && !r.MonotonicViolation
 	})
 
-	replica.readVer = 3
+	replica.setReadVer(3)
 	waitForProbe(t, o, "ns-mono", func(r ProbeResult) bool {
 		return r.MonotonicViolation
 	})

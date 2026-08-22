@@ -35,6 +35,7 @@ func TestPostgreSQLUserTableWriteQuery(t *testing.T) {
 		"pg_stat_user_tables_n_tup_upd",
 		"pg_stat_user_tables_n_tup_del",
 		`datname!~"template0|template1"`,
+		`relname!~"_c9_.*"`,
 	} {
 		if !strings.Contains(q, want) {
 			t.Fatalf("write query missing %q: %s", want, q)

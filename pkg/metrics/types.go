@@ -210,11 +210,22 @@ type ComponentMetrics struct {
 	StorageIO     *StorageIO `json:"storageIo,omitempty"`
 	// RuntimeHealth is populated from the Kubernetes API when clientset is configured.
 	RuntimeHealth *RuntimeHealth `json:"runtimeHealth,omitempty"`
+	// Consistency carries observer probe status and cumulative violation counters (Wave 3 Phase 2).
+	Consistency *ConsistencyStatus `json:"consistency,omitempty"`
 	// Layers splits cache proxy/backing-store or Postgres primary/replica instances by role.
 	Layers []ComponentLayerMetrics `json:"layers,omitempty"`
 	// Freshness tags signal groups (throughput, containerCpu, containerMem, connections,
 	// queue) with their collection tier and nominal lag. See freshness.go.
 	Freshness map[string]SignalFreshness `json:"freshness,omitempty"`
+}
+
+// ConsistencyStatus summarizes primary/replica probe results and violation counts for the DB inspector.
+type ConsistencyStatus struct {
+	RYWViolations            int64  `json:"rywViolations"`
+	MonotonicViolations      int64  `json:"monotonicViolations"`
+	CacheDbStale             int64  `json:"cacheDbStale"`
+	ReplicaStalenessVersions int64  `json:"replicaStalenessVersions"`
+	LastProbeError           string `json:"lastProbeError,omitempty"`
 }
 
 // ComponentLayerMetrics holds per-process metrics for a layered component (e.g. redis-internal vs cache-proxy).
