@@ -4,7 +4,7 @@ import "github.com/ywacch/cloud9/pkg/probes"
 
 // consistencyObserver runs background primary/replica consistency probes per namespace.
 type consistencyObserver interface {
-	Start(namespace string)
+	Start(namespace string, cfg probes.ObserverConfig)
 	Stop(namespace string)
 	Latest(namespace string) (probes.ProbeResult, bool)
 }

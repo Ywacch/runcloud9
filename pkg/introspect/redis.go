@@ -61,6 +61,9 @@ func (d *RedisDriver) ScanKeys(ctx context.Context, pattern string, cursor uint6
 
 	out := make([]KeyInfo, 0, len(keys))
 	for i, key := range keys {
+		if !IsStudentCacheKey(key) {
+			continue
+		}
 		ki := KeyInfo{Key: key}
 		if typeCmds[i] != nil {
 			ki.Type = typeCmds[i].Val()

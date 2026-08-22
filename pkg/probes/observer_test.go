@@ -81,8 +81,8 @@ func TestObserver_StartStop_idempotent(t *testing.T) {
 		}),
 	)
 
-	o.Start("ns-idem")
-	o.Start("ns-idem")
+	o.Start("ns-idem", ObserverConfig{NeedReplica: true})
+	o.Start("ns-idem", ObserverConfig{NeedReplica: true})
 	waitForProbe(t, o, "ns-idem", func(r ProbeResult) bool {
 		return r.WrittenVersion > 0
 	})
@@ -112,7 +112,7 @@ func TestObserver_loopUpdatesLatest(t *testing.T) {
 		}),
 	)
 
-	o.Start("ns-loop")
+	o.Start("ns-loop", ObserverConfig{NeedReplica: true})
 	t.Cleanup(func() { o.Stop("ns-loop") })
 
 	deadline := time.Now().Add(500 * time.Millisecond)
@@ -145,7 +145,7 @@ func TestObserver_monotonicViolation(t *testing.T) {
 		}),
 	)
 
-	o.Start("ns-mono")
+	o.Start("ns-mono", ObserverConfig{NeedReplica: true})
 	t.Cleanup(func() { o.Stop("ns-mono") })
 
 	waitForProbe(t, o, "ns-mono", func(r ProbeResult) bool {
@@ -172,7 +172,7 @@ func TestObserver_probeErrorRecorded(t *testing.T) {
 		}),
 	)
 
-	o.Start("ns-err")
+	o.Start("ns-err", ObserverConfig{NeedReplica: true})
 	t.Cleanup(func() { o.Stop("ns-err") })
 
 	waitForProbe(t, o, "ns-err", func(r ProbeResult) bool {
@@ -200,4 +200,116 @@ func TestPrimaryReplicaHost(t *testing.T) {
 	if got := replicaHost("ns1"); got != "db-replica.ns1.svc.cluster.local" {
 		t.Fatalf("replicaHost: %q", got)
 	}
+}
+
+type scriptedCacheProbe struct {
+	mu       sync.Mutex
+	stored   ConsistencyToken
+	hit      bool
+	getErr   error
+	setErr   error
+	closed   bool
+	setCalls int
+}
+
+func (p *scriptedCacheProbe) Get(context.Context, string) (ConsistencyToken, bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.getErr != nil {
+		return nil, false, p.getErr
+	}
+	return p.stored, p.hit, nil
+}
+
+func (p *scriptedCacheProbe) Set(_ context.Context, _ string, tok ConsistencyToken, _ time.Duration) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.setCalls++
+	if p.setErr != nil {
+		return p.setErr
+	}
+	p.stored = tok
+	p.hit = true
+	return nil
+}
+
+func (p *scriptedCacheProbe) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	return nil
+}
+
+func (p *scriptedCacheProbe) setCallsCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.setCalls
+}
+
+func newCacheObserverTest(t *testing.T, primary *scriptedProbe, cache *scriptedCacheProbe) *Observer {
+	t.Helper()
+	o := NewObserver(
+		WithTickInterval(50*time.Millisecond),
+		WithProbeDial(func(ctx context.Context, host string) (ConsistencyProbe, error) {
+			if host == primaryHost("ns-cache") {
+				return primary, nil
+			}
+			return nil, fmt.Errorf("unexpected host %q", host)
+		}),
+		WithCacheDial(func(ctx context.Context, namespace string, opts CacheDialOptions) (CacheProbe, error) {
+			if namespace != "ns-cache" {
+				return nil, fmt.Errorf("unexpected namespace %q", namespace)
+			}
+			return cache, nil
+		}),
+	)
+	return o
+}
+
+func TestObserver_cacheMissWarmsWithoutStale(t *testing.T) {
+	t.Parallel()
+	primary := &scriptedProbe{readOK: true}
+	cache := &scriptedCacheProbe{}
+	o := newCacheObserverTest(t, primary, cache)
+	o.Start("ns-cache", ObserverConfig{NeedCache: true})
+	t.Cleanup(func() { o.Stop("ns-cache") })
+
+	waitForProbe(t, o, "ns-cache", func(r ProbeResult) bool {
+		return r.WrittenVersion > 0 && !r.CacheDbStale
+	})
+	if cache.setCallsCount() != 1 {
+		t.Fatalf("set calls = %d, want 1 on miss warm", cache.setCallsCount())
+	}
+}
+
+func TestObserver_cacheStaleHit(t *testing.T) {
+	t.Parallel()
+	primary := &scriptedProbe{readOK: true}
+	cache := &scriptedCacheProbe{
+		hit:    true,
+		stored: Int64Token(0),
+	}
+	o := newCacheObserverTest(t, primary, cache)
+	o.Start("ns-cache", ObserverConfig{NeedCache: true})
+	t.Cleanup(func() { o.Stop("ns-cache") })
+
+	waitForProbe(t, o, "ns-cache", func(r ProbeResult) bool {
+		return r.CacheDbStale && r.CacheHit
+	})
+}
+
+func TestObserver_cacheHitFresh(t *testing.T) {
+	t.Parallel()
+	primary := &scriptedProbe{readOK: true}
+	cache := &scriptedCacheProbe{
+		hit:    true,
+		stored: Int64Token(100),
+	}
+	o := newCacheObserverTest(t, primary, cache)
+	o.Start("ns-cache", ObserverConfig{NeedCache: true})
+	t.Cleanup(func() { o.Stop("ns-cache") })
+
+	waitForProbe(t, o, "ns-cache", func(r ProbeResult) bool {
+		return r.WrittenVersion > 0 && r.CacheHit && !r.CacheDbStale
+	})
 }
