@@ -25,6 +25,8 @@ type probeDialFunc func(ctx context.Context, host string) (ConsistencyProbe, err
 
 type observerSession struct {
 	cancel             context.CancelFunc
+	done               chan struct{}
+	closeOnce          sync.Once
 	result             ProbeResult
 	hasResult          bool
 	lastReplicaVersion int64
@@ -98,7 +100,10 @@ func (o *Observer) Start(namespace string) {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	sess := &observerSession{cancel: cancel}
+	sess := &observerSession{
+		cancel: cancel,
+		done:   make(chan struct{}),
+	}
 	o.sessions[namespace] = sess
 	o.mu.Unlock()
 
@@ -122,7 +127,7 @@ func (o *Observer) Stop(namespace string) {
 	if cancel != nil {
 		cancel()
 	}
-	closeSessionProbes(sess)
+	<-sess.done
 }
 
 // Latest returns the most recent probe result for namespace.
@@ -140,6 +145,7 @@ func (o *Observer) Latest(namespace string) (ProbeResult, bool) {
 }
 
 func (o *Observer) runLoop(ctx context.Context, namespace string, sess *observerSession) {
+	defer close(sess.done)
 	defer closeSessionProbes(sess)
 
 	ticker := time.NewTicker(o.tickInterval)
@@ -236,12 +242,14 @@ func closeSessionProbes(sess *observerSession) {
 	if sess == nil {
 		return
 	}
-	if sess.primary != nil {
-		_ = sess.primary.Close()
-		sess.primary = nil
-	}
-	if sess.replica != nil {
-		_ = sess.replica.Close()
-		sess.replica = nil
-	}
+	sess.closeOnce.Do(func() {
+		if sess.primary != nil {
+			_ = sess.primary.Close()
+			sess.primary = nil
+		}
+		if sess.replica != nil {
+			_ = sess.replica.Close()
+			sess.replica = nil
+		}
+	})
 }

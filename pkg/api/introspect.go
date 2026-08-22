@@ -281,6 +281,9 @@ func (h *Handler) handlePostgresIntrospect(ctx context.Context, w http.ResponseW
 func filterTables(tables []introspect.TableInfo, allowed []string) []introspect.TableInfo {
 	out := make([]introspect.TableInfo, 0, len(allowed))
 	for _, t := range tables {
+		if !introspect.IsStudentTable(t.Name) {
+			continue
+		}
 		if introspect.TableAllowed(t.Name, allowed) {
 			out = append(out, t)
 		}

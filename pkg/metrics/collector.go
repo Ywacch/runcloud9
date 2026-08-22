@@ -50,6 +50,7 @@ type MetricsCollector struct {
 	cascade         *CascadeDetector
 	invariants      *InvariantChecker
 	observer        consistencyObserver
+	consistency     *ConsistencyDetector
 	historyMu       sync.RWMutex
 	history         map[string]*RingBuffer // namespace → last 300 snapshots
 	clientLatencyMu sync.Mutex
@@ -63,6 +64,7 @@ type MetricsCollector struct {
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
 // metricsClient may be nil; DB/MQ/LB container usage then falls back to kube requests when cAdvisor is empty.
 func NewMetricsCollector(prometheusURL string, lg loadgen.LoadGenerator, clientset kubernetes.Interface, metricsClient PodMetricsProvider, eventBus *EventBus) *MetricsCollector {
+	observer := probes.NewObserver()
 	return &MetricsCollector{
 		prometheusURL: prometheusURL,
 		httpClient:    &http.Client{Timeout: 5 * time.Second},
@@ -74,7 +76,8 @@ func NewMetricsCollector(prometheusURL string, lg loadgen.LoadGenerator, clients
 		thresholds:    NewThresholdDetector(),
 		cascade:       NewCascadeDetector(),
 		invariants:    NewInvariantChecker(),
-		observer:      probes.NewObserver(),
+		observer:      observer,
+		consistency:   NewConsistencyDetector(observer),
 		mqRates:       make(map[string]rabbitCounterSnapshot),
 	}
 }
@@ -116,6 +119,9 @@ func (c *MetricsCollector) Cleanup(namespace string) {
 	}
 	if c.invariants != nil {
 		c.invariants.Cleanup(namespace)
+	}
+	if c.consistency != nil {
+		c.consistency.Cleanup(namespace)
 	}
 	if c.observer != nil {
 		c.observer.Stop(namespace)
@@ -1089,6 +1095,9 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	}
 	if c.invariants != nil {
 		ev = append(ev, c.invariants.Eval(namespace, dm, topo, tmpl)...)
+	}
+	if c.consistency != nil {
+		ev = append(ev, c.consistency.Eval(namespace, dm, topo, tmpl)...)
 	}
 	dm.Events = ev
 

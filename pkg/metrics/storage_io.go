@@ -51,6 +51,8 @@ var storageIORegistry = map[StorageEngineID]StorageIOProvider{
 		Source: "postgres_exporter",
 		// User-table counters exclude postgres_exporter catalog queries (pg_stat_database.tup_returned
 		// counts every row returned to any client, including sidecar stats scrapes).
+		// relname!~"_c9_.*" drops Cloud9 probe tables (_c9_probe); app hit/miss and db_query_rate
+		// come from app-pod PromQL and are unaffected.
 		ReadQuery: func(ns string) string {
 			return postgresUserTableReadRateQuery(ns)
 		},
@@ -105,9 +107,14 @@ var storageIORegistry = map[StorageEngineID]StorageIOProvider{
 	},
 }
 
+// postgresUserTableMetricFilter scopes pg_stat_user_tables to student-visible tables in a namespace.
+func postgresUserTableMetricFilter(ns string) string {
+	return `namespace="` + ns + `",datname!~"template0|template1",relname!~"_c9_.*"`
+}
+
 // postgresUserTableReadRateQuery sums live rows read from user tables (seq + index heap fetches).
 func postgresUserTableReadRateQuery(ns string) string {
-	filter := `namespace="` + ns + `",datname!~"template0|template1"`
+	filter := postgresUserTableMetricFilter(ns)
 	rw := promRateRange()
 	return `sum(rate(pg_stat_user_tables_seq_tup_read{` + filter + `}` + rw + `))` +
 		` + sum(rate(pg_stat_user_tables_idx_tup_fetch{` + filter + `}` + rw + `))`
@@ -115,7 +122,7 @@ func postgresUserTableReadRateQuery(ns string) string {
 
 // postgresUserTableWriteRateQuery sums row inserts, updates, and deletes on user tables.
 func postgresUserTableWriteRateQuery(ns string) string {
-	filter := `namespace="` + ns + `",datname!~"template0|template1"`
+	filter := postgresUserTableMetricFilter(ns)
 	rw := promRateRange()
 	return `sum(rate(pg_stat_user_tables_n_tup_ins{` + filter + `}` + rw + `))` +
 		` + sum(rate(pg_stat_user_tables_n_tup_upd{` + filter + `}` + rw + `))` +
@@ -124,14 +131,14 @@ func postgresUserTableWriteRateQuery(ns string) string {
 
 // postgresUserTableReadTotal9mQuery sums rows read from user tables over the rolling 9m window.
 func postgresUserTableReadTotal9mQuery(ns string) string {
-	filter := `namespace="` + ns + `",datname!~"template0|template1"`
+	filter := postgresUserTableMetricFilter(ns)
 	return `sum(increase(pg_stat_user_tables_seq_tup_read{` + filter + `}[9m]))` +
 		` + sum(increase(pg_stat_user_tables_idx_tup_fetch{` + filter + `}[9m]))`
 }
 
 // postgresUserTableWriteTotal9mQuery sums row writes on user tables over the rolling 9m window.
 func postgresUserTableWriteTotal9mQuery(ns string) string {
-	filter := `namespace="` + ns + `",datname!~"template0|template1"`
+	filter := postgresUserTableMetricFilter(ns)
 	return `sum(increase(pg_stat_user_tables_n_tup_ins{` + filter + `}[9m]))` +
 		` + sum(increase(pg_stat_user_tables_n_tup_upd{` + filter + `}[9m]))` +
 		` + sum(increase(pg_stat_user_tables_n_tup_del{` + filter + `}[9m]))`
