@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/loadgen"
+	"github.com/ywacch/cloud9/pkg/probes"
 	"github.com/ywacch/cloud9/pkg/templates"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -48,6 +49,7 @@ type MetricsCollector struct {
 	thresholds      *ThresholdDetector
 	cascade         *CascadeDetector
 	invariants      *InvariantChecker
+	observer        consistencyObserver
 	historyMu       sync.RWMutex
 	history         map[string]*RingBuffer // namespace → last 300 snapshots
 	clientLatencyMu sync.Mutex
@@ -72,6 +74,7 @@ func NewMetricsCollector(prometheusURL string, lg loadgen.LoadGenerator, clients
 		thresholds:    NewThresholdDetector(),
 		cascade:       NewCascadeDetector(),
 		invariants:    NewInvariantChecker(),
+		observer:      probes.NewObserver(),
 		mqRates:       make(map[string]rabbitCounterSnapshot),
 	}
 }
@@ -113,6 +116,9 @@ func (c *MetricsCollector) Cleanup(namespace string) {
 	}
 	if c.invariants != nil {
 		c.invariants.Cleanup(namespace)
+	}
+	if c.observer != nil {
+		c.observer.Stop(namespace)
 	}
 	c.historyMu.Lock()
 	if c.history != nil {
@@ -1024,6 +1030,9 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 			}
 			dbLayerSplit := c.collectDBReplicaLayers(ctx, ns)
 			applyDBReplicaLayers(&cm, dbLayerSplit)
+			if len(dbLayerSplit.replicaPods) > 0 && c.observer != nil {
+				c.observer.Start(namespace)
+			}
 			dm.Components["db"] = cm
 		}
 	}
