@@ -2,6 +2,7 @@ package probes
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -11,12 +12,22 @@ import (
 
 const defaultObserverInterval = 10 * time.Second
 
-// ProbeResult is the latest primary write vs replica read snapshot for one namespace.
+// ObserverConfig selects which probe legs run for a namespace session.
+type ObserverConfig struct {
+	NeedReplica bool
+	NeedCache   bool
+	Cache       CacheDialOptions
+}
+
+// ProbeResult is the latest primary write vs replica read and optional cache read snapshot.
 type ProbeResult struct {
 	WrittenVersion       int64
 	ReplicaVersion       int64
 	RYWStalenessVersions int64
 	MonotonicViolation   bool
+	CacheHit             bool
+	CacheDbStale         bool
+	CacheErr             string
 	LastErr              string
 	At                   time.Time
 }
@@ -31,15 +42,22 @@ type observerSession struct {
 	hasResult          bool
 	lastReplicaVersion int64
 	schemaEnsured      bool
+	needReplica        bool
+	needCache          bool
+	cacheDisabled      bool
+	cacheOpts          CacheDialOptions
+	cacheDialErr       error
 	primary            ConsistencyProbe
 	replica            ConsistencyProbe
+	cache              CacheProbe
 }
 
-// Observer runs a slow background loop per deployment namespace when read replicas exist.
+// Observer runs a slow background loop per deployment namespace.
 type Observer struct {
 	mu           sync.Mutex
 	sessions     map[string]*observerSession
 	dial         probeDialFunc
+	dialCache    cacheDialFunc
 	tickInterval time.Duration
 }
 
@@ -51,6 +69,15 @@ func WithProbeDial(fn probeDialFunc) ObserverOption {
 	return func(o *Observer) {
 		if fn != nil {
 			o.dial = fn
+		}
+	}
+}
+
+// WithCacheDial overrides the default cache dialer (tests).
+func WithCacheDial(fn cacheDialFunc) ObserverOption {
+	return func(o *Observer) {
+		if fn != nil {
+			o.dialCache = fn
 		}
 	}
 }
@@ -69,6 +96,7 @@ func NewObserver(opts ...ObserverOption) *Observer {
 	o := &Observer{
 		sessions:     make(map[string]*observerSession),
 		dial:         defaultProbeDial,
+		dialCache:    defaultCacheDial,
 		tickInterval: defaultObserverInterval,
 	}
 	for _, opt := range opts {
@@ -90,8 +118,11 @@ func replicaHost(namespace string) string {
 }
 
 // Start launches the observer loop for namespace. Idempotent.
-func (o *Observer) Start(namespace string) {
+func (o *Observer) Start(namespace string, cfg ObserverConfig) {
 	if o == nil || namespace == "" {
+		return
+	}
+	if !cfg.NeedReplica && !cfg.NeedCache {
 		return
 	}
 	o.mu.Lock()
@@ -101,8 +132,11 @@ func (o *Observer) Start(namespace string) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	sess := &observerSession{
-		cancel: cancel,
-		done:   make(chan struct{}),
+		cancel:      cancel,
+		done:        make(chan struct{}),
+		needReplica: cfg.NeedReplica,
+		needCache:   cfg.NeedCache,
+		cacheOpts:   cfg.Cache,
 	}
 	o.sessions[namespace] = sess
 	o.mu.Unlock()
@@ -194,23 +228,62 @@ func (o *Observer) runProbeTick(ctx context.Context, namespace string, sess *obs
 		return ProbeResult{}, err
 	}
 
-	replicaVer, ok, err := sess.replica.ReadVersion(ctx)
-	if err != nil {
-		return ProbeResult{WrittenVersion: written}, err
+	out := ProbeResult{WrittenVersion: written}
+
+	if sess.needReplica && sess.replica != nil {
+		replicaVer, ok, err := sess.replica.ReadVersion(ctx)
+		if err != nil {
+			o.probeCache(ctx, sess, written, &out)
+			return out, err
+		}
+		if ok {
+			out.ReplicaVersion = replicaVer
+			out.RYWStalenessVersions = StalenessVersions(written, replicaVer)
+			if sess.lastReplicaVersion > 0 && MonotonicViolation(sess.lastReplicaVersion, replicaVer) {
+				out.MonotonicViolation = true
+			}
+			sess.lastReplicaVersion = replicaVer
+		} else {
+			out.RYWStalenessVersions = StalenessVersions(written, 0)
+		}
 	}
 
-	out := ProbeResult{WrittenVersion: written}
-	if ok {
-		out.ReplicaVersion = replicaVer
-		out.RYWStalenessVersions = StalenessVersions(written, replicaVer)
-		if sess.lastReplicaVersion > 0 && MonotonicViolation(sess.lastReplicaVersion, replicaVer) {
-			out.MonotonicViolation = true
-		}
-		sess.lastReplicaVersion = replicaVer
-	} else {
-		out.RYWStalenessVersions = StalenessVersions(written, 0)
-	}
+	o.probeCache(ctx, sess, written, &out)
 	return out, nil
+}
+
+func (o *Observer) probeCache(ctx context.Context, sess *observerSession, written int64, out *ProbeResult) {
+	if !sess.needCache || sess.cacheDisabled {
+		return
+	}
+	if sess.cache == nil {
+		if sess.cacheDialErr != nil {
+			out.CacheErr = sess.cacheDialErr.Error()
+		}
+		return
+	}
+
+	writtenTok := Int64Token(written)
+	cached, hit, err := sess.cache.Get(ctx, CacheProbeKey)
+	if err != nil {
+		out.CacheErr = err.Error()
+		return
+	}
+	if !hit {
+		ttl := sess.cacheOpts.ProbeTTL
+		if ttl <= 0 {
+			ttl = defaultCacheProbeTTL
+		}
+		if err := sess.cache.Set(ctx, CacheProbeKey, writtenTok, ttl); err != nil {
+			out.CacheErr = err.Error()
+		}
+		return
+	}
+
+	out.CacheHit = true
+	if TokenBehind(writtenTok, cached) {
+		out.CacheDbStale = true
+	}
 }
 
 func (o *Observer) ensureProbes(ctx context.Context, namespace string, sess *observerSession) error {
@@ -221,12 +294,25 @@ func (o *Observer) ensureProbes(ctx context.Context, namespace string, sess *obs
 		}
 		sess.primary = primary
 	}
-	if sess.replica == nil {
+	if sess.needReplica && sess.replica == nil {
 		replica, err := o.dial(ctx, replicaHost(namespace))
 		if err != nil {
 			return fmt.Errorf("dial replica: %w", err)
 		}
 		sess.replica = replica
+	}
+	if sess.needCache && sess.cache == nil && !sess.cacheDisabled {
+		cache, err := o.dialCache(ctx, namespace, sess.cacheOpts)
+		if err != nil {
+			if errors.Is(err, ErrCacheProbeUnsupported) {
+				sess.cacheDisabled = true
+			} else {
+				sess.cacheDialErr = err
+			}
+		} else {
+			sess.cache = cache
+			sess.cacheDialErr = nil
+		}
 	}
 	return nil
 }
@@ -250,6 +336,10 @@ func closeSessionProbes(sess *observerSession) {
 		if sess.replica != nil {
 			_ = sess.replica.Close()
 			sess.replica = nil
+		}
+		if sess.cache != nil {
+			_ = sess.cache.Close()
+			sess.cache = nil
 		}
 	})
 }

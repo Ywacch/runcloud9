@@ -13,6 +13,7 @@ import (
 const (
 	ruleRYWViolation       = "ryw_violation"
 	ruleMonotonicViolation = "monotonic_violation"
+	ruleCacheDbStale       = "cache_db_stale"
 )
 
 // ConsistencyDetector turns observer probe snapshots into L1 invariant events and db consistency counters.
@@ -68,6 +69,15 @@ func (cd *ConsistencyDetector) Eval(namespace string, dm *DeploymentMetrics, top
 		cd.clear(namespace, ruleMonotonicViolation)
 	}
 
+	if result.CacheDbStale {
+		if cd.fire(namespace, ruleCacheDbStale) {
+			cd.incrementViolation(namespace, ruleCacheDbStale)
+			out = append(out, cd.cacheDbStaleEvent(now, result))
+		}
+	} else {
+		cd.clear(namespace, ruleCacheDbStale)
+	}
+
 	if cm, exists := dm.Components["db"]; exists {
 		cm.Consistency = cd.statusFor(namespace, result, true)
 		dm.Components["db"] = cm
@@ -91,6 +101,7 @@ func (cd *ConsistencyDetector) statusFor(namespace string, result probes.ProbeRe
 	status := &ConsistencyStatus{
 		RYWViolations:       cd.violationCount(namespace, ruleRYWViolation),
 		MonotonicViolations: cd.violationCount(namespace, ruleMonotonicViolation),
+		CacheDbStale:        cd.violationCount(namespace, ruleCacheDbStale),
 	}
 	if !ok {
 		return status
@@ -131,6 +142,22 @@ func (cd *ConsistencyDetector) monotonicEvent(now time.Time, result probes.Probe
 			"kind":              "monotonic",
 			"stalenessVersions": strconv.FormatInt(result.RYWStalenessVersions, 10),
 			"replicaVersion":    strconv.FormatInt(result.ReplicaVersion, 10),
+		},
+	}
+}
+
+func (cd *ConsistencyDetector) cacheDbStaleEvent(now time.Time, _ probes.ProbeResult) Event {
+	return Event{
+		Timestamp:   now,
+		Type:        "invariant",
+		Source:      "detector",
+		Component:   "db",
+		RuleID:      ruleCacheDbStale,
+		Audience:    "student",
+		Title:       "Cache vs database staleness",
+		Description: "Cache served a probe value older than the version just written on the primary",
+		Detail: map[string]string{
+			"kind": "cache_db_stale",
 		},
 	}
 }

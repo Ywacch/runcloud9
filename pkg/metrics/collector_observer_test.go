@@ -25,7 +25,7 @@ func newRecordingConsistencyObserver() *recordingConsistencyObserver {
 	}
 }
 
-func (r *recordingConsistencyObserver) Start(namespace string) {
+func (r *recordingConsistencyObserver) Start(namespace string, _ probes.ObserverConfig) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.started[namespace] > 0 {
@@ -108,7 +108,7 @@ func TestCollect_startsConsistencyObserverWhenReplicasPresent(t *testing.T) {
 	}
 }
 
-func TestCollect_doesNotStartObserverWithoutReplicas(t *testing.T) {
+func TestCollect_doesNotStartObserverWithoutReplicasOrCache(t *testing.T) {
 	t.Parallel()
 	ns := "ns-no-replica"
 	rec := newRecordingConsistencyObserver()
@@ -124,13 +124,34 @@ func TestCollect_doesNotStartObserverWithoutReplicas(t *testing.T) {
 	}
 }
 
+func TestCollect_startsObserverWhenCachePresentWithoutReplicas(t *testing.T) {
+	t.Parallel()
+	ns := "ns-cache-only"
+	rec := newRecordingConsistencyObserver()
+	c := NewMetricsCollector("", nil, fake.NewSimpleClientset(), nil, nil)
+	c.observer = rec
+
+	topo := TopologyFlags{
+		HasDB:    true,
+		HasCache: true,
+		DBEngine: "postgresql",
+		DBRole:   "primary",
+	}
+	if _, err := c.Collect(context.Background(), ns, "url-shortener", topo); err != nil {
+		t.Fatal(err)
+	}
+	if rec.countStarted(ns) != 1 {
+		t.Fatalf("Start calls: got %d want 1", rec.countStarted(ns))
+	}
+}
+
 func TestCleanup_stopsConsistencyObserver(t *testing.T) {
 	t.Parallel()
 	ns := "ns-observer-stop"
 	rec := newRecordingConsistencyObserver()
 	c := NewMetricsCollector("", nil, fake.NewSimpleClientset(), nil, nil)
 	c.observer = rec
-	rec.Start(ns)
+	rec.Start(ns, probes.ObserverConfig{NeedReplica: true})
 
 	c.Cleanup(ns)
 	if rec.countStopped(ns) != 1 {

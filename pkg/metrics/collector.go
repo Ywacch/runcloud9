@@ -1036,8 +1036,18 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 			}
 			dbLayerSplit := c.collectDBReplicaLayers(ctx, ns)
 			applyDBReplicaLayers(&cm, dbLayerSplit)
-			if len(dbLayerSplit.replicaPods) > 0 && c.observer != nil {
-				c.observer.Start(namespace)
+			needReplica := len(dbLayerSplit.replicaPods) > 0
+			needCache := topo.HasCache
+			if c.observer != nil && (needReplica || needCache) {
+				cacheOpts := probes.DefaultCacheDialOptions(topo.HasProxyCache)
+				if topo.CacheEngine != "" {
+					cacheOpts.Engine = topo.CacheEngine
+				}
+				c.observer.Start(namespace, probes.ObserverConfig{
+					NeedReplica: needReplica,
+					NeedCache:   needCache,
+					Cache:       cacheOpts,
+				})
 			}
 			dm.Components["db"] = cm
 		}
