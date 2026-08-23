@@ -168,31 +168,18 @@ func TestConsistencyDetector_CacheDbStale(t *testing.T) {
 	dm := &DeploymentMetrics{Components: map[string]ComponentMetrics{"db": {Component: "db"}}}
 
 	ev := cd.Eval(ns, dm, topo, nil)
-	if len(ev) != 1 {
-		t.Fatalf("want 1 event, got %d", len(ev))
+	if len(ev) != 0 {
+		t.Fatalf("probe CacheDbStale must not emit student events, got %d", len(ev))
 	}
-	if ev[0].RuleID != ruleCacheDbStale {
-		t.Fatalf("event: %+v", ev[0])
-	}
-	if dm.Components["db"].Consistency == nil || dm.Components["db"].Consistency.CacheDbStale != 1 {
+	if dm.Components["db"].Consistency == nil || dm.Components["db"].Consistency.CacheDbStale != 0 {
 		t.Fatalf("consistency: %+v", dm.Components["db"].Consistency)
 	}
 
 	if again := cd.Eval(ns, dm, topo, nil); len(again) != 0 {
-		t.Fatalf("want suppression, got %d events", len(again))
+		t.Fatalf("want no events on repeat eval, got %d", len(again))
 	}
-
-	reader.result.CacheDbStale = false
-	if clear := cd.Eval(ns, dm, topo, nil); len(clear) != 0 {
-		t.Fatalf("recovery tick should not fire: %+v", clear)
-	}
-
-	reader.result.CacheDbStale = true
-	if refire := cd.Eval(ns, dm, topo, nil); len(refire) != 1 {
-		t.Fatalf("want refire after recovery, got %d", len(refire))
-	}
-	if dm.Components["db"].Consistency.CacheDbStale != 2 {
-		t.Fatalf("counter: %+v", dm.Components["db"].Consistency)
+	if dm.Components["db"].Consistency.CacheDbStale != 0 {
+		t.Fatalf("counter must stay 0: %+v", dm.Components["db"].Consistency)
 	}
 }
 

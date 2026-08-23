@@ -34,6 +34,8 @@ func NewConsistencyDetector(reader consistencyProbeReader) *ConsistencyDetector 
 }
 
 // Eval reads the latest probe result, updates db.Consistency, and emits invariant events on transitions.
+// RYW and monotonic violations are observer-sourced until Phase 2.5 PR9. Student-facing cache_db_stale
+// is sourced from app Prometheus counters in E4 (not the _c9_probe canary).
 func (cd *ConsistencyDetector) Eval(namespace string, dm *DeploymentMetrics, topo TopologyFlags, _ *templates.TemplateSpec) []Event {
 	if cd == nil || cd.reader == nil || dm == nil || namespace == "" || !topo.HasDB {
 		return nil
@@ -69,15 +71,6 @@ func (cd *ConsistencyDetector) Eval(namespace string, dm *DeploymentMetrics, top
 		cd.clear(namespace, ruleMonotonicViolation)
 	}
 
-	if result.CacheDbStale {
-		if cd.fire(namespace, ruleCacheDbStale) {
-			cd.incrementViolation(namespace, ruleCacheDbStale)
-			out = append(out, cd.cacheDbStaleEvent(now, result))
-		}
-	} else {
-		cd.clear(namespace, ruleCacheDbStale)
-	}
-
 	if cm, exists := dm.Components["db"]; exists {
 		cm.Consistency = cd.statusFor(namespace, result, true)
 		dm.Components["db"] = cm
@@ -101,7 +94,7 @@ func (cd *ConsistencyDetector) statusFor(namespace string, result probes.ProbeRe
 	status := &ConsistencyStatus{
 		RYWViolations:       cd.violationCount(namespace, ruleRYWViolation),
 		MonotonicViolations: cd.violationCount(namespace, ruleMonotonicViolation),
-		CacheDbStale:        cd.violationCount(namespace, ruleCacheDbStale),
+		CacheDbStale:        0, // probe canary does not feed student cache signal; E4 scrapes app counters
 	}
 	if !ok {
 		return status
