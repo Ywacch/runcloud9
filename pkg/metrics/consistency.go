@@ -16,63 +16,92 @@ const (
 	ruleCacheDbStale       = "cache_db_stale"
 )
 
+// cacheStaleSample is the newest stale-read evidence row scraped from app-server.
+type cacheStaleSample struct {
+	Key, Served, Truth, RequestID string
+}
+
 // ConsistencyDetector turns observer probe snapshots into L1 invariant events and db consistency counters.
 type ConsistencyDetector struct {
 	mu         sync.Mutex
 	reader     consistencyProbeReader
 	suppressed map[string]map[string]bool
 	violations map[string]map[string]int64
+
+	appStaleTotal map[string]float64
+	appStaleSeen  map[string]float64
+	lastSample    map[string]cacheStaleSample
 }
 
 // NewConsistencyDetector creates a detector backed by the given probe reader.
 func NewConsistencyDetector(reader consistencyProbeReader) *ConsistencyDetector {
 	return &ConsistencyDetector{
-		reader:     reader,
-		suppressed: make(map[string]map[string]bool),
-		violations: make(map[string]map[string]int64),
+		reader:        reader,
+		suppressed:    make(map[string]map[string]bool),
+		violations:    make(map[string]map[string]int64),
+		appStaleTotal: make(map[string]float64),
+		appStaleSeen:  make(map[string]float64),
+		lastSample:    make(map[string]cacheStaleSample),
+	}
+}
+
+// NoteAppCacheStale records the scraped app-server stale-read counter and optional evidence sample.
+// Call once per Collect tick before Eval.
+func (cd *ConsistencyDetector) NoteAppCacheStale(namespace string, total float64, sample cacheStaleSample) {
+	if cd == nil || namespace == "" {
+		return
+	}
+	cd.mu.Lock()
+	defer cd.mu.Unlock()
+	cd.appStaleTotal[namespace] = total
+	if sample.Key != "" {
+		cd.lastSample[namespace] = sample
 	}
 }
 
 // Eval reads the latest probe result, updates db.Consistency, and emits invariant events on transitions.
 // RYW and monotonic violations are observer-sourced until Phase 2.5 PR9. Student-facing cache_db_stale
-// is sourced from app Prometheus counters in E4 (not the _c9_probe canary).
+// is sourced from app Prometheus counters (not the _c9_probe canary).
 func (cd *ConsistencyDetector) Eval(namespace string, dm *DeploymentMetrics, topo TopologyFlags, _ *templates.TemplateSpec) []Event {
-	if cd == nil || cd.reader == nil || dm == nil || namespace == "" || !topo.HasDB {
-		return nil
-	}
-
-	result, ok := cd.reader.Latest(namespace)
-	if !ok {
-		if cm, exists := dm.Components["db"]; exists {
-			cm.Consistency = cd.statusFor(namespace, result, false)
-			dm.Components["db"] = cm
-		}
+	if cd == nil || dm == nil || namespace == "" || !topo.HasDB {
 		return nil
 	}
 
 	var out []Event
 	now := time.Now()
 
-	if result.RYWStalenessVersions > 0 {
-		if cd.fire(namespace, ruleRYWViolation) {
-			cd.incrementViolation(namespace, ruleRYWViolation)
-			out = append(out, cd.rywEvent(now, result))
-		}
-	} else {
-		cd.clear(namespace, ruleRYWViolation)
+	if topo.HasCache {
+		out = append(out, cd.evalAppCacheStale(namespace, now)...)
 	}
 
-	if result.MonotonicViolation {
-		if cd.fire(namespace, ruleMonotonicViolation) {
-			cd.incrementViolation(namespace, ruleMonotonicViolation)
-			out = append(out, cd.monotonicEvent(now, result))
+	var result probes.ProbeResult
+	probeOK := false
+	if cd.reader != nil {
+		result, probeOK = cd.reader.Latest(namespace)
+	}
+
+	if probeOK {
+		if result.RYWStalenessVersions > 0 {
+			if cd.fire(namespace, ruleRYWViolation) {
+				cd.incrementViolation(namespace, ruleRYWViolation)
+				out = append(out, cd.rywEvent(now, result))
+			}
+		} else {
+			cd.clear(namespace, ruleRYWViolation)
 		}
-	} else {
-		cd.clear(namespace, ruleMonotonicViolation)
+
+		if result.MonotonicViolation {
+			if cd.fire(namespace, ruleMonotonicViolation) {
+				cd.incrementViolation(namespace, ruleMonotonicViolation)
+				out = append(out, cd.monotonicEvent(now, result))
+			}
+		} else {
+			cd.clear(namespace, ruleMonotonicViolation)
+		}
 	}
 
 	if cm, exists := dm.Components["db"]; exists {
-		cm.Consistency = cd.statusFor(namespace, result, true)
+		cm.Consistency = cd.statusFor(namespace, result, probeOK)
 		dm.Components["db"] = cm
 	}
 
@@ -88,13 +117,43 @@ func (cd *ConsistencyDetector) Cleanup(namespace string) {
 	defer cd.mu.Unlock()
 	delete(cd.suppressed, namespace)
 	delete(cd.violations, namespace)
+	delete(cd.appStaleTotal, namespace)
+	delete(cd.appStaleSeen, namespace)
+	delete(cd.lastSample, namespace)
+}
+
+func (cd *ConsistencyDetector) evalAppCacheStale(namespace string, now time.Time) []Event {
+	cd.mu.Lock()
+	total := cd.appStaleTotal[namespace]
+	lastSeen := cd.appStaleSeen[namespace]
+	sample := cd.lastSample[namespace]
+	cd.appStaleSeen[namespace] = total
+	cd.mu.Unlock()
+
+	if total > lastSeen {
+		if cd.fire(namespace, ruleCacheDbStale) {
+			cd.incrementViolation(namespace, ruleCacheDbStale)
+			return []Event{cd.cacheDbStaleEvent(now, sample)}
+		}
+		return nil
+	}
+	if total == lastSeen {
+		cd.clear(namespace, ruleCacheDbStale)
+	}
+	return nil
 }
 
 func (cd *ConsistencyDetector) statusFor(namespace string, result probes.ProbeResult, ok bool) *ConsistencyStatus {
 	status := &ConsistencyStatus{
 		RYWViolations:       cd.violationCount(namespace, ruleRYWViolation),
 		MonotonicViolations: cd.violationCount(namespace, ruleMonotonicViolation),
-		CacheDbStale:        0, // probe canary does not feed student cache signal; E4 scrapes app counters
+		CacheDbStale:        cd.violationCount(namespace, ruleCacheDbStale),
+	}
+	if sample, has := cd.sampleFor(namespace); has {
+		status.LastCacheKey = sample.Key
+		status.LastCacheServed = sample.Served
+		status.LastCacheTruth = sample.Truth
+		status.LastCacheRequestID = sample.RequestID
 	}
 	if !ok {
 		return status
@@ -102,6 +161,13 @@ func (cd *ConsistencyDetector) statusFor(namespace string, result probes.ProbeRe
 	status.ReplicaStalenessVersions = result.RYWStalenessVersions
 	status.LastProbeError = result.LastErr
 	return status
+}
+
+func (cd *ConsistencyDetector) sampleFor(namespace string) (cacheStaleSample, bool) {
+	cd.mu.Lock()
+	defer cd.mu.Unlock()
+	sample, ok := cd.lastSample[namespace]
+	return sample, ok && sample.Key != ""
 }
 
 func (cd *ConsistencyDetector) rywEvent(now time.Time, result probes.ProbeResult) Event {
@@ -139,7 +205,24 @@ func (cd *ConsistencyDetector) monotonicEvent(now time.Time, result probes.Probe
 	}
 }
 
-func (cd *ConsistencyDetector) cacheDbStaleEvent(now time.Time, _ probes.ProbeResult) Event {
+func (cd *ConsistencyDetector) cacheDbStaleEvent(now time.Time, sample cacheStaleSample) Event {
+	desc := "Cache served a value different from the database"
+	if sample.Key != "" && sample.Served != "" && sample.Truth != "" {
+		desc = fmt.Sprintf("Cache served %s for %s; database has %s", sample.Served, sample.Key, sample.Truth)
+	}
+	detail := map[string]string{"kind": "cache_db_stale"}
+	if sample.Key != "" {
+		detail["key"] = sample.Key
+	}
+	if sample.Served != "" {
+		detail["served"] = sample.Served
+	}
+	if sample.Truth != "" {
+		detail["truth"] = sample.Truth
+	}
+	if sample.RequestID != "" {
+		detail["requestId"] = sample.RequestID
+	}
 	return Event{
 		Timestamp:   now,
 		Type:        "invariant",
@@ -148,10 +231,8 @@ func (cd *ConsistencyDetector) cacheDbStaleEvent(now time.Time, _ probes.ProbeRe
 		RuleID:      ruleCacheDbStale,
 		Audience:    "student",
 		Title:       "Cache vs database staleness",
-		Description: "Cache served a probe value older than the version just written on the primary",
-		Detail: map[string]string{
-			"kind": "cache_db_stale",
-		},
+		Description: desc,
+		Detail:      detail,
 	}
 }
 

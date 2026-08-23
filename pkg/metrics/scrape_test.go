@@ -47,3 +47,42 @@ func TestRabbitCounterRates(t *testing.T) {
 		t.Fatalf("delta rates mismatch: produce=%v consume=%v", p, q)
 	}
 }
+
+func TestParseConsistencySamplesJSON(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		body    string
+		wantKey string
+	}{
+		{
+			name:    "newest first row",
+			body:    `{"samples":[{"key":"product:7","served":"5","truth":"2","requestId":"rid-1","source":"cache"}]}`,
+			wantKey: "product:7",
+		},
+		{
+			name: "empty samples",
+			body: `{"samples":[]}`,
+		},
+		{
+			name: "invalid json",
+			body: `{`,
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := parseConsistencySamplesJSON([]byte(tc.body))
+			if got.Key != tc.wantKey {
+				t.Fatalf("key=%q want %q full=%+v", got.Key, tc.wantKey, got)
+			}
+			if tc.wantKey != "" {
+				if got.Served != "5" || got.Truth != "2" || got.RequestID != "rid-1" {
+					t.Fatalf("sample=%+v", got)
+				}
+			}
+		})
+	}
+}

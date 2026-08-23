@@ -183,6 +183,58 @@ func TestConsistencyDetector_CacheDbStale(t *testing.T) {
 	}
 }
 
+func TestConsistencyDetector_AppCacheStale(t *testing.T) {
+	t.Parallel()
+
+	cd := NewConsistencyDetector(&stubConsistencyProbeReader{ok: false})
+	ns := "ns-app-stale"
+	topo := TopologyFlags{HasDB: true, HasCache: true}
+	dm := &DeploymentMetrics{Components: map[string]ComponentMetrics{"db": {Component: "db"}}}
+	sample := cacheStaleSample{
+		Key:       "product:42",
+		Served:    "3",
+		Truth:     "1",
+		RequestID: "req-abc",
+	}
+
+	cd.NoteAppCacheStale(ns, 1, sample)
+	ev := cd.Eval(ns, dm, topo, nil)
+	if len(ev) != 1 {
+		t.Fatalf("want 1 event on 0→1, got %d", len(ev))
+	}
+	if ev[0].RuleID != ruleCacheDbStale {
+		t.Fatalf("event: %+v", ev[0])
+	}
+	for _, key := range []string{"key", "served", "truth", "requestId"} {
+		if ev[0].Detail[key] == "" {
+			t.Fatalf("detail missing %q: %+v", key, ev[0].Detail)
+		}
+	}
+	if ev[0].Detail["key"] != sample.Key || ev[0].Detail["requestId"] != sample.RequestID {
+		t.Fatalf("detail: %+v", ev[0].Detail)
+	}
+	cons := dm.Components["db"].Consistency
+	if cons == nil || cons.CacheDbStale != 1 {
+		t.Fatalf("counter: %+v", cons)
+	}
+	if cons.LastCacheKey != sample.Key || cons.LastCacheRequestID != sample.RequestID {
+		t.Fatalf("status evidence: %+v", cons)
+	}
+
+	cd.NoteAppCacheStale(ns, 1, sample)
+	if again := cd.Eval(ns, dm, topo, nil); len(again) != 0 {
+		t.Fatalf("same total should not refire, got %d", len(again))
+	}
+
+	cd.NoteAppCacheStale(ns, 2, sample)
+	if refire := cd.Eval(ns, dm, topo, nil); len(refire) != 1 {
+		t.Fatalf("want refire on 1→2, got %d", len(refire))
+	}
+	if dm.Components["db"].Consistency.CacheDbStale != 2 {
+		t.Fatalf("counter after refire: %+v", dm.Components["db"].Consistency)
+	}
+}
+
 func TestPostgresUserTableMetricFilter_ExcludesPlatformTables(t *testing.T) {
 	t.Parallel()
 

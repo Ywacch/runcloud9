@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -136,4 +137,56 @@ func (c *MetricsCollector) rabbitCounterRates(namespace string, receivedTotal, d
 		consume = 0
 	}
 	return produce, consume
+}
+
+type consistencySamplesPayload struct {
+	Samples []struct {
+		Key       string `json:"key"`
+		Source    string `json:"source"`
+		Served    string `json:"served"`
+		Truth     string `json:"truth"`
+		RequestID string `json:"requestId"`
+	} `json:"samples"`
+}
+
+// scrapeConsistencySample returns the newest stale-read evidence row from app-server, or zero value on failure.
+func (c *MetricsCollector) scrapeConsistencySample(ctx context.Context, namespace string) cacheStaleSample {
+	if c == nil || c.scrapeClient == nil || namespace == "" {
+		return cacheStaleSample{}
+	}
+	u := fmt.Sprintf("http://app-server.%s.svc.cluster.local:8080/consistency/samples", namespace)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return cacheStaleSample{}
+	}
+	resp, err := c.scrapeClient.Do(req)
+	if err != nil {
+		return cacheStaleSample{}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return cacheStaleSample{}
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return cacheStaleSample{}
+	}
+	return parseConsistencySamplesJSON(body)
+}
+
+func parseConsistencySamplesJSON(body []byte) cacheStaleSample {
+	var payload consistencySamplesPayload
+	if err := json.Unmarshal(body, &payload); err != nil || len(payload.Samples) == 0 {
+		return cacheStaleSample{}
+	}
+	row := payload.Samples[0]
+	if strings.TrimSpace(row.Key) == "" {
+		return cacheStaleSample{}
+	}
+	return cacheStaleSample{
+		Key:       row.Key,
+		Served:    row.Served,
+		Truth:     row.Truth,
+		RequestID: row.RequestID,
+	}
 }
