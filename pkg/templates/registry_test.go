@@ -475,6 +475,21 @@ func TestLoadgenSchedulesFromYAML(t *testing.T) {
 	}
 }
 
+func TestLoadgenActorParamsFromYAML_ecommerce(t *testing.T) {
+	t.Parallel()
+
+	params, ok := LoadgenParams("ecommerce")
+	if !ok || len(params) != 1 {
+		t.Fatalf("ecommerce params: ok=%v len=%d", ok, len(params))
+	}
+	if params[0].Key != "readAfterPostBoost" || params[0].Default != 2 {
+		t.Fatalf("readAfterPostBoost: %+v", params[0])
+	}
+	if params[0].Min == nil || *params[0].Min != 1 || params[0].Max == nil || *params[0].Max != 5 {
+		t.Fatalf("readAfterPostBoost bounds: %+v", params[0])
+	}
+}
+
 func TestLoadgenActorParamsFromYAML(t *testing.T) {
 	t.Parallel()
 
