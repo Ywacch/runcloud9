@@ -35,6 +35,12 @@ loadgen:
       poolField: productIds
       bodyTemplate: '{"product_id":{{.Param}}, "quantity":1}'
       weight: 30
+  params:
+    - key: readAfterPostBoost
+      type: float
+      default: 2.0
+      min: 1.0
+      max: 5.0
 workerImageKey: ecommerce-worker
 appDatabaseMode: always
 prometheusMetrics:

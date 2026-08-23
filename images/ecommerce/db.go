@@ -149,6 +149,16 @@ func (db *DB) ListProducts(ctx context.Context) ([]Product, error) {
 	return out, rows.Err()
 }
 
+// ProductStockForVerify reads stock for cache consistency checks without db_query_duration metrics.
+func (db *DB) ProductStockForVerify(ctx context.Context, id int) (int, error) {
+	var stock int
+	err := db.pool.QueryRow(ctx, `SELECT stock FROM products WHERE id=$1`, id).Scan(&stock)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return stock, err
+}
+
 func (db *DB) GetProduct(ctx context.Context, id int) (Product, error) {
 	start := time.Now()
 	defer func() {

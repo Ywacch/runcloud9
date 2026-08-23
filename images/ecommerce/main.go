@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
+	"github.com/ywacch/cloud9/pkg/templateapp/consistency"
 )
 
 type Config struct {
@@ -51,6 +52,8 @@ type Server struct {
 	proxy *ProxyClient
 	mq    *MQPublisher
 	cfg   Config
+
+	verifier *consistency.Verifier
 
 	cacheHits   atomic.Int64
 	cacheMisses atomic.Int64
@@ -162,6 +165,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.Handle("/health/live", withRecovery(http.HandlerFunc(s.handleLive)))
 	mux.Handle("/health/ready", withRecovery(http.HandlerFunc(s.handleReady)))
 	mux.Handle("/cache-stats", withRecovery(http.HandlerFunc(s.handleCacheStats)))
+	mux.Handle("/consistency/samples", withRecovery(consistency.SamplesHandler(s.verifier)))
 	mux.Handle("/metrics", promhttp.Handler())
 
 	return mux
@@ -268,6 +272,7 @@ func (s *Server) handleProduct(w http.ResponseWriter, r *http.Request) {
 		if source == "cache" {
 			s.cacheHits.Add(1)
 			cacheHitsTotal.Inc()
+			s.observeCacheHit(ctx, cacheKey, value)
 		} else {
 			s.cacheMisses.Add(1)
 			cacheMissesTotal.Inc()
@@ -281,6 +286,7 @@ func (s *Server) handleProduct(w http.ResponseWriter, r *http.Request) {
 		if cached, ok := s.cache.Get(ctx, cacheKey); ok {
 			s.cacheHits.Add(1)
 			cacheHitsTotal.Inc()
+			s.observeCacheHit(ctx, cacheKey, cached)
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(cached))
 			return
@@ -645,6 +651,8 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 		}
 	}
 
+	s.initConsistencyVerifier()
+
 	return s, nil
 }
 
@@ -661,6 +669,10 @@ func main() {
 	if err != nil {
 		slog.Error("newServer failed", "error", err)
 		os.Exit(1)
+	}
+	if s.verifier != nil {
+		s.verifier.Start(ctx)
+		defer s.verifier.Stop()
 	}
 	defer s.db.pool.Close()
 	if s.mq != nil {
