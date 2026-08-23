@@ -1107,6 +1107,10 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		ev = append(ev, c.invariants.Eval(namespace, dm, topo, tmpl)...)
 	}
 	if c.consistency != nil {
+		if topo.HasCache && topo.HasDB {
+			staleTotal, _, _ := c.queryScalar(ctx, fmt.Sprintf(`sum(consistency_read_stale_total{%s})`, nsSel))
+			c.consistency.NoteAppCacheStale(namespace, staleTotal, c.scrapeConsistencySample(ctx, namespace))
+		}
 		ev = append(ev, c.consistency.Eval(namespace, dm, topo, tmpl)...)
 	}
 	dm.Events = ev

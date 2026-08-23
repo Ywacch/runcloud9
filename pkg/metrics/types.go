@@ -226,6 +226,10 @@ type ConsistencyStatus struct {
 	CacheDbStale             int64  `json:"cacheDbStale"`
 	ReplicaStalenessVersions int64  `json:"replicaStalenessVersions"`
 	LastProbeError           string `json:"lastProbeError,omitempty"`
+	LastCacheKey             string `json:"lastCacheKey,omitempty"`
+	LastCacheServed          string `json:"lastCacheServed,omitempty"`
+	LastCacheTruth           string `json:"lastCacheTruth,omitempty"`
+	LastCacheRequestID       string `json:"lastCacheRequestId,omitempty"`
 }
 
 // ComponentLayerMetrics holds per-process metrics for a layered component (e.g. redis-internal vs cache-proxy).
