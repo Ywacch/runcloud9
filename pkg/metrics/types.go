@@ -258,6 +258,8 @@ type ComponentLayerMetrics struct {
 	// ReplicationLagSeconds is primary-side replay lag on replica layers (seconds).
 	// Pointer so a successful query of 0 serializes; nil when the series is absent.
 	ReplicationLagSeconds *float64 `json:"replicationLagSeconds,omitempty"`
+	// RequestRate is per-layer PostgreSQL transaction throughput (xact/s) when known.
+	RequestRate float64 `json:"requestRate,omitempty"`
 	// Freshness tags containerCpu / containerMem for this layer (proxy vs backing store
 	// can sit on different tiers). See freshness.go.
 	Freshness map[string]SignalFreshness `json:"freshness,omitempty"`
