@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -83,6 +84,36 @@ func postgresReplicaLagFallbackByPodQuery(ns string) string {
 	)
 }
 
+func postgresXactRateByPodQuery(ns string) string {
+	return fmt.Sprintf(
+		`sum by (pod) (rate(pg_stat_database_xact_commit{namespace=%q,datname!=""}%s) + rate(pg_stat_database_xact_rollback{namespace=%q,datname!=""}%s))`,
+		ns, promRateRange(), ns, promRateRange(),
+	)
+}
+
+func mapPostgresLayerRequestRates(rpsByPod map[string]float64) map[string]float64 {
+	out := make(map[string]float64)
+	replicaRE, err := regexp.Compile("^" + dbReplicaPodSelector + "$")
+	if err != nil {
+		return out
+	}
+	for pod, rate := range rpsByPod {
+		if replicaRE.MatchString(pod) {
+			out[pod] = rate
+			continue
+		}
+		out[dbLayerIDPostgresPrimary] += rate
+	}
+	return out
+}
+
+func (c *MetricsCollector) dbLayerRequestRateByPod(ctx context.Context, ns string) map[string]float64 {
+	if c == nil || c.prometheusURL == "" {
+		return nil
+	}
+	return mapPostgresLayerRequestRates(c.queryMultiResult(ctx, postgresXactRateByPodQuery(ns), "pod"))
+}
+
 func (c *MetricsCollector) replicaLagByPod(ctx context.Context, ns string, replicaPods []string) map[string]float64 {
 	out := make(map[string]float64, len(replicaPods))
 	if c == nil || c.prometheusURL == "" || len(replicaPods) == 0 {
@@ -112,16 +143,16 @@ func (c *MetricsCollector) buildDBPrimaryLayer(ctx context.Context, ns string) C
 	if c == nil {
 		return layer
 	}
-	cpuRes := c.queryContainerResourceCPU(ctx, ns, dbPrimaryPodSelector, "postgres")
-	memRes := c.queryContainerResourceMemory(ctx, ns, dbPrimaryPodSelector, "postgres")
+	cpuRes := c.queryContainerResourceCPUExcluding(ctx, ns, dbPrimaryPodSelector, dbReplicaPodSelector, "postgres")
+	memRes := c.queryContainerResourceMemoryExcluding(ctx, ns, dbPrimaryPodSelector, dbReplicaPodSelector, "postgres")
 	layer.CPUUsage = cpuRes.Usage
 	layer.CPUIsEstimated = cpuRes.Estimated
 	layer.CPUSource = cpuRes.Source
 	layer.MemoryBytes = int64(memRes.Usage)
 	layer.MemIsEstimated = memRes.Estimated
 	layer.MemSource = memRes.Source
-	layer.CPULimit = c.kubeLimitCPU(ctx, ns, dbPrimaryPodSelector, "postgres")
-	layer.MemoryLimit = c.kubeLimitMem(ctx, ns, dbPrimaryPodSelector, "postgres")
+	layer.CPULimit = c.kubeLimitCPUExcluding(ctx, ns, dbPrimaryPodSelector, dbReplicaPodSelector, "postgres")
+	layer.MemoryLimit = c.kubeLimitMemExcluding(ctx, ns, dbPrimaryPodSelector, dbReplicaPodSelector, "postgres")
 	return layer
 }
 
@@ -170,13 +201,17 @@ func (c *MetricsCollector) collectDBReplicaLayers(ctx context.Context, ns string
 
 	out.primary = c.buildDBPrimaryLayer(ctx, ns)
 	lagByPod := c.replicaLagByPod(ctx, ns, names)
+	rpsByLayer := c.dbLayerRequestRateByPod(ctx, ns)
+	out.primary.RequestRate = rpsByLayer[dbLayerIDPostgresPrimary]
 	out.replicas = make([]ComponentLayerMetrics, 0, len(names))
 	for _, podName := range names {
 		var lag *float64
 		if seconds, ok := lagByPod[podName]; ok {
 			lag = replicationLagSecondsPtr(seconds)
 		}
-		out.replicas = append(out.replicas, c.buildDBReplicaLayer(ctx, ns, podName, lag))
+		replicaLayer := c.buildDBReplicaLayer(ctx, ns, podName, lag)
+		replicaLayer.RequestRate = rpsByLayer[podName]
+		out.replicas = append(out.replicas, replicaLayer)
 	}
 	return out
 }

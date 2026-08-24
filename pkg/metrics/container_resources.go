@@ -19,11 +19,24 @@ type containerResource struct {
 	Source    string
 }
 
+func promPodLabelSelectors(podRe, excludePodRe string) string {
+	if excludePodRe == "" {
+		return fmt.Sprintf(`pod=~%q`, podRe)
+	}
+	return fmt.Sprintf(`pod=~%q,pod!~%q`, podRe, excludePodRe)
+}
+
 // queryContainerResourceCPU returns live CPU for a named container: cAdvisor → Metrics API → kube requests.
 func (c *MetricsCollector) queryContainerResourceCPU(ctx context.Context, ns, podRe, container string) containerResource {
+	return c.queryContainerResourceCPUExcluding(ctx, ns, podRe, "", container)
+}
+
+// queryContainerResourceCPUExcluding is like queryContainerResourceCPU but omits pods matching excludePodRe.
+func (c *MetricsCollector) queryContainerResourceCPUExcluding(ctx context.Context, ns, podRe, excludePodRe, container string) containerResource {
+	podSel := promPodLabelSelectors(podRe, excludePodRe)
 	primary := fmt.Sprintf(
-		`sum(rate(container_cpu_usage_seconds_total{namespace=%q,pod=~%q,container="%s"}%s))`,
-		ns, podRe, container, promRateRange(),
+		`sum(rate(container_cpu_usage_seconds_total{namespace=%q,%s,container="%s"}%s))`,
+		ns, podSel, container, promRateRange(),
 	)
 	val, present, err := c.queryScalar(ctx, primary)
 	if err == nil && present {
@@ -33,7 +46,7 @@ func (c *MetricsCollector) queryContainerResourceCPU(ctx context.Context, ns, po
 		return containerResource{Usage: val, Estimated: false, Source: ResourceSourceCadvisor}
 	}
 
-	if cpu, ok := c.queryMetricsAPIContainerCPU(ctx, ns, podRe, container); ok {
+	if cpu, ok := c.queryMetricsAPIContainerCPUExcluding(ctx, ns, podRe, excludePodRe, container); ok {
 		if c.debugMetrics {
 			c.debugCompare(container, "cpu", cpu, 0, ResourceSourceMetricsAPI, "")
 		}
@@ -41,8 +54,8 @@ func (c *MetricsCollector) queryContainerResourceCPU(ctx context.Context, ns, po
 	}
 
 	fallback := fmt.Sprintf(
-		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~%q,container="%s",resource="cpu"})`,
-		ns, podRe, container,
+		`sum(kube_pod_container_resource_requests{namespace=%q,%s,container="%s",resource="cpu"})`,
+		ns, podSel, container,
 	)
 	fb, fbPresent, _ := c.queryScalar(ctx, fallback)
 	if fbPresent && fb > 0 {
@@ -56,9 +69,15 @@ func (c *MetricsCollector) queryContainerResourceCPU(ctx context.Context, ns, po
 
 // queryContainerResourceMemory returns live memory bytes for a named container: cAdvisor → Metrics API → kube requests.
 func (c *MetricsCollector) queryContainerResourceMemory(ctx context.Context, ns, podRe, container string) containerResource {
+	return c.queryContainerResourceMemoryExcluding(ctx, ns, podRe, "", container)
+}
+
+// queryContainerResourceMemoryExcluding is like queryContainerResourceMemory but omits pods matching excludePodRe.
+func (c *MetricsCollector) queryContainerResourceMemoryExcluding(ctx context.Context, ns, podRe, excludePodRe, container string) containerResource {
+	podSel := promPodLabelSelectors(podRe, excludePodRe)
 	primary := fmt.Sprintf(
-		`sum(container_memory_working_set_bytes{namespace=%q,pod=~%q,container="%s"})`,
-		ns, podRe, container,
+		`sum(container_memory_working_set_bytes{namespace=%q,%s,container="%s"})`,
+		ns, podSel, container,
 	)
 	val, present, err := c.queryScalar(ctx, primary)
 	if err == nil && present {
@@ -68,7 +87,7 @@ func (c *MetricsCollector) queryContainerResourceMemory(ctx context.Context, ns,
 		return containerResource{Usage: val, Estimated: false, Source: ResourceSourceCadvisor}
 	}
 
-	if mem, ok := c.queryMetricsAPIContainerMemory(ctx, ns, podRe, container); ok {
+	if mem, ok := c.queryMetricsAPIContainerMemoryExcluding(ctx, ns, podRe, excludePodRe, container); ok {
 		if c.debugMetrics {
 			c.debugCompare(container, "mem", float64(mem), 0, ResourceSourceMetricsAPI, "")
 		}
@@ -76,8 +95,8 @@ func (c *MetricsCollector) queryContainerResourceMemory(ctx context.Context, ns,
 	}
 
 	fallback := fmt.Sprintf(
-		`sum(kube_pod_container_resource_requests{namespace=%q,pod=~%q,container="%s",resource="memory"})`,
-		ns, podRe, container,
+		`sum(kube_pod_container_resource_requests{namespace=%q,%s,container="%s",resource="memory"})`,
+		ns, podSel, container,
 	)
 	fb, fbPresent, _ := c.queryScalar(ctx, fallback)
 	if fbPresent && fb > 0 {
@@ -93,11 +112,36 @@ func compilePodRE(podRe string) (*regexp.Regexp, error) {
 	return regexp.Compile("^" + podRe + "$")
 }
 
-func (c *MetricsCollector) sumMetricsAPIContainer(ctx context.Context, ns, podRe, container string) (cpuCores float64, memBytes int64, ok bool) {
+func compilePodREWithExclude(podRe, excludePodRe string) (include *regexp.Regexp, exclude *regexp.Regexp, err error) {
+	include, err = compilePodRE(podRe)
+	if err != nil {
+		return nil, nil, err
+	}
+	if excludePodRe == "" {
+		return include, nil, nil
+	}
+	exclude, err = compilePodRE(excludePodRe)
+	if err != nil {
+		return nil, nil, err
+	}
+	return include, exclude, nil
+}
+
+func podMatchesSelectors(name string, include, exclude *regexp.Regexp) bool {
+	if include != nil && !include.MatchString(name) {
+		return false
+	}
+	if exclude != nil && exclude.MatchString(name) {
+		return false
+	}
+	return true
+}
+
+func (c *MetricsCollector) sumMetricsAPIContainerExcluding(ctx context.Context, ns, podRe, excludePodRe, container string) (cpuCores float64, memBytes int64, ok bool) {
 	if c == nil || c.metricsClient == nil {
 		return 0, 0, false
 	}
-	re, err := compilePodRE(podRe)
+	include, exclude, err := compilePodREWithExclude(podRe, excludePodRe)
 	if err != nil {
 		return 0, 0, false
 	}
@@ -108,7 +152,7 @@ func (c *MetricsCollector) sumMetricsAPIContainer(ctx context.Context, ns, podRe
 	var cpuMilli int64
 	found := false
 	for _, pm := range list.Items {
-		if !re.MatchString(pm.Name) {
+		if !podMatchesSelectors(pm.Name, include, exclude) {
 			continue
 		}
 		for _, cont := range pm.Containers {
@@ -126,13 +170,27 @@ func (c *MetricsCollector) sumMetricsAPIContainer(ctx context.Context, ns, podRe
 	return float64(cpuMilli) / 1000.0, memBytes, true
 }
 
+func (c *MetricsCollector) sumMetricsAPIContainer(ctx context.Context, ns, podRe, container string) (cpuCores float64, memBytes int64, ok bool) {
+	return c.sumMetricsAPIContainerExcluding(ctx, ns, podRe, "", container)
+}
+
 func (c *MetricsCollector) queryMetricsAPIContainerCPU(ctx context.Context, ns, podRe, container string) (float64, bool) {
 	cpu, _, ok := c.sumMetricsAPIContainer(ctx, ns, podRe, container)
 	return cpu, ok
 }
 
+func (c *MetricsCollector) queryMetricsAPIContainerCPUExcluding(ctx context.Context, ns, podRe, excludePodRe, container string) (float64, bool) {
+	cpu, _, ok := c.sumMetricsAPIContainerExcluding(ctx, ns, podRe, excludePodRe, container)
+	return cpu, ok
+}
+
 func (c *MetricsCollector) queryMetricsAPIContainerMemory(ctx context.Context, ns, podRe, container string) (int64, bool) {
 	_, mem, ok := c.sumMetricsAPIContainer(ctx, ns, podRe, container)
+	return mem, ok
+}
+
+func (c *MetricsCollector) queryMetricsAPIContainerMemoryExcluding(ctx context.Context, ns, podRe, excludePodRe, container string) (int64, bool) {
+	_, mem, ok := c.sumMetricsAPIContainerExcluding(ctx, ns, podRe, excludePodRe, container)
 	return mem, ok
 }
 

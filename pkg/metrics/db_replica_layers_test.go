@@ -56,6 +56,153 @@ func TestPostgresReplicaLagFallbackByPodQuery(t *testing.T) {
 	}
 }
 
+func TestPostgresXactRateByPodQuery(t *testing.T) {
+	t.Parallel()
+	q := postgresXactRateByPodQuery("ns-xact")
+	for _, want := range []string{
+		`namespace="ns-xact"`,
+		`sum by (pod)`,
+		`pg_stat_database_xact_commit`,
+		`pg_stat_database_xact_rollback`,
+		`datname!=""`,
+	} {
+		if !strings.Contains(q, want) {
+			t.Fatalf("missing %q in query: %s", want, q)
+		}
+	}
+}
+
+func TestMapPostgresLayerRequestRates(t *testing.T) {
+	t.Parallel()
+	got := mapPostgresLayerRequestRates(map[string]float64{
+		"postgres-abc":           12,
+		"postgres-replica-roll":  3,
+		"postgres-replica-other": 1,
+	})
+	if got[dbLayerIDPostgresPrimary] != 12 {
+		t.Fatalf("primary rate: got %v, want 12", got[dbLayerIDPostgresPrimary])
+	}
+	if got["postgres-replica-roll"] != 3 || got["postgres-replica-other"] != 1 {
+		t.Fatalf("replica rates: %+v", got)
+	}
+}
+
+func TestCollectDBReplicaLayers_primaryResourceQueriesExcludeReplicas(t *testing.T) {
+	t.Parallel()
+	ns := "cloud9-primary-only-ns"
+	replicaPod := "postgres-replica-only"
+	desired := int32(1)
+
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      dbReplicaDeploymentName,
+			Namespace: ns,
+			Labels:    map[string]string{"app": dbReplicaAppLabel},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &desired,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": dbReplicaAppLabel}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": dbReplicaAppLabel, "deployment": ns}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "postgres", Image: "postgres:16"}}},
+			},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      replicaPod,
+			Namespace: ns,
+			Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+		},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+		},
+	}
+	clientset := fake.NewSimpleClientset(deployment, pod)
+
+	var primaryCPUQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "container_cpu_usage_seconds_total") && strings.Contains(q, `pod=~"postgres.*"`):
+			primaryCPUQuery = q
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.25"))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
+	_ = c.collectDBReplicaLayers(context.Background(), ns)
+	if primaryCPUQuery == "" {
+		t.Fatal("expected primary CPU PromQL query")
+	}
+	if !strings.Contains(primaryCPUQuery, `pod!~"postgres-replica.*"`) {
+		t.Fatalf("primary CPU query should exclude replica pods: %s", primaryCPUQuery)
+	}
+}
+
+func TestCollectDBReplicaLayers_layerRequestRates(t *testing.T) {
+	t.Parallel()
+	ns := "cloud9-layer-rps-ns"
+	replicaPod := "postgres-replica-rps"
+	primaryPod := "postgres-primary"
+	desired := int32(1)
+
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      dbReplicaDeploymentName,
+			Namespace: ns,
+			Labels:    map[string]string{"app": dbReplicaAppLabel},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &desired,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": dbReplicaAppLabel}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": dbReplicaAppLabel, "deployment": ns}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "postgres", Image: "postgres:16"}}},
+			},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      replicaPod,
+			Namespace: ns,
+			Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+		},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+		},
+	}
+	clientset := fake.NewSimpleClientset(deployment, pod)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "pg_stat_database_xact_commit"):
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				primaryPod: "20",
+				replicaPod: "4",
+			}))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
+	split := c.collectDBReplicaLayers(context.Background(), ns)
+	if split.primary.RequestRate != 20 {
+		t.Fatalf("primary requestRate: got %v, want 20", split.primary.RequestRate)
+	}
+	if len(split.replicas) != 1 || split.replicas[0].RequestRate != 4 {
+		t.Fatalf("replica requestRate: %+v", split.replicas)
+	}
+}
+
 func TestApplyDBReplicaLayers_noReplicas(t *testing.T) {
 	t.Parallel()
 	cm := ComponentMetrics{Component: "db", StorageRole: StorageRolePrimary}

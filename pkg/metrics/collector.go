@@ -394,17 +394,27 @@ func (c *MetricsCollector) queryMemPair(ctx context.Context, ns, podRe, mainCont
 }
 
 func (c *MetricsCollector) kubeLimitCPU(ctx context.Context, ns, podRe, container string) float64 {
+	return c.kubeLimitCPUExcluding(ctx, ns, podRe, "", container)
+}
+
+func (c *MetricsCollector) kubeLimitCPUExcluding(ctx context.Context, ns, podRe, excludePodRe, container string) float64 {
+	podSel := promPodLabelSelectors(podRe, excludePodRe)
 	v, _ := c.query(ctx, fmt.Sprintf(
-		`sum(kube_pod_container_resource_limits{namespace=%q,pod=~%q,container="%s",resource="cpu"})`,
-		ns, podRe, container,
+		`sum(kube_pod_container_resource_limits{namespace=%q,%s,container="%s",resource="cpu"})`,
+		ns, podSel, container,
 	))
 	return v
 }
 
 func (c *MetricsCollector) kubeLimitMem(ctx context.Context, ns, podRe, container string) int64 {
+	return c.kubeLimitMemExcluding(ctx, ns, podRe, "", container)
+}
+
+func (c *MetricsCollector) kubeLimitMemExcluding(ctx context.Context, ns, podRe, excludePodRe, container string) int64 {
+	podSel := promPodLabelSelectors(podRe, excludePodRe)
 	v, _ := c.query(ctx, fmt.Sprintf(
-		`sum(kube_pod_container_resource_limits{namespace=%q,pod=~%q,container="%s",resource="memory"})`,
-		ns, podRe, container,
+		`sum(kube_pod_container_resource_limits{namespace=%q,%s,container="%s",resource="memory"})`,
+		ns, podSel, container,
 	))
 	return int64(v)
 }
