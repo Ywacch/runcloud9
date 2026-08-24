@@ -12,6 +12,8 @@ import (
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/introspect"
 	"github.com/ywacch/cloud9/pkg/templates"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 func (h *Handler) handleIntrospect(w http.ResponseWriter, r *http.Request) {
@@ -71,7 +73,9 @@ func (h *Handler) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	host, err := resolveIntrospectHost(introSpec.Engine, component, namespace, target, row.Design)
+	layerID := strings.TrimSpace(r.URL.Query().Get("layerId"))
+
+	host, err := resolveIntrospectHost(r.Context(), introSpec.Engine, component, namespace, target, layerID, row.Design, h.clientset)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -104,8 +108,8 @@ func parseIntrospectTarget(raw string) (string, error) {
 	}
 }
 
-// resolveIntrospectHost maps engine + component to an in-cluster DNS host.
-func resolveIntrospectHost(engine, component, namespace, target string, design map[string]any) (string, error) {
+// resolveIntrospectHost maps engine + component to an in-cluster DNS host or pod IP.
+func resolveIntrospectHost(ctx context.Context, engine, component, namespace, target, layerID string, design map[string]any, clientset kubernetes.Interface) (string, error) {
 	if target == "replica" {
 		switch engine {
 		case "redis", "rabbitmq":
@@ -117,10 +121,16 @@ func resolveIntrospectHost(engine, component, namespace, target string, design m
 			if !designHasReadReplicas(design) {
 				return "", fmt.Errorf("deployment has no read replicas configured")
 			}
+			if layerID != "" {
+				return resolvePostgresReplicaPodHost(ctx, clientset, namespace, layerID)
+			}
 			return fmt.Sprintf("%s.%s.svc.cluster.local", deployer.DBReplicaServiceName, namespace), nil
 		default:
 			return "", fmt.Errorf("unsupported engine")
 		}
+	}
+	if layerID != "" {
+		return "", fmt.Errorf("layerId applies only to replica introspection target")
 	}
 
 	switch engine {
@@ -169,6 +179,23 @@ func designHasReadReplicas(design map[string]any) bool {
 		}
 	}
 	return false
+}
+
+func resolvePostgresReplicaPodHost(ctx context.Context, clientset kubernetes.Interface, namespace, layerID string) (string, error) {
+	if clientset == nil {
+		return "", fmt.Errorf("kubernetes client unavailable for replica pod %q", layerID)
+	}
+	pod, err := clientset.CoreV1().Pods(namespace).Get(ctx, layerID, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("replica pod %q: %w", layerID, err)
+	}
+	if pod.Labels["app"] != "postgres-replica" {
+		return "", fmt.Errorf("layerId %q is not a read replica pod", layerID)
+	}
+	if pod.Status.PodIP == "" {
+		return "", fmt.Errorf("replica pod %q has no pod IP yet", layerID)
+	}
+	return pod.Status.PodIP, nil
 }
 
 func introspectAction(path, namespace, component string) string {
