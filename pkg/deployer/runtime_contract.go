@@ -12,6 +12,10 @@ const (
 	// Workers share the same horizontal scale ceiling as app-servers.
 	minWorkerReplicas = minAppServerReplicas
 	maxWorkerReplicas = maxAppServerReplicas
+
+	// WarningCodeReadConsistencyClamped is emitted when monotonic policies require
+	// at least two read replicas but the design has fewer; deploy clamps to ryw.
+	WarningCodeReadConsistencyClamped = "read_consistency_clamped"
 )
 
 // ValidateRuntimeContract checks deploy-time runtime preconditions before orchestration starts.
@@ -23,6 +27,7 @@ func ValidateRuntimeContract(design DeploymentDesign, tmpl *templates.TemplateSp
 		validateAppServerReplicas,
 		validateWorkerReplicas,
 		validateDBReadReplicas,
+		validateDBReadConsistency,
 		validateProxyQueries,
 		validateAppServerEnv,
 		validateWorkerEnv,
@@ -95,6 +100,45 @@ func validateDBReadReplicas(design DeploymentDesign, _ *templates.TemplateSpec) 
 		}
 	}
 	return nil
+}
+
+func validateDBReadConsistency(design DeploymentDesign, _ *templates.TemplateSpec) error {
+	for _, node := range design.Nodes {
+		if node.Type != "db" {
+			continue
+		}
+		if _, err := readConsistencyFromConfig(node.Config); err != nil {
+			return fmt.Errorf("database %q: %w", node.Name, err)
+		}
+	}
+	return nil
+}
+
+// RuntimeContractWarnings returns non-blocking notices for deploy-time bounds adjustments.
+func RuntimeContractWarnings(design DeploymentDesign) []TopologyWarning {
+	var warnings []TopologyWarning
+	for _, node := range design.Nodes {
+		if node.Type != "db" {
+			continue
+		}
+		policy, err := readConsistencyFromConfig(node.Config)
+		if err != nil {
+			continue
+		}
+		readReplicas := parseReadReplicaCount(node.Config)
+		if readReplicas >= 2 || !requiresMultiReplicaReadConsistency(policy) {
+			continue
+		}
+		warnings = append(warnings, TopologyWarning{
+			Code: WarningCodeReadConsistencyClamped,
+			Message: fmt.Sprintf(
+				"Database %q readConsistency %q requires at least two read replicas; deploying with ryw instead",
+				node.Name, policy,
+			),
+			NodeIDs: []string{node.ID},
+		})
+	}
+	return warnings
 }
 
 func validateLBAlgorithm(design DeploymentDesign, _ *templates.TemplateSpec) error {

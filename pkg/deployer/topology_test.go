@@ -1080,3 +1080,180 @@ func TestDeriveEnvVars_DBReplicationMode(t *testing.T) {
 		})
 	}
 }
+
+func TestDeriveEnvVars_ReadConsistencyEnvInjection(t *testing.T) {
+	t.Parallel()
+
+	dbConfig := func(readReplicas int, readConsistency string) map[string]any {
+		cfg := map[string]any{"readReplicas": readReplicas}
+		if readConsistency != "" {
+			cfg["readConsistency"] = readConsistency
+		}
+		return cfg
+	}
+
+	tests := []struct {
+		name       string
+		design     DeploymentDesign
+		nodeID     string
+		wantHost   string
+		wantPort   string
+		wantPolicy string
+	}{
+		{
+			name: "app-server injects replica policy",
+			design: DeploymentDesign{
+				Nodes: []DeploymentNode{
+					{ID: "app", Type: "app-server", Name: "App"},
+					{ID: "db", Type: "db", Name: "PostgreSQL", Config: dbConfig(1, "replica")},
+				},
+				Connections: []DeploymentConn{{SourceID: "app", TargetID: "db"}},
+			},
+			nodeID:     "app",
+			wantHost:   DBReplicaServiceName,
+			wantPort:   "5432",
+			wantPolicy: "replica",
+		},
+		{
+			name: "leader-only omits read replica env",
+			design: DeploymentDesign{
+				Nodes: []DeploymentNode{
+					{ID: "app", Type: "app-server", Name: "App"},
+					{ID: "db", Type: "db", Name: "PostgreSQL", Config: dbConfig(1, "leader-only")},
+				},
+				Connections: []DeploymentConn{{SourceID: "app", TargetID: "db"}},
+			},
+			nodeID: "app",
+		},
+		{
+			name: "zero read replicas omits read replica env",
+			design: DeploymentDesign{
+				Nodes: []DeploymentNode{
+					{ID: "app", Type: "app-server", Name: "App"},
+					{ID: "db", Type: "db", Name: "PostgreSQL", Config: dbConfig(0, "replica")},
+				},
+				Connections: []DeploymentConn{{SourceID: "app", TargetID: "db"}},
+			},
+			nodeID: "app",
+		},
+		{
+			name: "monotonic with one replica clamps to ryw in env",
+			design: DeploymentDesign{
+				Nodes: []DeploymentNode{
+					{ID: "app", Type: "app-server", Name: "App"},
+					{ID: "db", Type: "db", Name: "PostgreSQL", Config: dbConfig(1, "monotonic")},
+				},
+				Connections: []DeploymentConn{{SourceID: "app", TargetID: "db"}},
+			},
+			nodeID:     "app",
+			wantHost:   DBReplicaServiceName,
+			wantPort:   "5432",
+			wantPolicy: "ryw",
+		},
+		{
+			name: "monotonic with two replicas keeps policy",
+			design: DeploymentDesign{
+				Nodes: []DeploymentNode{
+					{ID: "app", Type: "app-server", Name: "App"},
+					{ID: "db", Type: "db", Name: "PostgreSQL", Config: dbConfig(2, "monotonic")},
+				},
+				Connections: []DeploymentConn{{SourceID: "app", TargetID: "db"}},
+			},
+			nodeID:     "app",
+			wantHost:   DBReplicaServiceName,
+			wantPort:   "5432",
+			wantPolicy: "monotonic",
+		},
+		{
+			name: "proxy cache injects read replica env",
+			design: DeploymentDesign{
+				Nodes: []DeploymentNode{
+					{ID: "app", Type: "app-server", Name: "App"},
+					{
+						ID:   "cache",
+						Type: "cache",
+						Name: "Redis",
+						Config: map[string]any{
+							"strategy": "write-through",
+						},
+					},
+					{ID: "db", Type: "db", Name: "PostgreSQL", Config: dbConfig(1, "ryw")},
+				},
+				Connections: []DeploymentConn{
+					{SourceID: "app", TargetID: "cache"},
+					{SourceID: "cache", TargetID: "db"},
+				},
+			},
+			nodeID:     "cache",
+			wantHost:   DBReplicaServiceName,
+			wantPort:   "5432",
+			wantPolicy: "ryw",
+		},
+		{
+			name: "proxy app-server omits read replica env",
+			design: DeploymentDesign{
+				Nodes: []DeploymentNode{
+					{ID: "app", Type: "app-server", Name: "App"},
+					{
+						ID:   "cache",
+						Type: "cache",
+						Name: "Redis",
+						Config: map[string]any{
+							"strategy": "write-through",
+						},
+					},
+					{ID: "db", Type: "db", Name: "PostgreSQL", Config: dbConfig(1, "ryw")},
+				},
+				Connections: []DeploymentConn{
+					{SourceID: "app", TargetID: "cache"},
+					{SourceID: "cache", TargetID: "db"},
+				},
+			},
+			nodeID: "app",
+		},
+		{
+			name: "worker omits read replica env",
+			design: DeploymentDesign{
+				Nodes: []DeploymentNode{
+					{ID: "worker", Type: "worker", Name: "Worker"},
+					{ID: "db", Type: "db", Name: "PostgreSQL", Config: dbConfig(1, "replica")},
+				},
+				Connections: []DeploymentConn{{SourceID: "worker", TargetID: "db"}},
+			},
+			nodeID: "worker",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			node := nodeByID(tc.design, tc.nodeID)
+			if node == nil {
+				t.Fatalf("node %q not found", tc.nodeID)
+			}
+			env := DeriveEnvVars(*node, tc.design)
+			if tc.wantHost == "" {
+				if _, ok := env["READ_REPLICA_HOST"]; ok {
+					t.Fatalf("expected READ_REPLICA_HOST absent, got %q", env["READ_REPLICA_HOST"])
+				}
+				if _, ok := env["READ_REPLICA_PORT"]; ok {
+					t.Fatalf("expected READ_REPLICA_PORT absent, got %q", env["READ_REPLICA_PORT"])
+				}
+				if _, ok := env["READ_CONSISTENCY"]; ok {
+					t.Fatalf("expected READ_CONSISTENCY absent, got %q", env["READ_CONSISTENCY"])
+				}
+				return
+			}
+			if env["READ_REPLICA_HOST"] != tc.wantHost {
+				t.Fatalf("READ_REPLICA_HOST: got %q want %q", env["READ_REPLICA_HOST"], tc.wantHost)
+			}
+			if env["READ_REPLICA_PORT"] != tc.wantPort {
+				t.Fatalf("READ_REPLICA_PORT: got %q want %q", env["READ_REPLICA_PORT"], tc.wantPort)
+			}
+			if env["READ_CONSISTENCY"] != tc.wantPolicy {
+				t.Fatalf("READ_CONSISTENCY: got %q want %q", env["READ_CONSISTENCY"], tc.wantPolicy)
+			}
+		})
+	}
+}

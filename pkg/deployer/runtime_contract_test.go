@@ -303,6 +303,37 @@ func TestValidateRuntimeContract_Table(t *testing.T) {
 			},
 			wantErr: "primary must stay a singleton",
 		},
+		{
+			name:       "invalid readConsistency rejected",
+			templateID: "url-shortener",
+			design: DeploymentDesign{
+				Template: "url-shortener",
+				Nodes: []DeploymentNode{
+					{ID: "app1", Type: "app-server", Name: "App"},
+					{ID: "db1", Type: "db", Name: "PostgreSQL", Config: map[string]interface{}{
+						"readReplicas":    1,
+						"readConsistency": "quorum",
+					}},
+				},
+				Connections: []DeploymentConn{{SourceID: "app1", TargetID: "db1"}},
+			},
+			wantErr: "readConsistency must be one of",
+		},
+		{
+			name:       "monotonic with one read replica passes validation",
+			templateID: "url-shortener",
+			design: DeploymentDesign{
+				Template: "url-shortener",
+				Nodes: []DeploymentNode{
+					{ID: "app1", Type: "app-server", Name: "App"},
+					{ID: "db1", Type: "db", Name: "PostgreSQL", Config: map[string]interface{}{
+						"readReplicas":    1,
+						"readConsistency": "monotonic",
+					}},
+				},
+				Connections: []DeploymentConn{{SourceID: "app1", TargetID: "db1"}},
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -324,6 +355,86 @@ func TestValidateRuntimeContract_Table(t *testing.T) {
 				if !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("expected error to contain %q, got %q", tc.wantErr, err.Error())
 				}
+			}
+		})
+	}
+}
+
+func TestRuntimeContractWarnings_ReadConsistencyClamped(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		design   DeploymentDesign
+		wantWarn bool
+		wantCode string
+	}{
+		{
+			name: "monotonic with one replica warns",
+			design: DeploymentDesign{
+				Nodes: []DeploymentNode{
+					{ID: "db1", Type: "db", Name: "PostgreSQL", Config: map[string]interface{}{
+						"readReplicas":    1,
+						"readConsistency": "monotonic",
+					}},
+				},
+			},
+			wantWarn: true,
+			wantCode: WarningCodeReadConsistencyClamped,
+		},
+		{
+			name: "ryw+monotonic with one replica warns",
+			design: DeploymentDesign{
+				Nodes: []DeploymentNode{
+					{ID: "db1", Type: "db", Name: "PostgreSQL", Config: map[string]interface{}{
+						"readReplicas":    1,
+						"readConsistency": "ryw+monotonic",
+					}},
+				},
+			},
+			wantWarn: true,
+			wantCode: WarningCodeReadConsistencyClamped,
+		},
+		{
+			name: "monotonic with two replicas silent",
+			design: DeploymentDesign{
+				Nodes: []DeploymentNode{
+					{ID: "db1", Type: "db", Name: "PostgreSQL", Config: map[string]interface{}{
+						"readReplicas":    2,
+						"readConsistency": "monotonic",
+					}},
+				},
+			},
+		},
+		{
+			name: "replica with one replica silent",
+			design: DeploymentDesign{
+				Nodes: []DeploymentNode{
+					{ID: "db1", Type: "db", Name: "PostgreSQL", Config: map[string]interface{}{
+						"readReplicas":    1,
+						"readConsistency": "replica",
+					}},
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := RuntimeContractWarnings(tc.design)
+			if !tc.wantWarn {
+				if len(got) != 0 {
+					t.Fatalf("warnings: want none, got %+v", got)
+				}
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("warnings: want 1, got %d (%+v)", len(got), got)
+			}
+			if got[0].Code != tc.wantCode {
+				t.Fatalf("code: got %q want %q", got[0].Code, tc.wantCode)
 			}
 		})
 	}

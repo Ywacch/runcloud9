@@ -194,3 +194,90 @@ func TestDBEngineSupportsStreamingReplicas(t *testing.T) {
 		})
 	}
 }
+
+func TestParseReadConsistency(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		cfg  map[string]any
+		want string
+	}{
+		{name: "default leader-only", cfg: nil, want: "leader-only"},
+		{name: "explicit replica", cfg: map[string]any{"readConsistency": "replica"}, want: "replica"},
+		{name: "trim and lower", cfg: map[string]any{"readConsistency": " RYW "}, want: "ryw"},
+		{name: "ryw+monotonic", cfg: map[string]any{"readConsistency": "ryw+monotonic"}, want: "ryw+monotonic"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := parseReadConsistency(tc.cfg); got != tc.want {
+				t.Fatalf("parseReadConsistency() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestReadConsistencyFromConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		cfg     map[string]any
+		want    string
+		wantErr bool
+	}{
+		{name: "default leader-only", cfg: nil, want: "leader-only"},
+		{name: "monotonic valid", cfg: map[string]any{"readConsistency": "monotonic"}, want: "monotonic"},
+		{name: "unknown rejected", cfg: map[string]any{"readConsistency": "quorum"}, wantErr: true},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := readConsistencyFromConfig(tc.cfg)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEffectiveReadConsistency(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		cfg          map[string]any
+		readReplicas int32
+		want         string
+	}{
+		{name: "leader-only unchanged", cfg: map[string]any{"readConsistency": "leader-only"}, readReplicas: 1, want: "leader-only"},
+		{name: "replica with one standby", cfg: map[string]any{"readConsistency": "replica"}, readReplicas: 1, want: "replica"},
+		{name: "monotonic clamps with one standby", cfg: map[string]any{"readConsistency": "monotonic"}, readReplicas: 1, want: "ryw"},
+		{name: "ryw+monotonic clamps with one standby", cfg: map[string]any{"readConsistency": "ryw+monotonic"}, readReplicas: 1, want: "ryw"},
+		{name: "monotonic allowed with two standbys", cfg: map[string]any{"readConsistency": "monotonic"}, readReplicas: 2, want: "monotonic"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := effectiveReadConsistency(tc.cfg, tc.readReplicas); got != tc.want {
+				t.Fatalf("effectiveReadConsistency() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

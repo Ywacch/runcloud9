@@ -544,6 +544,82 @@ func TestHandleCreateDeployment_TemplateCapabilityWarnings(t *testing.T) {
 	}
 }
 
+func TestHandleCreateDeployment_ReadConsistencyClampedWarning(t *testing.T) {
+	t.Setenv("ENV", "development")
+	t.Setenv("SUPABASE_JWT_SECRET", "")
+	t.Setenv("SUPABASE_URL", "")
+
+	future := time.Now().Add(24 * time.Hour)
+	s := newFakeDeploymentStore()
+	s.users = map[string]store.UserRecord{
+		"dev-user": {IsPremium: true, PremiumExpiresAt: &future},
+	}
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "standard",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app", Type: "app-server", Name: "app", Config: map[string]interface{}{}},
+			{
+				ID:   "db",
+				Type: "db",
+				Name: "db",
+				Config: map[string]interface{}{
+					"readReplicas":    1,
+					"readConsistency": "monotonic",
+					"replicationMode": "async",
+				},
+			},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app", TargetID: "db"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status: want 201, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var out struct {
+		Assessment struct {
+			Verdict  string `json:"verdict"`
+			Warnings []struct {
+				Code    string   `json:"code"`
+				Message string   `json:"message"`
+				NodeIDs []string `json:"nodeIds"`
+			} `json:"warnings"`
+		} `json:"assessment"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Assessment.Verdict != deployer.VerdictFull {
+		t.Fatalf("verdict: got %q", out.Assessment.Verdict)
+	}
+	var found bool
+	for _, w := range out.Assessment.Warnings {
+		if w.Code == deployer.WarningCodeReadConsistencyClamped {
+			found = true
+			if len(w.NodeIDs) != 1 || w.NodeIDs[0] != "db" {
+				t.Fatalf("nodeIds: got %v", w.NodeIDs)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected read_consistency_clamped warning, got %+v", out.Assessment.Warnings)
+	}
+}
+
 func TestHandleCreateDeployment_ConcurrentLimit_RejectsSecondActive(t *testing.T) {
 	t.Setenv("ENV", "development")
 	t.Setenv("SUPABASE_JWT_SECRET", "")
