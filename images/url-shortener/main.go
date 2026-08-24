@@ -22,22 +22,26 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
+	"github.com/ywacch/cloud9/pkg/templateapp/readrouter"
 )
 
 type Config struct {
-	DBHost        string
-	DBPort        string
-	DBName        string
-	DBUser        string
-	DBPassword    string
-	CacheHost     string
-	CachePort     string
-	CacheStrategy string
-	CacheMode     string
-	ProxyPort     string
-	CacheTTL      time.Duration
-	Stampede      bool
-	Port          string
+	DBHost          string
+	DBPort          string
+	DBName          string
+	DBUser          string
+	DBPassword      string
+	ReadReplicaHost string
+	ReadReplicaPort string
+	ReadConsistency readrouter.RoutingPolicy
+	CacheHost       string
+	CachePort       string
+	CacheStrategy   string
+	CacheMode       string
+	ProxyPort       string
+	CacheTTL        time.Duration
+	Stampede        bool
+	Port            string
 }
 
 type Server struct {
@@ -79,19 +83,37 @@ func loadConfig() Config {
 	}
 
 	return Config{
-		DBHost:        dbHost,
-		DBPort:        envOrDefault("DB_PORT", "5432"),
-		DBName:        envOrDefault("DB_NAME", "syscrack"),
-		DBUser:        envOrDefault("DB_USER", "syscrack"),
-		DBPassword:    envOrDefault("DB_PASSWORD", "syscrack"),
-		CacheHost:     os.Getenv("CACHE_HOST"),
-		CachePort:     envOrDefault("CACHE_PORT", "6379"),
-		CacheStrategy: strategy,
-		CacheMode:     cacheMode,
-		ProxyPort:     envOrDefault("CACHE_PROXY_PORT", "8081"),
-		CacheTTL:      time.Duration(ttlSecs) * time.Second,
-		Stampede:      os.Getenv("STAMPEDE_PROTECTION") == "true",
-		Port:          envOrDefault("PORT", "8080"),
+		DBHost:          dbHost,
+		DBPort:          envOrDefault("DB_PORT", "5432"),
+		DBName:          envOrDefault("DB_NAME", "syscrack"),
+		DBUser:          envOrDefault("DB_USER", "syscrack"),
+		DBPassword:      envOrDefault("DB_PASSWORD", "syscrack"),
+		ReadReplicaHost: os.Getenv("READ_REPLICA_HOST"),
+		ReadReplicaPort: envOrDefault("READ_REPLICA_PORT", "5432"),
+		ReadConsistency: readConsistencyFromEnv(os.Getenv("READ_CONSISTENCY")),
+		CacheHost:       os.Getenv("CACHE_HOST"),
+		CachePort:       envOrDefault("CACHE_PORT", "6379"),
+		CacheStrategy:   strategy,
+		CacheMode:       cacheMode,
+		ProxyPort:       envOrDefault("CACHE_PROXY_PORT", "8081"),
+		CacheTTL:        time.Duration(ttlSecs) * time.Second,
+		Stampede:        os.Getenv("STAMPEDE_PROTECTION") == "true",
+		Port:            envOrDefault("PORT", "8080"),
+	}
+}
+
+func readConsistencyFromEnv(raw string) readrouter.RoutingPolicy {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case string(readrouter.PolicyReplica):
+		return readrouter.PolicyReplica
+	case string(readrouter.PolicyRYW):
+		return readrouter.PolicyRYW
+	case string(readrouter.PolicyMonotonic):
+		return readrouter.PolicyMonotonic
+	case string(readrouter.PolicyRYWMonotonic):
+		return readrouter.PolicyRYWMonotonic
+	default:
+		return readrouter.PolicyLeaderOnly
 	}
 }
 
@@ -617,8 +639,35 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 		return nil, err
 	}
 
+	var readPool *pgxpool.Pool
+	var router *readrouter.ReadRouter
+	if cfg.ReadReplicaHost != "" {
+		readConnURL := &url.URL{
+			Scheme: "postgres",
+			Host:   fmt.Sprintf("%s:%s", cfg.ReadReplicaHost, cfg.ReadReplicaPort),
+			Path:   "/" + cfg.DBName,
+			User:   url.UserPassword(cfg.DBUser, cfg.DBPassword),
+		}
+		readPoolCfg, err := pgxpool.ParseConfig(readConnURL.String())
+		if err != nil {
+			pool.Close()
+			return nil, fmt.Errorf("parse read replica pool config: %w", err)
+		}
+		readPoolCfg.MaxConns = poolCfg.MaxConns
+		readPool, err = pgxpool.NewWithConfig(ctx, readPoolCfg)
+		if err != nil {
+			pool.Close()
+			return nil, fmt.Errorf("connect read replica: %w", err)
+		}
+		router = readrouter.NewReadRouter(pool, readPool, readrouter.PostgresEngine{}, cfg.ReadConsistency)
+		slog.Info("read replica routing enabled",
+			"host", cfg.ReadReplicaHost,
+			"policy", cfg.ReadConsistency,
+		)
+	}
+
 	s := &Server{
-		db:  newDB(pool),
+		db:  newDB(pool, readPool, router),
 		cfg: cfg,
 	}
 
@@ -656,6 +705,7 @@ func main() {
 	}
 	if s.db != nil && s.db.pool != nil {
 		defer s.db.pool.Close()
+		defer s.db.Close()
 	}
 
 	srv := &http.Server{
