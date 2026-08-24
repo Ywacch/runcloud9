@@ -9,6 +9,12 @@ import (
 const (
 	minReadReplicas = 0
 	maxReadReplicas = 2
+
+	readConsistencyLeaderOnly   = "leader-only"
+	readConsistencyReplica      = "replica"
+	readConsistencyRYW          = "ryw"
+	readConsistencyMonotonic    = "monotonic"
+	readConsistencyRYWMonotonic = "ryw+monotonic"
 )
 
 // parseReplicaCount reads config.replicas, returning defaultVal when unset or invalid.
@@ -47,6 +53,60 @@ func parseReadReplicaCount(config map[string]any) int32 {
 		return 0
 	}
 	return int32(n)
+}
+
+// ParseReadConsistency reads config.readConsistency, defaulting to leader-only when unset.
+func ParseReadConsistency(config map[string]any) string {
+	return parseReadConsistency(config)
+}
+
+// parseReadConsistency reads config.readConsistency, defaulting to leader-only when unset.
+func parseReadConsistency(config map[string]any) string {
+	raw := strings.TrimSpace(strings.ToLower(configString(config, "readConsistency", readConsistencyLeaderOnly)))
+	if raw == "" {
+		return readConsistencyLeaderOnly
+	}
+	return raw
+}
+
+func readConsistencyEnumList() string {
+	return "leader-only, replica, ryw, monotonic, ryw+monotonic"
+}
+
+func isValidReadConsistency(policy string) bool {
+	switch policy {
+	case readConsistencyLeaderOnly, readConsistencyReplica, readConsistencyRYW,
+		readConsistencyMonotonic, readConsistencyRYWMonotonic:
+		return true
+	default:
+		return false
+	}
+}
+
+// readConsistencyFromConfig parses config.readConsistency and validates the enum.
+func readConsistencyFromConfig(config map[string]any) (string, error) {
+	policy := parseReadConsistency(config)
+	if !isValidReadConsistency(policy) {
+		return "", fmt.Errorf("readConsistency must be one of %s (got %q)", readConsistencyEnumList(), policy)
+	}
+	return policy, nil
+}
+
+func requiresMultiReplicaReadConsistency(policy string) bool {
+	return policy == readConsistencyMonotonic || policy == readConsistencyRYWMonotonic
+}
+
+// effectiveReadConsistency returns the deploy-time policy after bounds checks.
+// monotonic and ryw+monotonic clamp to ryw when readReplicas < 2.
+func effectiveReadConsistency(config map[string]any, readReplicas int32) string {
+	policy, err := readConsistencyFromConfig(config)
+	if err != nil {
+		return readConsistencyLeaderOnly
+	}
+	if readReplicas < 2 && requiresMultiReplicaReadConsistency(policy) {
+		return readConsistencyRYW
+	}
+	return policy
 }
 
 // readReplicaCountFromConfig parses config.readReplicas and enforces [min, max].

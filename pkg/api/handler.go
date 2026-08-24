@@ -426,7 +426,8 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	capabilityWarnings := deployer.TemplateCapabilityWarnings(design)
+	deployWarnings := deployer.TemplateCapabilityWarnings(design)
+	deployWarnings = append(deployWarnings, deployer.RuntimeContractWarnings(design)...)
 
 	if err := deployer.ValidateResourceBudget(design, resourceQuotaTier); err != nil {
 		var budgetErr *deployer.ResourceBudgetError
@@ -458,7 +459,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		"deploymentId": namespace,
 		"namespace":    namespace,
 		"status":       status,
-		"assessment":   deployer.AssessmentMap(assessment, capabilityWarnings),
+		"assessment":   deployer.AssessmentMap(assessment, deployWarnings),
 	}
 	if status == statusQueued || status == statusProvisioning {
 		h.attachWaitFields(resp, r.Context(), namespace, status)

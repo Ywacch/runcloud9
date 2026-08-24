@@ -492,6 +492,7 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 			env["DB_NAME"] = "syscrack"
 			env["DB_USER"] = "syscrack"
 			env["DB_PASSWORD"] = "syscrack"
+			injectReadReplicaEnv(env, target, node)
 		case "cache":
 			// We only derive cache routing env vars for the app-server.
 			// Cache-aside or proxy strategies determine whether the app-server
@@ -592,6 +593,25 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 	}
 
 	return env
+}
+
+// injectReadReplicaEnv adds READ_REPLICA_* env vars for app-server and proxy cache nodes
+// when the connected db node has read replicas and a non-leader-only consistency policy.
+func injectReadReplicaEnv(env map[string]string, dbNode, consumer DeploymentNode) {
+	if consumer.Type != "app-server" && !(consumer.Type == "cache" && requiresProxy(consumer)) {
+		return
+	}
+	readReplicas := parseReadReplicaCount(dbNode.Config)
+	if readReplicas <= 0 {
+		return
+	}
+	policy := effectiveReadConsistency(dbNode.Config, readReplicas)
+	if policy == readConsistencyLeaderOnly {
+		return
+	}
+	env["READ_REPLICA_HOST"] = DBReplicaServiceName
+	env["READ_REPLICA_PORT"] = "5432"
+	env["READ_CONSISTENCY"] = policy
 }
 
 // cacheRedisStrategyForApp is the label shown in UI for app -> Redis (non-proxy) paths.
