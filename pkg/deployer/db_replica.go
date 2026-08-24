@@ -58,7 +58,28 @@ func dbReplicaResources(base corev1.ResourceRequirements) corev1.ResourceRequire
 	return out
 }
 
-func dbReplicaDeploymentSpec(cfg DeployConfig, resources corev1.ResourceRequirements, replicas int32) *appsv1.Deployment {
+// dbResourcesForSize resolves postgres workload resources for one instance size.
+func dbResourcesForSize(size string) corev1.ResourceRequirements {
+	return ResolveNodeResources("db", map[string]any{
+		"instanceSize":    normalizeInstanceSize(size),
+		"resourceProfile": normalizeInstanceSize(size),
+	})
+}
+
+func dbReplicaDeploymentSpec(
+	cfg DeployConfig,
+	resources corev1.ResourceRequirements,
+	replicas int32,
+) *appsv1.Deployment {
+	return dbReplicaDeploymentSpecNamed(cfg, dbReplicaDeploymentName, resources, replicas)
+}
+
+func dbReplicaDeploymentSpecNamed(
+	cfg DeployConfig,
+	depName string,
+	resources corev1.ResourceRequirements,
+	replicas int32,
+) *appsv1.Deployment {
 	dbSpec := componentRegistry["db"]
 	replicaResources := dbReplicaResources(resources)
 	labels := map[string]string{"app": dbReplicaAppLabel, "deployment": cfg.Namespace}
@@ -124,7 +145,7 @@ func dbReplicaDeploymentSpec(cfg DeployConfig, resources corev1.ResourceRequirem
 
 	sizeLimit := resource.MustParse(dbReplicaEphemeralSize)
 	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: dbReplicaDeploymentName, Namespace: cfg.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: depName, Namespace: cfg.Namespace},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: ptr(replicas),
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
@@ -164,14 +185,31 @@ func dbReplicaServiceSpec(cfg DeployConfig) *corev1.Service {
 	}
 }
 
-func (k *K8sDeployer) deployDBReadReplicas(ctx context.Context, cfg DeployConfig, resources corev1.ResourceRequirements, replicas int32) error {
-	if replicas <= 0 {
+func (k *K8sDeployer) deployDBReadReplicas(ctx context.Context, cfg DeployConfig, readReplicas int32) error {
+	if readReplicas <= 0 {
 		return nil
 	}
 
-	dep := dbReplicaDeploymentSpec(cfg, resources, replicas)
-	if _, err := k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil {
-		return fmt.Errorf("create postgres-replica deployment: %w", err)
+	total := 1 + int(readReplicas)
+	sizes := instanceSizesFromConfig(cfg.Node.Config, total)
+	if len(sizes) < total {
+		return fmt.Errorf("deployDBReadReplicas: expected %d instance sizes, got %d", total, len(sizes))
+	}
+	standbySizes := sizes[1:]
+	groups := sizeGroups(standbySizes)
+
+	var desiredReady int32
+	for i, group := range groups {
+		depName := dbReplicaDeploymentName
+		if i > 0 {
+			depName = dbReplicaDeploymentName + "-" + group.Size
+		}
+		resources := dbResourcesForSize(group.Size)
+		dep := dbReplicaDeploymentSpecNamed(cfg, depName, resources, group.Count)
+		if _, err := k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil {
+			return fmt.Errorf("create postgres-replica deployment %s: %w", depName, err)
+		}
+		desiredReady += group.Count
 	}
 
 	svc := dbReplicaServiceSpec(cfg)
@@ -179,5 +217,5 @@ func (k *K8sDeployer) deployDBReadReplicas(ctx context.Context, cfg DeployConfig
 		return fmt.Errorf("create db-replica service: %w", err)
 	}
 
-	return k.waitForReady(ctx, cfg.Namespace, dbReplicaAppLabel, replicas)
+	return k.waitForReady(ctx, cfg.Namespace, dbReplicaAppLabel, desiredReady)
 }
