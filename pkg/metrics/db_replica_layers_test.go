@@ -144,6 +144,84 @@ func TestCollectDBReplicaLayers_primaryResourceQueriesExcludeReplicas(t *testing
 	}
 }
 
+func TestCollectDBReplicaLayers_replicaResourceQueriesUseReplicaContainer(t *testing.T) {
+	t.Parallel()
+	ns := "cloud9-replica-container-ns"
+	replicaPod := "postgres-replica-metrics"
+	desired := int32(1)
+
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      dbReplicaDeploymentName,
+			Namespace: ns,
+			Labels:    map[string]string{"app": dbReplicaAppLabel},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &desired,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": dbReplicaAppLabel}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": dbReplicaAppLabel, "deployment": ns}},
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{
+					Name:  dbReplicaContainerName,
+					Image: "postgres:16",
+				}}},
+			},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      replicaPod,
+			Namespace: ns,
+			Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+		},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+		},
+	}
+	clientset := fake.NewSimpleClientset(deployment, pod)
+
+	var replicaCPUQuery, replicaMemQuery, replicaCPULimitQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "container_cpu_usage_seconds_total") && strings.Contains(q, replicaPod):
+			replicaCPUQuery = q
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.12"))
+		case strings.Contains(q, "container_memory_working_set_bytes") && strings.Contains(q, replicaPod):
+			replicaMemQuery = q
+			_ = json.NewEncoder(w).Encode(promVectorJSON("67108864"))
+		case strings.Contains(q, "kube_pod_container_resource_limits") && strings.Contains(q, `resource="cpu"`) && strings.Contains(q, replicaPod):
+			replicaCPULimitQuery = q
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.5"))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
+	split := c.collectDBReplicaLayers(context.Background(), ns)
+	if len(split.replicas) != 1 {
+		t.Fatalf("replicas: got %d want 1", len(split.replicas))
+	}
+	if replicaCPUQuery == "" || replicaMemQuery == "" || replicaCPULimitQuery == "" {
+		t.Fatalf("expected replica resource PromQL queries; cpu=%q mem=%q limit=%q", replicaCPUQuery, replicaMemQuery, replicaCPULimitQuery)
+	}
+	wantContainer := `container="` + dbReplicaContainerName + `"`
+	for _, q := range []string{replicaCPUQuery, replicaMemQuery, replicaCPULimitQuery} {
+		if !strings.Contains(q, wantContainer) {
+			t.Fatalf("replica resource query should use %s: %s", wantContainer, q)
+		}
+	}
+	if split.replicas[0].CPUIsEstimated {
+		t.Fatal("replica CPU should be measured, not estimated")
+	}
+	if split.replicas[0].MemIsEstimated {
+		t.Fatal("replica memory should be measured, not estimated")
+	}
+}
+
 func TestCollectDBReplicaLayers_layerRequestRates(t *testing.T) {
 	t.Parallel()
 	ns := "cloud9-layer-rps-ns"
