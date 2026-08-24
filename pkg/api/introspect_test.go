@@ -1,9 +1,14 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/ywacch/cloud9/pkg/introspect"
 )
@@ -52,14 +57,14 @@ func TestIntrospectRejectsUnwhitelistedQueue(t *testing.T) {
 
 func TestResolveIntrospectHost_RabbitMQ(t *testing.T) {
 	t.Parallel()
-	host, err := resolveIntrospectHost("rabbitmq", "mq", "ns1", "primary", nil)
+	host, err := resolveIntrospectHost(context.Background(), "rabbitmq", "mq", "ns1", "primary", "", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
 	if host != "mq.ns1.svc.cluster.local" {
 		t.Fatalf("host=%q", host)
 	}
-	if _, err := resolveIntrospectHost("rabbitmq", "cache", "ns1", "primary", nil); err == nil {
+	if _, err := resolveIntrospectHost(context.Background(), "rabbitmq", "cache", "ns1", "primary", "", nil, nil); err == nil {
 		t.Fatal("expected error for non-mq component")
 	}
 }
@@ -195,7 +200,7 @@ func TestResolveIntrospectHost_TargetReplica(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			host, err := resolveIntrospectHost(tc.engine, tc.component, tc.namespace, tc.target, tc.design)
+			host, err := resolveIntrospectHost(context.Background(), tc.engine, tc.component, tc.namespace, tc.target, "", tc.design, nil)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("expected error")
@@ -209,6 +214,43 @@ func TestResolveIntrospectHost_TargetReplica(t *testing.T) {
 				t.Fatalf("host=%q want %q", host, tc.wantHost)
 			}
 		})
+	}
+}
+
+func TestResolveIntrospectHost_ReplicaLayerID(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	design := map[string]any{
+		"nodes": []any{
+			map[string]any{
+				"id":   "db1",
+				"type": "db",
+				"config": map[string]any{
+					"readReplicas": 1,
+				},
+			},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "postgres-replica-roll",
+			Namespace: "ns-layer",
+			Labels:    map[string]string{"app": "postgres-replica"},
+		},
+		Status: corev1.PodStatus{PodIP: "10.42.0.15"},
+	}
+	clientset := fake.NewSimpleClientset(pod)
+
+	host, err := resolveIntrospectHost(ctx, "postgres", "db", "ns-layer", "replica", "postgres-replica-roll", design, clientset)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if host != "10.42.0.15" {
+		t.Fatalf("host=%q want pod IP", host)
+	}
+
+	if _, err := resolveIntrospectHost(ctx, "postgres", "db", "ns-layer", "primary", "postgres-replica-roll", design, clientset); err == nil {
+		t.Fatal("expected error when layerId is set on primary target")
 	}
 }
 
