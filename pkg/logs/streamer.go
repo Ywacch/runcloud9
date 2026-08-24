@@ -37,7 +37,10 @@ type podLogStream struct {
 // - cache-aside: app=redis
 // - proxy modes: app=cache-proxy + app=redis-internal
 var componentLogTargets = map[string][]componentLogTarget{
-	"db":         {{labelSelector: "app=postgres", containerName: "postgres"}},
+	"db": {
+		{labelSelector: "app=postgres", containerName: "postgres"},
+		{labelSelector: "app=postgres-replica", containerName: "postgres-replica"},
+	},
 	"cache":      {{labelSelector: "app=redis", containerName: "redis"}, {labelSelector: "app=cache-proxy", containerName: "cache-proxy"}, {labelSelector: "app=redis-internal", containerName: "redis"}},
 	"app-server": {{labelSelector: "app=app-server", containerName: "app-server"}},
 	"mq":         {{labelSelector: "app=rabbitmq", containerName: "rabbitmq"}},

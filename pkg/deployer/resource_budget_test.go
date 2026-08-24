@@ -110,6 +110,39 @@ func TestSumDesignResources_mixedInstanceSizes(t *testing.T) {
 	}
 }
 
+func TestSumDesignResources_dbMixedInstanceSizes(t *testing.T) {
+	t.Parallel()
+
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{{
+			ID:   "db-1",
+			Type: "db",
+			Name: "PostgreSQL",
+			Config: map[string]interface{}{
+				"readReplicas":  1,
+				"instanceSize":  "large",
+				"instanceSizes": []any{"large", "small"},
+			},
+		}},
+	}
+	got := SumDesignResources(design, "explorer")
+	twoLarge := DeploymentDesign{
+		Nodes: []DeploymentNode{{
+			ID:   "db-1",
+			Type: "db",
+			Name: "PostgreSQL",
+			Config: map[string]interface{}{
+				"readReplicas": 1,
+				"instanceSize": "large",
+			},
+		}},
+	}
+	gotTwoLarge := SumDesignResources(twoLarge, "explorer")
+	if got.CPU.Cmp(gotTwoLarge.CPU) >= 0 {
+		t.Fatalf("db large primary + small replica CPU %v should be less than 2× large %v", got.CPU, gotTwoLarge.CPU)
+	}
+}
+
 func TestSumDesignResources_urlShortenerLite(t *testing.T) {
 	t.Parallel()
 

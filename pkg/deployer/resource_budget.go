@@ -95,7 +95,7 @@ func SumDesignResources(design DeploymentDesign, userTier string) ResourceBudget
 		if !isDeployableNodeType(node.Type) {
 			continue
 		}
-		if node.Type == "app-server" || node.Type == "worker" {
+		if node.Type == "app-server" || node.Type == "worker" || node.Type == "db" {
 			addPerCopyBudget(&total, node)
 			continue
 		}

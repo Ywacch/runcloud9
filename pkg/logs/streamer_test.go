@@ -101,6 +101,40 @@ func TestDiscoverPodLogStreams_DeduplicatesPodContainer(t *testing.T) {
 	}
 }
 
+func TestDiscoverPodLogStreams_PostgresPrimaryAndReplica(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "postgres-abc",
+				Namespace: "ns1",
+				Labels:    map[string]string{"app": "postgres", "deployment": "ns1"},
+			},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "postgres-replica-xyz",
+				Namespace: "ns1",
+				Labels:    map[string]string{"app": "postgres-replica", "deployment": "ns1"},
+			},
+		},
+	)
+
+	streams := discoverPodLogStreams(context.Background(), client, "ns1")
+	foundPrimary := false
+	foundReplica := false
+	for _, s := range streams {
+		if s.component == "db" && s.podName == "postgres-abc" && s.containerName == "postgres" {
+			foundPrimary = true
+		}
+		if s.component == "db" && s.podName == "postgres-replica-xyz" && s.containerName == "postgres-replica" {
+			foundReplica = true
+		}
+	}
+	if !foundPrimary || !foundReplica {
+		t.Fatalf("expected postgres and postgres-replica db streams, got %+v", streams)
+	}
+}
+
 func TestParseLine_setsPod(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

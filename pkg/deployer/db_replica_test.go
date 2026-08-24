@@ -153,6 +153,63 @@ func TestDBReadReplicaCount_engineGate(t *testing.T) {
 	}
 }
 
+func TestDBReplicaDeploymentSpec_usesStandbyInstanceSize(t *testing.T) {
+	t.Parallel()
+
+	cfg := DeployConfig{
+		Namespace: "cloud9-test-ns",
+		Node: DeploymentNode{
+			ID:   "db1",
+			Type: "db",
+			Name: "PostgreSQL",
+			Config: map[string]any{
+				"readReplicas":  1,
+				"instanceSizes": []any{"large", "small"},
+			},
+		},
+	}
+	large := dbResourcesForSize("large")
+	small := dbResourcesForSize("small")
+	dep := dbReplicaDeploymentSpec(cfg, small, 1)
+
+	replicaCPU := dep.Spec.Template.Spec.Containers[0].Resources.Limits.Cpu()
+	if replicaCPU.Cmp(*large.Limits.Cpu()) == 0 {
+		t.Fatalf("replica CPU limit should follow instanceSizes[1]=small, not primary large")
+	}
+	if replicaCPU.Cmp(*small.Limits.Cpu()) != 0 {
+		t.Fatalf("replica CPU limit %s should match small %s", replicaCPU, small.Limits.Cpu())
+	}
+}
+
+func TestDBReplicaDeploymentSpec_mixedStandbySizesUseSizeSuffix(t *testing.T) {
+	t.Parallel()
+
+	cfg := DeployConfig{
+		Namespace: "cloud9-test-ns",
+		Node: DeploymentNode{
+			Config: map[string]any{
+				"readReplicas":  2,
+				"instanceSizes": []any{"large", "large", "small"},
+			},
+		},
+	}
+	groups := sizeGroups([]string{"large", "small"})
+	if len(groups) != 2 {
+		t.Fatalf("size groups: got %d want 2", len(groups))
+	}
+	largeDep := dbReplicaDeploymentSpecNamed(cfg, dbReplicaDeploymentName, dbResourcesForSize("large"), groups[0].Count)
+	smallDep := dbReplicaDeploymentSpecNamed(cfg, dbReplicaDeploymentName+"-small", dbResourcesForSize("small"), groups[1].Count)
+	if largeDep.Name != dbReplicaDeploymentName {
+		t.Fatalf("large dep name: got %q", largeDep.Name)
+	}
+	if smallDep.Name != "postgres-replica-small" {
+		t.Fatalf("small dep name: got %q", smallDep.Name)
+	}
+	if *largeDep.Spec.Replicas != 1 || *smallDep.Spec.Replicas != 1 {
+		t.Fatalf("replica counts: large=%d small=%d", *largeDep.Spec.Replicas, *smallDep.Spec.Replicas)
+	}
+}
+
 func assertEphemeralStorage(t *testing.T, res corev1.ResourceRequirements, want resource.Quantity) {
 	t.Helper()
 	if lim := res.Limits[corev1.ResourceEphemeralStorage]; lim.Cmp(want) != 0 {

@@ -106,11 +106,15 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 
 	switch cfg.Node.Type {
 	case "db":
-		if err := k.deployFromRegistry(ctx, cfg, resources, replicas); err != nil {
+		rr := dbReadReplicaCount(cfg)
+		total := 1 + int(rr)
+		sizes := instanceSizesFromConfig(cfg.Node.Config, total)
+		primaryResources := dbResourcesForSize(sizes[0])
+		if err := k.deployFromRegistry(ctx, cfg, primaryResources, replicas); err != nil {
 			return err
 		}
-		if rr := dbReadReplicaCount(cfg); rr > 0 {
-			return k.deployDBReadReplicas(ctx, cfg, resources, rr)
+		if rr > 0 {
+			return k.deployDBReadReplicas(ctx, cfg, rr)
 		}
 		return nil
 	case "mq":
