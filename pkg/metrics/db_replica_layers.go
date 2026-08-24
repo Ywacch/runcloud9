@@ -18,6 +18,8 @@ const (
 	dbLayerIDPostgresPrimary = "postgres"
 	dbReplicaPodSelector     = "postgres-replica.*"
 	dbPrimaryPodSelector     = "postgres.*"
+	dbPrimaryContainerName   = "postgres"
+	dbReplicaContainerName   = "postgres-replica"
 	// postgresExporterReplayLagMetric is from deployer custom query block replication_replay_lag.
 	// postgres-exporter v0.16.0 names custom metrics {block}_{column} without a pg_ prefix.
 	postgresExporterReplayLagMetric = "replication_replay_lag_replay_lag_seconds"
@@ -143,16 +145,16 @@ func (c *MetricsCollector) buildDBPrimaryLayer(ctx context.Context, ns string) C
 	if c == nil {
 		return layer
 	}
-	cpuRes := c.queryContainerResourceCPUExcluding(ctx, ns, dbPrimaryPodSelector, dbReplicaPodSelector, "postgres")
-	memRes := c.queryContainerResourceMemoryExcluding(ctx, ns, dbPrimaryPodSelector, dbReplicaPodSelector, "postgres")
+	cpuRes := c.queryContainerResourceCPUExcluding(ctx, ns, dbPrimaryPodSelector, dbReplicaPodSelector, dbPrimaryContainerName)
+	memRes := c.queryContainerResourceMemoryExcluding(ctx, ns, dbPrimaryPodSelector, dbReplicaPodSelector, dbPrimaryContainerName)
 	layer.CPUUsage = cpuRes.Usage
 	layer.CPUIsEstimated = cpuRes.Estimated
 	layer.CPUSource = cpuRes.Source
 	layer.MemoryBytes = int64(memRes.Usage)
 	layer.MemIsEstimated = memRes.Estimated
 	layer.MemSource = memRes.Source
-	layer.CPULimit = c.kubeLimitCPUExcluding(ctx, ns, dbPrimaryPodSelector, dbReplicaPodSelector, "postgres")
-	layer.MemoryLimit = c.kubeLimitMemExcluding(ctx, ns, dbPrimaryPodSelector, dbReplicaPodSelector, "postgres")
+	layer.CPULimit = c.kubeLimitCPUExcluding(ctx, ns, dbPrimaryPodSelector, dbReplicaPodSelector, dbPrimaryContainerName)
+	layer.MemoryLimit = c.kubeLimitMemExcluding(ctx, ns, dbPrimaryPodSelector, dbReplicaPodSelector, dbPrimaryContainerName)
 	return layer
 }
 
@@ -172,16 +174,16 @@ func (c *MetricsCollector) buildDBReplicaLayer(ctx context.Context, ns, podName 
 		return layer
 	}
 	podRe := fmt.Sprintf("^%s$", podName)
-	cpuRes := c.queryContainerResourceCPU(ctx, ns, podRe, "postgres")
-	memRes := c.queryContainerResourceMemory(ctx, ns, podRe, "postgres")
+	cpuRes := c.queryContainerResourceCPU(ctx, ns, podRe, dbReplicaContainerName)
+	memRes := c.queryContainerResourceMemory(ctx, ns, podRe, dbReplicaContainerName)
 	layer.CPUUsage = cpuRes.Usage
 	layer.CPUIsEstimated = cpuRes.Estimated
 	layer.CPUSource = cpuRes.Source
 	layer.MemoryBytes = int64(memRes.Usage)
 	layer.MemIsEstimated = memRes.Estimated
 	layer.MemSource = memRes.Source
-	layer.CPULimit = c.kubeLimitCPU(ctx, ns, podRe, "postgres")
-	layer.MemoryLimit = c.kubeLimitMem(ctx, ns, podRe, "postgres")
+	layer.CPULimit = c.kubeLimitCPU(ctx, ns, podRe, dbReplicaContainerName)
+	layer.MemoryLimit = c.kubeLimitMem(ctx, ns, podRe, dbReplicaContainerName)
 	return layer
 }
 
