@@ -787,18 +787,6 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	))
 	cmApp.CacheMisses = misses
 
-	hits9m, _ := c.query(ctx, fmt.Sprintf(
-		`sum(increase(cache_hits_total{%s}[9m]))`,
-		nsSel,
-	))
-	cmApp.CacheHitsLast9m = hits9m
-
-	misses9m, _ := c.query(ctx, fmt.Sprintf(
-		`sum(increase(cache_misses_total{%s}[9m]))`,
-		nsSel,
-	))
-	cmApp.CacheMissesLast9m = misses9m
-
 	errRate, _ := c.query(ctx, fmt.Sprintf(
 		`sum(rate(http_requests_total{%s,status=~"5.."}%s))`,
 		nsSel, promRateRange(),
@@ -821,8 +809,18 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		`sum by (pod) (db_query_duration_seconds_count{%s})`,
 		appServerSel,
 	), "pod")
+	hitsByPod := c.queryMultiResult(ctx, fmt.Sprintf(
+		`sum by (pod) (cache_hits_total{%s})`,
+		appServerSel,
+	), "pod")
+	missesByPod := c.queryMultiResult(ctx, fmt.Sprintf(
+		`sum by (pod) (cache_misses_total{%s})`,
+		appServerSel,
+	), "pod")
 	cmApp.TotalRequests = c.sessionAcc.Observe(ns, seriesHTTP, totalReqsByPod)
 	cmApp.TotalErrors9m = c.sessionAcc.Observe(ns, seriesHTTP5xx, httpErrByPod)
+	cmApp.CacheHitsLast9m = c.sessionAcc.Observe(ns, seriesCacheHits, hitsByPod)
+	cmApp.CacheMissesLast9m = c.sessionAcc.Observe(ns, seriesCacheMisses, missesByPod)
 	if db, ok := dm.Components["db"]; ok {
 		db.DbTotalQueries = c.sessionAcc.Observe(ns, seriesSQL, sqlByPod)
 		dm.Components["db"] = db

@@ -141,7 +141,8 @@ type ComponentMetrics struct {
 	AvgLatency  float64 `json:"avgLatency,omitempty"` // seconds
 	CacheHits   float64 `json:"cacheHits"`            // hits/sec, 0 if not applicable
 	CacheMisses float64 `json:"cacheMisses"`          // misses/sec, 0 if not applicable
-	// CacheHitsLast9m / CacheMissesLast9m are Prometheus increase(...[9m]) sums (estimated counts in window).
+	// CacheHitsLast9m / CacheMissesLast9m are session sums of cache_hits/misses_total on app-server pods.
+	// Survive pod restart; reset when cloud9-api restarts or Cleanup runs. JSON field names kept for the inspector contract.
 	CacheHitsLast9m   float64 `json:"cacheHitsLast9m"`
 	CacheMissesLast9m float64 `json:"cacheMissesLast9m"`
 	ErrorRate         float64 `json:"errorRate"` // errors/sec (rate over 30s)
