@@ -696,3 +696,41 @@ func TestCollect_DbQuerySource_App(t *testing.T) {
 		t.Fatalf("db query: source=%q rate=%v", db.DbQuerySource, db.DbQueryRate)
 	}
 }
+
+func TestCollect_DbTotalQueriesUsesCounterSum(t *testing.T) {
+	t.Parallel()
+	var totalQ string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(q, "db_query_duration_seconds_count") {
+			if strings.Contains(q, "rate(") {
+				_ = json.NewEncoder(w).Encode(promVectorJSON("0.5"))
+				return
+			}
+			if strings.Contains(q, "increase(") {
+				t.Errorf("db total must not use increase(): %s", q)
+			}
+			totalQ = q
+			_ = json.NewEncoder(w).Encode(promVectorJSON("10"))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(promEmptyJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
+	dm, err := c.Collect(context.Background(), "ns-db-total", "", TopologyFlags{HasDB: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(totalQ, `sum(db_query_duration_seconds_count{`) {
+		t.Fatalf("want raw counter sum, got %q", totalQ)
+	}
+	if strings.Contains(totalQ, "[9m]") {
+		t.Fatalf("total query still windowed: %s", totalQ)
+	}
+	if dm.Components["db"].DbTotalQueries != 10 {
+		t.Fatalf("DbTotalQueries: want 10, got %v", dm.Components["db"].DbTotalQueries)
+	}
+}

@@ -152,7 +152,8 @@ type ComponentMetrics struct {
 	DbQueryRate    float64 `json:"dbQueryRate"`             // queries/sec; meaningful when dbQuerySource=app
 	DbQueryLatency float64 `json:"dbQueryLatency"`          // seconds (avg)
 	DbQuerySource  string  `json:"dbQuerySource,omitempty"` // "app" | "none"
-	// DbTotalQueries is sum(increase(db_query_duration_seconds_count[9m])) — rolling ~9m window, not since deploy.
+	// DbTotalQueries is sum(db_query_duration_seconds_count) on app-server pods —
+	// observations since those processes started (resets on pod restart).
 	DbTotalQueries float64 `json:"dbTotalQueries"`
 	// Postgres exporter (when scraped); complements DbQueryRate from app metrics.
 	DbActiveConnections float64 `json:"dbActiveConnections,omitempty"`

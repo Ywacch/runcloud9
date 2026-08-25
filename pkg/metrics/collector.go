@@ -657,8 +657,11 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		cmDB.DbQueryLatency = dbLatSum / dbLatCount
 	}
 	cmDB.AvgLatency = cmDB.DbQueryLatency
+	// Raw counter sum (not increase over a window): Prometheus increase()[9m]
+	// extrapolates to range edges, so a short playground burst can show 7 then 6
+	// while the app actually ran 10 queries. The counter is monotonic until pods restart.
 	dbTotal, _ := c.query(ctx, fmt.Sprintf(
-		`sum(increase(db_query_duration_seconds_count{%s}[9m]))`,
+		`sum(db_query_duration_seconds_count{%s})`,
 		appServerSel,
 	))
 	cmDB.DbTotalQueries = dbTotal
