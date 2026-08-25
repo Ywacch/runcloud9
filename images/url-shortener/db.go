@@ -80,8 +80,18 @@ func urlExistsQuery(tokenExpr string) string {
 	`, tokenExpr)
 }
 
+func routerActive(r readSplitRouter) bool {
+	if r == nil {
+		return false
+	}
+	if ptr, ok := r.(*readrouter.ReadRouter); ok {
+		return ptr != nil
+	}
+	return true
+}
+
 func (db *DB) recordWriteToken(ctx context.Context, clientID string) error {
-	if db.router == nil || clientID == "" {
+	if !routerActive(db.router) || clientID == "" {
 		return nil
 	}
 	var raw string
@@ -127,7 +137,7 @@ func (db *DB) GetURL(ctx context.Context, code string) (URLStats, error) {
 		trace.LogDB(ctx, "get_url", start)
 	}()
 
-	if db.router == nil {
+	if !routerActive(db.router) {
 		return db.getURLLeader(ctx, code)
 	}
 
@@ -166,7 +176,7 @@ func (db *DB) URLExists(ctx context.Context, code string) (bool, error) {
 		trace.LogDB(ctx, "url_exists", start)
 	}()
 
-	if db.router == nil {
+	if !routerActive(db.router) {
 		return db.urlExistsLeader(ctx, code)
 	}
 

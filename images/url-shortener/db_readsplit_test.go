@@ -63,6 +63,23 @@ func TestURLExistsQuery_replayToken(t *testing.T) {
 	}
 }
 
+func TestRouterActive_nilTypedInterface(t *testing.T) {
+	t.Parallel()
+
+	var typedNil *readrouter.ReadRouter
+	if routerActive(typedNil) {
+		t.Fatal("typed nil *ReadRouter must not be treated as active")
+	}
+	var unset readSplitRouter
+	if routerActive(unset) {
+		t.Fatal("nil interface must not be treated as active")
+	}
+	active := readrouter.NewReadRouter(nil, nil, readrouter.PostgresEngine{}, readrouter.PolicyLeaderOnly)
+	if !routerActive(active) {
+		t.Fatal("real router must be active")
+	}
+}
+
 func TestReadRouterPolicyRoutes(t *testing.T) {
 	t.Parallel()
 

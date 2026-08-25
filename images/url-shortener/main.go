@@ -640,7 +640,7 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 	}
 
 	var readPool *pgxpool.Pool
-	var router *readrouter.ReadRouter
+	var router readSplitRouter
 	if cfg.ReadReplicaHost != "" {
 		readConnURL := &url.URL{
 			Scheme: "postgres",
