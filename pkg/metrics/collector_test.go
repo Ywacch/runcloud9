@@ -94,16 +94,28 @@ func TestCollect_Session9mAggregates(t *testing.T) {
 		q := r.URL.Query().Get("query")
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case strings.Contains(q, `increase(http_requests_total{namespace="ns-test",status=~"5.."}[9m])`):
+		case strings.Contains(q, `http_requests_total`) &&
+			strings.Contains(q, `status=~"5.."`) &&
+			!strings.Contains(q, "rate(") &&
+			!strings.Contains(q, "increase("):
 			_ = json.NewEncoder(w).Encode(promVectorJSON("12"))
 		case strings.Contains(q, "sum by (pod)") &&
-			strings.Contains(q, `increase(http_requests_total`) &&
+			strings.Contains(q, `http_requests_total`) &&
 			strings.Contains(q, `pod=~"app-server.*"`) &&
-			strings.Contains(q, "[9m]"):
+			!strings.Contains(q, "rate(") &&
+			!strings.Contains(q, "increase("):
 			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
 				"app-server-abc": "16240",
 				"app-server-def": "16105",
 			}))
+		case strings.Contains(q, `sum(http_requests_total{`) &&
+			strings.Contains(q, `pod=~"app-server.*"`) &&
+			!strings.Contains(q, "rate(") &&
+			!strings.Contains(q, "increase(") &&
+			!strings.Contains(q, `status=~"5.."`):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("32345"))
+		case strings.Contains(q, `increase(http_requests_total{namespace="ns-test",status=~"5.."}[9m])`):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("12"))
 		case strings.Contains(q, `sum(increase(http_requests_total{namespace="ns-test"}[9m]))`):
 			_ = json.NewEncoder(w).Encode(promVectorJSON("32345"))
 		case strings.Contains(q, `histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{namespace="ns-test"}[9m])) by (le))`):
@@ -732,5 +744,60 @@ func TestCollect_DbTotalQueriesUsesCounterSum(t *testing.T) {
 	}
 	if dm.Components["db"].DbTotalQueries != 10 {
 		t.Fatalf("DbTotalQueries: want 10, got %v", dm.Components["db"].DbTotalQueries)
+	}
+}
+
+func TestCollect_HttpTotalsUseCounterSum(t *testing.T) {
+	t.Parallel()
+	var totalQ, errQ, podQ string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(q, "http_requests_total") && !strings.Contains(q, "rate(") {
+			if strings.Contains(q, "increase(") {
+				t.Errorf("http total must not use increase(): %s", q)
+			}
+			switch {
+			case strings.Contains(q, `status=~"5.."`):
+				errQ = q
+				_ = json.NewEncoder(w).Encode(promVectorJSON("2"))
+			case strings.Contains(q, "sum by (pod)"):
+				podQ = q
+				_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+					"app-server-abc": "13",
+				}))
+			default:
+				totalQ = q
+				_ = json.NewEncoder(w).Encode(promVectorJSON("13"))
+			}
+			return
+		}
+		_ = json.NewEncoder(w).Encode(promEmptyJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
+	dm, err := c.Collect(context.Background(), "ns-http-total", "", TopologyFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{totalQ, errQ, podQ} {
+		if !strings.Contains(q, `pod=~"app-server.*"`) {
+			t.Fatalf("want app-server pod filter, got %q", q)
+		}
+		if strings.Contains(q, "[9m]") {
+			t.Fatalf("http total still windowed: %s", q)
+		}
+	}
+	app := dm.Components["app-server"]
+	if app.TotalRequests != 13 {
+		t.Fatalf("TotalRequests: want 13, got %v", app.TotalRequests)
+	}
+	if app.TotalErrors9m != 2 {
+		t.Fatalf("TotalErrors9m: want 2, got %v", app.TotalErrors9m)
+	}
+	lb := dm.Components["lb"]
+	if lb.TotalRequests != 13 || lb.TotalErrors9m != 2 {
+		t.Fatalf("lb copies: req=%v err=%v", lb.TotalRequests, lb.TotalErrors9m)
 	}
 }
