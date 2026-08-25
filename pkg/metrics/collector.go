@@ -807,15 +807,18 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	))
 	cmApp.ErrorRate = errRate
 
+	// Raw counter sums (not increase over a window): Prometheus increase()[9m]
+	// extrapolates range edges, so a playground burst can show 8 then 7 while
+	// the app handled 13 requests. Counters reset on app-server restart.
 	totalReqs, _ := c.query(ctx, fmt.Sprintf(
-		`sum(increase(http_requests_total{%s}[9m]))`,
-		nsSel,
+		`sum(http_requests_total{%s})`,
+		appServerSel,
 	))
 	cmApp.TotalRequests = totalReqs
 
 	totalErrs9m, _ := c.query(ctx, fmt.Sprintf(
-		`sum(increase(http_requests_total{%s,status=~"5.."}[9m]))`,
-		nsSel,
+		`sum(http_requests_total{%s,status=~"5.."})`,
+		appServerSel,
 	))
 	cmApp.TotalErrors9m = totalErrs9m
 

@@ -28,7 +28,7 @@ func (c *MetricsCollector) appServerReplicaSeries(ctx context.Context, ns string
 		c.queryMultiResult(ctx, fmt.Sprintf(`histogram_quantile(0.99, sum by (pod, le) (rate(http_request_duration_seconds_bucket{%s}%s)))`, nsSel, promRateRange()), "pod"),
 		c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (rate(process_cpu_seconds_total{namespace=%q,pod=~%q}%s))`, ns, podRe, promRateRange()), "pod"),
 		c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (rate(http_requests_total{%s,status=~"5.."}%s))`, nsSel, promRateRange()), "pod"),
-		c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (increase(http_requests_total{%s}[9m]))`, podSel), "pod"),
+		c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (http_requests_total{%s})`, podSel), "pod"),
 		c.metricsAPIPodContainerMemory(ctx, ns, podRe, "app-server")
 }
 

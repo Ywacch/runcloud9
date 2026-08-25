@@ -131,7 +131,8 @@ type ComponentMetrics struct {
 	CPUUsage    float64 `json:"cpuUsage"`    // cores (e.g. 0.15 = 150m)
 	MemoryBytes int64   `json:"memoryUsage"` // working set bytes
 	RequestRate float64 `json:"requestRate"` // requests/sec, 0 if not applicable
-	// TotalRequests is sum(increase(http_requests_total[9m])) — rolling ~9m window, not full session.
+	// TotalRequests is sum(http_requests_total) on app-server pods —
+	// observations since those processes started (resets on pod restart).
 	TotalRequests float64 `json:"totalRequests"`
 	P50Latency    float64 `json:"p50Latency"` // seconds (Prometheus histogram), 0 if N/A
 	P95Latency    float64 `json:"p95Latency"` // seconds
@@ -144,7 +145,8 @@ type ComponentMetrics struct {
 	CacheHitsLast9m   float64 `json:"cacheHitsLast9m"`
 	CacheMissesLast9m float64 `json:"cacheMissesLast9m"`
 	ErrorRate         float64 `json:"errorRate"` // errors/sec (rate over 30s)
-	// TotalErrors9m is sum(increase(http_requests_total{status=~"5.."}[9m])) — rolling ~9m window.
+	// TotalErrors9m is sum(http_requests_total{status=~"5.."}) on app-server pods
+	// since those processes started. JSON name kept for the inspector contract.
 	TotalErrors9m float64 `json:"totalErrors9m,omitempty"`
 	// P99Latency9m is histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[9m])) in seconds.
 	P99Latency9m float64 `json:"p99Latency9m,omitempty"`
@@ -277,7 +279,7 @@ type PodMetrics struct {
 	Name        string  `json:"name"`
 	Ready       bool    `json:"ready"`
 	RequestRate float64 `json:"requestRate"`
-	// TotalRequests is increase(http_requests_total[9m]) for this pod — rolling ~9m window.
+	// TotalRequests is sum(http_requests_total) for this pod since process start.
 	TotalRequests float64 `json:"totalRequests,omitempty"`
 	P99Latency    float64 `json:"p99Latency"`
 	CPUUsage      float64 `json:"cpuUsage,omitempty"`
