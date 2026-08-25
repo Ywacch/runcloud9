@@ -55,21 +55,30 @@ func promEmptyJSON() map[string]any {
 func TestCollect_CacheIncreaseQueries(t *testing.T) {
 	t.Parallel()
 
+	var hitsQ, missesQ string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
-		var val string
-		switch {
-		case strings.Contains(q, "increase(cache_hits_total"):
-			val = "150"
-		case strings.Contains(q, "increase(cache_misses_total"):
-			val = "30"
-		default:
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(promEmptyJSON())
-			return
-		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(promVectorJSON(val))
+		switch {
+		case strings.Contains(q, "cache_hits_total") && !strings.Contains(q, "rate("):
+			if strings.Contains(q, "increase(") {
+				t.Errorf("cache hits total must not use increase(): %s", q)
+			}
+			hitsQ = q
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				"app-server-abc": "150",
+			}))
+		case strings.Contains(q, "cache_misses_total") && !strings.Contains(q, "rate("):
+			if strings.Contains(q, "increase(") {
+				t.Errorf("cache misses total must not use increase(): %s", q)
+			}
+			missesQ = q
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				"app-server-abc": "30",
+			}))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
 	}))
 	t.Cleanup(srv.Close)
 
@@ -78,12 +87,78 @@ func TestCollect_CacheIncreaseQueries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(hitsQ, `sum by (pod) (cache_hits_total{`) {
+		t.Fatalf("want sum by (pod) counter, got %q", hitsQ)
+	}
+	if !strings.Contains(hitsQ, `pod=~"app-server.*"`) {
+		t.Fatalf("want app-server pod filter: %s", hitsQ)
+	}
+	if !strings.Contains(missesQ, `sum by (pod) (cache_misses_total{`) {
+		t.Fatalf("want sum by (pod) counter, got %q", missesQ)
+	}
 	app := dm.Components["app-server"]
 	if app.CacheHitsLast9m != 150 {
 		t.Fatalf("CacheHitsLast9m: want 150, got %v", app.CacheHitsLast9m)
 	}
 	if app.CacheMissesLast9m != 30 {
 		t.Fatalf("CacheMissesLast9m: want 30, got %v", app.CacheMissesLast9m)
+	}
+}
+
+func TestCollect_CacheSessionAccumulatorSurvivesPodKill(t *testing.T) {
+	t.Parallel()
+
+	scrape := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "sum by (pod)") &&
+			strings.Contains(q, "cache_hits_total") &&
+			strings.Contains(q, `pod=~"app-server.*"`) &&
+			!strings.Contains(q, "rate("):
+			scrape++
+			var pods map[string]string
+			switch scrape {
+			case 1:
+				pods = map[string]string{"app-server-a": "100"}
+			case 2:
+				pods = map[string]string{"app-server-b": "0"}
+			default:
+				pods = map[string]string{"app-server-b": "20"}
+			}
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", pods))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	dm1, err := c.Collect(ctx, "ns-cache-kill", "", TopologyFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dm1.Components["app-server"].CacheHitsLast9m; got != 100 {
+		t.Fatalf("collect 1 CacheHitsLast9m: want 100, got %v", got)
+	}
+
+	dm2, err := c.Collect(ctx, "ns-cache-kill", "", TopologyFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dm2.Components["app-server"].CacheHitsLast9m; got != 100 {
+		t.Fatalf("collect 2 CacheHitsLast9m: want 100 (pod A gone), got %v", got)
+	}
+
+	dm3, err := c.Collect(ctx, "ns-cache-kill", "", TopologyFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dm3.Components["app-server"].CacheHitsLast9m; got != 120 {
+		t.Fatalf("collect 3 CacheHitsLast9m: want 120, got %v", got)
 	}
 }
 

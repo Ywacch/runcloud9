@@ -3,9 +3,11 @@ package metrics
 import "sync"
 
 const (
-	seriesHTTP    = "http"
-	seriesHTTP5xx = "http5xx"
-	seriesSQL     = "sql"
+	seriesHTTP        = "http"
+	seriesHTTP5xx     = "http5xx"
+	seriesSQL         = "sql"
+	seriesCacheHits   = "cache_hits"
+	seriesCacheMisses = "cache_misses"
 )
 
 type seriesAcc struct {
