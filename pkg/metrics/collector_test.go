@@ -94,26 +94,25 @@ func TestCollect_Session9mAggregates(t *testing.T) {
 		q := r.URL.Query().Get("query")
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case strings.Contains(q, `http_requests_total`) &&
+		case strings.Contains(q, "sum by (pod)") &&
+			strings.Contains(q, `http_requests_total`) &&
 			strings.Contains(q, `status=~"5.."`) &&
 			!strings.Contains(q, "rate(") &&
 			!strings.Contains(q, "increase("):
-			_ = json.NewEncoder(w).Encode(promVectorJSON("12"))
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				"app-server-abc": "7",
+				"app-server-def": "5",
+			}))
 		case strings.Contains(q, "sum by (pod)") &&
 			strings.Contains(q, `http_requests_total`) &&
 			strings.Contains(q, `pod=~"app-server.*"`) &&
 			!strings.Contains(q, "rate(") &&
-			!strings.Contains(q, "increase("):
+			!strings.Contains(q, "increase(") &&
+			!strings.Contains(q, `status=~"5.."`):
 			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
 				"app-server-abc": "16240",
 				"app-server-def": "16105",
 			}))
-		case strings.Contains(q, `sum(http_requests_total{`) &&
-			strings.Contains(q, `pod=~"app-server.*"`) &&
-			!strings.Contains(q, "rate(") &&
-			!strings.Contains(q, "increase(") &&
-			!strings.Contains(q, `status=~"5.."`):
-			_ = json.NewEncoder(w).Encode(promVectorJSON("32345"))
 		case strings.Contains(q, `increase(http_requests_total{namespace="ns-test",status=~"5.."}[9m])`):
 			_ = json.NewEncoder(w).Encode(promVectorJSON("12"))
 		case strings.Contains(q, `sum(increase(http_requests_total{namespace="ns-test"}[9m]))`):
@@ -724,7 +723,9 @@ func TestCollect_DbTotalQueriesUsesCounterSum(t *testing.T) {
 				t.Errorf("db total must not use increase(): %s", q)
 			}
 			totalQ = q
-			_ = json.NewEncoder(w).Encode(promVectorJSON("10"))
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				"app-server-abc": "10",
+			}))
 			return
 		}
 		_ = json.NewEncoder(w).Encode(promEmptyJSON())
@@ -736,8 +737,8 @@ func TestCollect_DbTotalQueriesUsesCounterSum(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(totalQ, `sum(db_query_duration_seconds_count{`) {
-		t.Fatalf("want raw counter sum, got %q", totalQ)
+	if !strings.Contains(totalQ, `sum by (pod) (db_query_duration_seconds_count{`) {
+		t.Fatalf("want sum by (pod) counter, got %q", totalQ)
 	}
 	if strings.Contains(totalQ, "[9m]") {
 		t.Fatalf("total query still windowed: %s", totalQ)
@@ -749,7 +750,7 @@ func TestCollect_DbTotalQueriesUsesCounterSum(t *testing.T) {
 
 func TestCollect_HttpTotalsUseCounterSum(t *testing.T) {
 	t.Parallel()
-	var totalQ, errQ, podQ string
+	var httpPodQ, errPodQ string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
 		w.Header().Set("Content-Type", "application/json")
@@ -758,17 +759,18 @@ func TestCollect_HttpTotalsUseCounterSum(t *testing.T) {
 				t.Errorf("http total must not use increase(): %s", q)
 			}
 			switch {
-			case strings.Contains(q, `status=~"5.."`):
-				errQ = q
-				_ = json.NewEncoder(w).Encode(promVectorJSON("2"))
+			case strings.Contains(q, `status=~"5.."`) && strings.Contains(q, "sum by (pod)"):
+				errPodQ = q
+				_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+					"app-server-abc": "2",
+				}))
 			case strings.Contains(q, "sum by (pod)"):
-				podQ = q
+				httpPodQ = q
 				_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
 					"app-server-abc": "13",
 				}))
 			default:
-				totalQ = q
-				_ = json.NewEncoder(w).Encode(promVectorJSON("13"))
+				t.Errorf("unexpected http total query: %s", q)
 			}
 			return
 		}
@@ -781,7 +783,7 @@ func TestCollect_HttpTotalsUseCounterSum(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, q := range []string{totalQ, errQ, podQ} {
+	for _, q := range []string{httpPodQ, errPodQ} {
 		if !strings.Contains(q, `pod=~"app-server.*"`) {
 			t.Fatalf("want app-server pod filter, got %q", q)
 		}
@@ -799,5 +801,70 @@ func TestCollect_HttpTotalsUseCounterSum(t *testing.T) {
 	lb := dm.Components["lb"]
 	if lb.TotalRequests != 13 || lb.TotalErrors9m != 2 {
 		t.Fatalf("lb copies: req=%v err=%v", lb.TotalRequests, lb.TotalErrors9m)
+	}
+}
+
+func TestCollect_SessionAccumulatorSurvivesPodKill(t *testing.T) {
+	t.Parallel()
+
+	scrape := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "sum by (pod)") &&
+			strings.Contains(q, `http_requests_total`) &&
+			strings.Contains(q, `pod=~"app-server.*"`) &&
+			!strings.Contains(q, `status=~"5.."`) &&
+			!strings.Contains(q, "rate("):
+			scrape++
+			var pods map[string]string
+			switch scrape {
+			case 1:
+				pods = map[string]string{"app-server-a": "10"}
+			case 2:
+				pods = map[string]string{"app-server-b": "0"}
+			default:
+				pods = map[string]string{"app-server-b": "4"}
+			}
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", pods))
+		case strings.Contains(q, "sum by (pod)") &&
+			strings.Contains(q, `http_requests_total`) &&
+			strings.Contains(q, `status=~"5.."`):
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		case strings.Contains(q, "sum by (pod)") &&
+			strings.Contains(q, "db_query_duration_seconds_count"):
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	dm1, err := c.Collect(ctx, "ns-kill", "", TopologyFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dm1.Components["app-server"].TotalRequests; got != 10 {
+		t.Fatalf("collect 1 TotalRequests: want 10, got %v", got)
+	}
+
+	dm2, err := c.Collect(ctx, "ns-kill", "", TopologyFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dm2.Components["app-server"].TotalRequests; got != 10 {
+		t.Fatalf("collect 2 TotalRequests: want 10 (pod A gone), got %v", got)
+	}
+
+	dm3, err := c.Collect(ctx, "ns-kill", "", TopologyFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dm3.Components["app-server"].TotalRequests; got != 14 {
+		t.Fatalf("collect 3 TotalRequests: want 14, got %v", got)
 	}
 }

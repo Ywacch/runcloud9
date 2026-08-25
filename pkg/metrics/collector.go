@@ -59,6 +59,7 @@ type MetricsCollector struct {
 	mqRates         map[string]rabbitCounterSnapshot
 	podHealthMu     sync.Mutex
 	podHealth       map[string]*podHealthTracker
+	sessionAcc      *sessionAccumulator
 }
 
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
@@ -79,6 +80,7 @@ func NewMetricsCollector(prometheusURL string, lg loadgen.LoadGenerator, clients
 		observer:      observer,
 		consistency:   NewConsistencyDetector(observer),
 		mqRates:       make(map[string]rabbitCounterSnapshot),
+		sessionAcc:    newSessionAccumulator(),
 	}
 }
 
@@ -144,6 +146,9 @@ func (c *MetricsCollector) Cleanup(namespace string) {
 		delete(c.podHealth, namespace)
 	}
 	c.podHealthMu.Unlock()
+	if c.sessionAcc != nil {
+		c.sessionAcc.Cleanup(namespace)
+	}
 }
 
 // RingBufferFor returns the snapshot ring for a namespace, or nil if none yet.
@@ -657,14 +662,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		cmDB.DbQueryLatency = dbLatSum / dbLatCount
 	}
 	cmDB.AvgLatency = cmDB.DbQueryLatency
-	// Raw counter sum (not increase over a window): Prometheus increase()[9m]
-	// extrapolates to range edges, so a short playground burst can show 7 then 6
-	// while the app actually ran 10 queries. The counter is monotonic until pods restart.
-	dbTotal, _ := c.query(ctx, fmt.Sprintf(
-		`sum(db_query_duration_seconds_count{%s})`,
-		appServerSel,
-	))
-	cmDB.DbTotalQueries = dbTotal
+	// DbTotalQueries is filled after app-server by-pod SQL counters are scraped.
 
 	dbActive, _ := c.query(ctx, fmt.Sprintf(
 		`sum(pg_stat_activity_count{namespace=%q,state="active"})`,
@@ -807,21 +805,6 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	))
 	cmApp.ErrorRate = errRate
 
-	// Raw counter sums (not increase over a window): Prometheus increase()[9m]
-	// extrapolates range edges, so a playground burst can show 8 then 7 while
-	// the app handled 13 requests. Counters reset on app-server restart.
-	totalReqs, _ := c.query(ctx, fmt.Sprintf(
-		`sum(http_requests_total{%s})`,
-		appServerSel,
-	))
-	cmApp.TotalRequests = totalReqs
-
-	totalErrs9m, _ := c.query(ctx, fmt.Sprintf(
-		`sum(http_requests_total{%s,status=~"5.."})`,
-		appServerSel,
-	))
-	cmApp.TotalErrors9m = totalErrs9m
-
 	latBucketRate9m := fmt.Sprintf(`sum(rate(http_request_duration_seconds_bucket{%s}[9m])) by (le)`, nsSel)
 	p99_9m, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.99, %s)`, latBucketRate9m))
 	cmApp.P99Latency9m = p99_9m
@@ -830,6 +813,21 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmApp.MemoryLimit = c.kubeLimitMem(ctx, ns, "app-server.*", "app-server")
 
 	rpsByPod, p99ByPod, cpuByPod, errByPod, totalReqsByPod, memByPod := c.appServerReplicaSeries(ctx, ns)
+	httpErrByPod := c.queryMultiResult(ctx, fmt.Sprintf(
+		`sum by (pod) (http_requests_total{%s,status=~"5.."})`,
+		appServerSel,
+	), "pod")
+	sqlByPod := c.queryMultiResult(ctx, fmt.Sprintf(
+		`sum by (pod) (db_query_duration_seconds_count{%s})`,
+		appServerSel,
+	), "pod")
+	cmApp.TotalRequests = c.sessionAcc.Observe(ns, seriesHTTP, totalReqsByPod)
+	cmApp.TotalErrors9m = c.sessionAcc.Observe(ns, seriesHTTP5xx, httpErrByPod)
+	if db, ok := dm.Components["db"]; ok {
+		db.DbTotalQueries = c.sessionAcc.Observe(ns, seriesSQL, sqlByPod)
+		dm.Components["db"] = db
+	}
+
 	podNames, readyByPod, backendReplicas := c.listAppServerPods(ctx, ns)
 	replicaRows := mergePodMetricMaps(podNames, readyByPod, rpsByPod, p99ByPod, cpuByPod, errByPod, totalReqsByPod, memByPod)
 	if len(replicaRows) > 0 {
