@@ -107,9 +107,13 @@ var storageIORegistry = map[StorageEngineID]StorageIOProvider{
 	},
 }
 
-// postgresUserTableMetricFilter scopes pg_stat_user_tables to student-visible tables in a namespace.
+// postgresUserTableMetricFilter scopes pg_stat_user_tables to student-visible tables
+// on the primary postgres pod (excludes postgres-replica WAL apply double-count).
 func postgresUserTableMetricFilter(ns string) string {
-	return `namespace="` + ns + `",datname!~"template0|template1",relname!~"_c9_.*"`
+	return fmt.Sprintf(
+		`namespace=%q,datname!~"template0|template1",relname!~"_c9_.*",pod=~%q,pod!~%q`,
+		ns, dbPrimaryPodSelector, dbReplicaPodSelector,
+	)
 }
 
 // postgresUserTableReadRateQuery sums live rows read from user tables (seq + index heap fetches).
@@ -332,8 +336,8 @@ func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel strin
 		io.WriteRate, _ = c.query(ctx, redisStorageWriteRateQuery(ns, template))
 		readByPod := c.queryMultiResult(ctx, redisStorageReadTotal9mQuery(ns, template), "pod")
 		writeByPod := c.queryMultiResult(ctx, redisStorageWriteTotal9mQuery(ns, template), "pod")
-		io.ReadTotal9m = c.sessionAcc.Observe(ns, seriesRedisRead, readByPod)
-		io.WriteTotal9m = c.sessionAcc.Observe(ns, seriesRedisWrite, writeByPod)
+		io.ReadTotal9m = c.sessionAcc.ObserveDeltas(ns, seriesRedisRead, readByPod)
+		io.WriteTotal9m = c.sessionAcc.ObserveDeltas(ns, seriesRedisWrite, writeByPod)
 		io.ReadLatency, _ = c.query(ctx, redisStorageReadLatencyQuery(ns, template))
 		io.WriteLatency, _ = c.query(ctx, redisStorageWriteLatencyQuery(ns, template))
 	default:
@@ -348,8 +352,8 @@ func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel strin
 			writeTotal, _ := c.query(ctx, postgresUserTableWriteTotal9mQuery(ns))
 			readByPod := map[string]float64{postgresClusterTotalKey: readTotal}
 			writeByPod := map[string]float64{postgresClusterTotalKey: writeTotal}
-			io.ReadTotal9m = c.sessionAcc.Observe(ns, seriesPgRead, readByPod)
-			io.WriteTotal9m = c.sessionAcc.Observe(ns, seriesPgWrite, writeByPod)
+			io.ReadTotal9m = c.sessionAcc.ObserveDeltas(ns, seriesPgRead, readByPod)
+			io.WriteTotal9m = c.sessionAcc.ObserveDeltas(ns, seriesPgWrite, writeByPod)
 		}
 		if prov.ReadLatencyQuery != nil {
 			io.ReadLatency, _ = c.query(ctx, prov.ReadLatencyQuery(ns, nsSel))

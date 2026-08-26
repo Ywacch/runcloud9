@@ -104,8 +104,8 @@ func TestCollect_StorageIOSessionTotalsUseCounterSum(t *testing.T) {
 	if io == nil {
 		t.Fatal("expected storageIo on cache")
 	}
-	if io.ReadTotal9m != 50 {
-		t.Fatalf("ReadTotal9m: want 50, got %v", io.ReadTotal9m)
+	if io.ReadTotal9m != 0 {
+		t.Fatalf("ReadTotal9m: want 0 (baseline), got %v", io.ReadTotal9m)
 	}
 }
 
@@ -149,23 +149,70 @@ func TestCollect_StorageIOSessionAccumulatorSurvivesPodKill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := dm1.Components["cache"].StorageIO.ReadTotal9m; got != 100 {
-		t.Fatalf("collect 1 ReadTotal9m: want 100, got %v", got)
+	if got := dm1.Components["cache"].StorageIO.ReadTotal9m; got != 0 {
+		t.Fatalf("collect 1 ReadTotal9m: want 0 (baseline), got %v", got)
 	}
 
 	dm2, err := c.Collect(ctx, "ns-redis-kill", "url-shortener", topo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := dm2.Components["cache"].StorageIO.ReadTotal9m; got != 100 {
-		t.Fatalf("collect 2 ReadTotal9m: want 100 (pod A gone), got %v", got)
+	if got := dm2.Components["cache"].StorageIO.ReadTotal9m; got != 0 {
+		t.Fatalf("collect 2 ReadTotal9m: want 0 (new pod baseline), got %v", got)
 	}
 
 	dm3, err := c.Collect(ctx, "ns-redis-kill", "url-shortener", topo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := dm3.Components["cache"].StorageIO.ReadTotal9m; got != 120 {
-		t.Fatalf("collect 3 ReadTotal9m: want 120, got %v", got)
+	if got := dm3.Components["cache"].StorageIO.ReadTotal9m; got != 20 {
+		t.Fatalf("collect 3 ReadTotal9m: want 20 (delta on redis-b), got %v", got)
+	}
+}
+
+func TestCollect_StorageIO_PostgresSessionBaselinesSeed(t *testing.T) {
+	t.Parallel()
+
+	writeScrapes := 0
+	var lastWriteTotalQ string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "pg_stat_user_tables_n_tup_ins") && !strings.Contains(q, "rate("):
+			writeScrapes++
+			lastWriteTotalQ = q
+			val := "1000000"
+			if writeScrapes >= 2 {
+				val = "1000008"
+			}
+			_ = json.NewEncoder(w).Encode(promVectorJSON(val))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
+	ctx := context.Background()
+	topo := TopologyFlags{HasDB: true, DBEngine: "postgresql", DBRole: "primary"}
+
+	dm1, err := c.Collect(ctx, "ns-pg-seed", "url-shortener", topo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dm1.Components["db"].StorageIO.WriteTotal9m; got != 0 {
+		t.Fatalf("collect 1 WriteTotal9m: want 0 (seed baseline), got %v", got)
+	}
+	if !strings.Contains(lastWriteTotalQ, `pod=~"postgres.*"`) || !strings.Contains(lastWriteTotalQ, `pod!~"postgres-replica.*"`) {
+		t.Fatalf("write total query must exclude replicas: %s", lastWriteTotalQ)
+	}
+
+	dm2, err := c.Collect(ctx, "ns-pg-seed", "url-shortener", topo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dm2.Components["db"].StorageIO.WriteTotal9m; got != 8 {
+		t.Fatalf("collect 2 WriteTotal9m: want 8 (post-seed delta), got %v", got)
 	}
 }

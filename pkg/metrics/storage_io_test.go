@@ -18,8 +18,8 @@ func TestLookupStorageProvider_PostgreSQL(t *testing.T) {
 	if !strings.Contains(q, `namespace="ns1"`) || !strings.Contains(q, "pg_stat_user_tables_seq_tup_read") {
 		t.Fatalf("read query: %s", q)
 	}
-	if !strings.Contains(q, "pg_stat_user_tables_idx_tup_fetch") {
-		t.Fatalf("read query missing idx_tup_fetch: %s", q)
+	if !strings.Contains(q, `pod=~"postgres.*"`) || !strings.Contains(q, `pod!~"postgres-replica.*"`) {
+		t.Fatalf("read query must exclude replicas: %s", q)
 	}
 }
 
@@ -36,6 +36,8 @@ func TestPostgreSQLUserTableWriteQuery(t *testing.T) {
 		"pg_stat_user_tables_n_tup_del",
 		`datname!~"template0|template1"`,
 		`relname!~"_c9_.*"`,
+		`pod=~"postgres.*"`,
+		`pod!~"postgres-replica.*"`,
 	} {
 		if !strings.Contains(q, want) {
 			t.Fatalf("write query missing %q: %s", want, q)
@@ -221,6 +223,8 @@ func TestPostgreSQLUserTableReadTotal9mQuery(t *testing.T) {
 		"pg_stat_user_tables_seq_tup_read",
 		"pg_stat_user_tables_idx_tup_fetch",
 		`sum(pg_stat_user_tables_seq_tup_read`,
+		`pod=~"postgres.*"`,
+		`pod!~"postgres-replica.*"`,
 	} {
 		if !strings.Contains(q, want) {
 			t.Fatalf("read total query missing %q: %s", want, q)
@@ -238,6 +242,8 @@ func TestPostgreSQLUserTableWriteTotal9mQuery(t *testing.T) {
 		"pg_stat_user_tables_n_tup_ins",
 		"pg_stat_user_tables_n_tup_upd",
 		"pg_stat_user_tables_n_tup_del",
+		`pod=~"postgres.*"`,
+		`pod!~"postgres-replica.*"`,
 	} {
 		if !strings.Contains(q, want) {
 			t.Fatalf("write total query missing %q: %s", want, q)
