@@ -49,7 +49,7 @@ func DeployLoadgen(ctx context.Context, clientset kubernetes.Interface, namespac
 						{
 							Name:            "loadgen",
 							Image:           image,
-							ImagePullPolicy: corev1.PullAlways,
+							ImagePullPolicy: sessionImagePullPolicy,
 							Ports:           []corev1.ContainerPort{{ContainerPort: loadgenPort}},
 							Resources:       resources,
 						},
