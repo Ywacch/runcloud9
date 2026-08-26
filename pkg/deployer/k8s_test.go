@@ -26,10 +26,10 @@ func TestCacheImage_UsesTemplateImageTag(t *testing.T) {
 	}
 }
 
-func TestNewCacheProxyContainer_SetsPullAlways(t *testing.T) {
+func TestNewCacheProxyContainer_SetsIfNotPresent(t *testing.T) {
 	c := newCacheProxyContainer("example/cache-proxy:tag", DefaultResources(), nil)
-	if got := c.ImagePullPolicy; got != corev1.PullAlways {
-		t.Fatalf("cache-proxy imagePullPolicy: got %q want %q", got, corev1.PullAlways)
+	if got := c.ImagePullPolicy; got != corev1.PullIfNotPresent {
+		t.Fatalf("cache-proxy imagePullPolicy: got %q want %q", got, corev1.PullIfNotPresent)
 	}
 	if c.Name != "cache-proxy" {
 		t.Fatalf("container name: got %q want cache-proxy", c.Name)

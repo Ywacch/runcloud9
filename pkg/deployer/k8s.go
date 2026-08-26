@@ -30,6 +30,10 @@ const (
 	waitReadyCrashLoopDebounce          = 45 * time.Second
 	waitReadyRestartFailThreshold int32 = 3
 	waitReadyPollInterval               = 500 * time.Millisecond
+
+	// sessionImagePullPolicy uses the node-local image when the tag is already present.
+	// Template tags in config/image-versions.json are immutable git SHAs; bump the tag to pull.
+	sessionImagePullPolicy = corev1.PullIfNotPresent
 )
 
 // templateHTTPProbe builds an HTTP GET probe at path on port with the given timings.
@@ -537,7 +541,7 @@ func (k *K8sDeployer) deployAppServer(ctx context.Context, cfg DeployConfig, _ c
 						Containers: []corev1.Container{{
 							Name:            "app-server",
 							Image:           appServerImage(cfg.Design.Template),
-							ImagePullPolicy: corev1.PullAlways,
+							ImagePullPolicy: sessionImagePullPolicy,
 							Ports:           []corev1.ContainerPort{{ContainerPort: 8080}},
 							Resources:       res,
 							ReadinessProbe:  templateReadyProbe(8080, 3, 5, 8, 3),
@@ -597,7 +601,7 @@ func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, _ core
 		ctr := corev1.Container{
 			Name:            "worker",
 			Image:           img,
-			ImagePullPolicy: corev1.PullAlways,
+			ImagePullPolicy: sessionImagePullPolicy,
 			Ports:           []corev1.ContainerPort{{ContainerPort: 8080}},
 			Resources:       res,
 			Env:             envMapToK8s(envVars),
@@ -860,7 +864,7 @@ func newCacheProxyContainer(image string, resources corev1.ResourceRequirements,
 	return corev1.Container{
 		Name:            "cache-proxy",
 		Image:           image,
-		ImagePullPolicy: corev1.PullAlways,
+		ImagePullPolicy: sessionImagePullPolicy,
 		Ports:           []corev1.ContainerPort{{ContainerPort: 8081}},
 		Resources:       resources,
 		Env:             env,

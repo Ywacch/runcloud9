@@ -23,9 +23,13 @@ func TestDeployLoadgen_CreatesDeploymentAndService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get deployment: %v", err)
 	}
-	img := dep.Spec.Template.Spec.Containers[0].Image
+	ctr := dep.Spec.Template.Spec.Containers[0]
+	img := ctr.Image
 	if img != "reg.example/test/loadgen:v1" && img != "reg.example/test/loadgen:git-e021199" {
 		t.Fatalf("image: got %q", img)
+	}
+	if got := ctr.ImagePullPolicy; got != corev1.PullIfNotPresent {
+		t.Fatalf("imagePullPolicy: got %q want %q", got, corev1.PullIfNotPresent)
 	}
 	req := dep.Spec.Template.Spec.Containers[0].Resources.Requests[corev1.ResourceCPU]
 	if req.String() != "250m" {
