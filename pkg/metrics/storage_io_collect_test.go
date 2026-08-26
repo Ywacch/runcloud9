@@ -62,3 +62,110 @@ func TestCollect_StorageIO_PostgresLive(t *testing.T) {
 		t.Fatalf("metadata: %+v", io)
 	}
 }
+
+func TestCollect_StorageIOSessionTotalsUseCounterSum(t *testing.T) {
+	t.Parallel()
+
+	var redisReadQ string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "redis_commands_total") &&
+			strings.Contains(q, "sum by (pod)") &&
+			strings.Contains(q, "get|mget|hget|hmget") &&
+			!strings.Contains(q, "rate("):
+			if strings.Contains(q, "increase(") {
+				t.Errorf("redis read total must not use increase(): %s", q)
+			}
+			redisReadQ = q
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				"redis-0": "50",
+			}))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
+	topo := TopologyFlags{HasCache: true, CacheEngine: "redis", CacheRole: "cache-aside"}
+	dm, err := c.Collect(context.Background(), "ns-redis-total", "url-shortener", topo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(redisReadQ, "sum by (pod)") {
+		t.Fatalf("want sum by (pod) counter, got %q", redisReadQ)
+	}
+	if strings.Contains(redisReadQ, "[9m]") {
+		t.Fatalf("redis total still windowed: %s", redisReadQ)
+	}
+	io := dm.Components["cache"].StorageIO
+	if io == nil {
+		t.Fatal("expected storageIo on cache")
+	}
+	if io.ReadTotal9m != 50 {
+		t.Fatalf("ReadTotal9m: want 50, got %v", io.ReadTotal9m)
+	}
+}
+
+func TestCollect_StorageIOSessionAccumulatorSurvivesPodKill(t *testing.T) {
+	t.Parallel()
+
+	scrape := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "redis_commands_total") &&
+			strings.Contains(q, "sum by (pod)") &&
+			strings.Contains(q, "get|mget|hget|hmget") &&
+			!strings.Contains(q, "rate("):
+			if strings.Contains(q, "increase(") {
+				t.Errorf("redis read total must not use increase(): %s", q)
+			}
+			scrape++
+			var pods map[string]string
+			switch scrape {
+			case 1:
+				pods = map[string]string{"redis-a": "100"}
+			case 2:
+				pods = map[string]string{"redis-b": "0"}
+			default:
+				pods = map[string]string{"redis-b": "20"}
+			}
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", pods))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
+	ctx := context.Background()
+	topo := TopologyFlags{HasCache: true, CacheEngine: "redis", CacheRole: "cache-aside"}
+
+	dm1, err := c.Collect(ctx, "ns-redis-kill", "url-shortener", topo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dm1.Components["cache"].StorageIO.ReadTotal9m; got != 100 {
+		t.Fatalf("collect 1 ReadTotal9m: want 100, got %v", got)
+	}
+
+	dm2, err := c.Collect(ctx, "ns-redis-kill", "url-shortener", topo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dm2.Components["cache"].StorageIO.ReadTotal9m; got != 100 {
+		t.Fatalf("collect 2 ReadTotal9m: want 100 (pod A gone), got %v", got)
+	}
+
+	dm3, err := c.Collect(ctx, "ns-redis-kill", "url-shortener", topo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dm3.Components["cache"].StorageIO.ReadTotal9m; got != 120 {
+		t.Fatalf("collect 3 ReadTotal9m: want 120, got %v", got)
+	}
+}

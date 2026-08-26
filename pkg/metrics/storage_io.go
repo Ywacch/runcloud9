@@ -129,19 +129,22 @@ func postgresUserTableWriteRateQuery(ns string) string {
 		` + sum(rate(pg_stat_user_tables_n_tup_del{` + filter + `}` + rw + `))`
 }
 
-// postgresUserTableReadTotal9mQuery sums rows read from user tables over the rolling 9m window.
+// postgresClusterTotalKey is the pseudo-pod key for pg_stat_user_tables totals (no pod label on exporter).
+const postgresClusterTotalKey = "postgres"
+
+// postgresUserTableReadTotal9mQuery sums cumulative rows read from user tables (cluster-level counter).
 func postgresUserTableReadTotal9mQuery(ns string) string {
 	filter := postgresUserTableMetricFilter(ns)
-	return `sum(increase(pg_stat_user_tables_seq_tup_read{` + filter + `}[9m]))` +
-		` + sum(increase(pg_stat_user_tables_idx_tup_fetch{` + filter + `}[9m]))`
+	return `sum(pg_stat_user_tables_seq_tup_read{` + filter + `})` +
+		` + sum(pg_stat_user_tables_idx_tup_fetch{` + filter + `})`
 }
 
-// postgresUserTableWriteTotal9mQuery sums row writes on user tables over the rolling 9m window.
+// postgresUserTableWriteTotal9mQuery sums cumulative row writes on user tables (cluster-level counter).
 func postgresUserTableWriteTotal9mQuery(ns string) string {
 	filter := postgresUserTableMetricFilter(ns)
-	return `sum(increase(pg_stat_user_tables_n_tup_ins{` + filter + `}[9m]))` +
-		` + sum(increase(pg_stat_user_tables_n_tup_upd{` + filter + `}[9m]))` +
-		` + sum(increase(pg_stat_user_tables_n_tup_del{` + filter + `}[9m]))`
+	return `sum(pg_stat_user_tables_n_tup_ins{` + filter + `})` +
+		` + sum(pg_stat_user_tables_n_tup_upd{` + filter + `})` +
+		` + sum(pg_stat_user_tables_n_tup_del{` + filter + `})`
 }
 
 // LookupStorageProvider returns the metrics provider for an engine id, if registered.
@@ -291,12 +294,12 @@ func redisStorageWriteRateQuery(ns, template string) string {
 
 func redisStorageReadTotal9mQuery(ns, template string) string {
 	cmd := redisStorageReadCmdPattern(template)
-	return fmt.Sprintf(`sum(increase(redis_commands_total{namespace=%q,cmd=~%q}[9m]))`, ns, cmd)
+	return fmt.Sprintf(`sum by (pod) (redis_commands_total{namespace=%q,cmd=~%q})`, ns, cmd)
 }
 
 func redisStorageWriteTotal9mQuery(ns, template string) string {
 	cmd := redisStorageWriteCmdPattern(template)
-	return fmt.Sprintf(`sum(increase(redis_commands_total{namespace=%q,cmd=~%q}[9m]))`, ns, cmd)
+	return fmt.Sprintf(`sum by (pod) (redis_commands_total{namespace=%q,cmd=~%q})`, ns, cmd)
 }
 
 func redisStorageReadLatencyQuery(ns, template string) string {
@@ -327,8 +330,10 @@ func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel strin
 	case StorageEngineRedis:
 		io.ReadRate, _ = c.query(ctx, redisStorageReadRateQuery(ns, template))
 		io.WriteRate, _ = c.query(ctx, redisStorageWriteRateQuery(ns, template))
-		io.ReadTotal9m, _ = c.query(ctx, redisStorageReadTotal9mQuery(ns, template))
-		io.WriteTotal9m, _ = c.query(ctx, redisStorageWriteTotal9mQuery(ns, template))
+		readByPod := c.queryMultiResult(ctx, redisStorageReadTotal9mQuery(ns, template), "pod")
+		writeByPod := c.queryMultiResult(ctx, redisStorageWriteTotal9mQuery(ns, template), "pod")
+		io.ReadTotal9m = c.sessionAcc.Observe(ns, seriesRedisRead, readByPod)
+		io.WriteTotal9m = c.sessionAcc.Observe(ns, seriesRedisWrite, writeByPod)
 		io.ReadLatency, _ = c.query(ctx, redisStorageReadLatencyQuery(ns, template))
 		io.WriteLatency, _ = c.query(ctx, redisStorageWriteLatencyQuery(ns, template))
 	default:
@@ -339,8 +344,12 @@ func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel strin
 			io.WriteRate, _ = c.query(ctx, prov.WriteQuery(ns))
 		}
 		if engine == StorageEnginePostgreSQL {
-			io.ReadTotal9m, _ = c.query(ctx, postgresUserTableReadTotal9mQuery(ns))
-			io.WriteTotal9m, _ = c.query(ctx, postgresUserTableWriteTotal9mQuery(ns))
+			readTotal, _ := c.query(ctx, postgresUserTableReadTotal9mQuery(ns))
+			writeTotal, _ := c.query(ctx, postgresUserTableWriteTotal9mQuery(ns))
+			readByPod := map[string]float64{postgresClusterTotalKey: readTotal}
+			writeByPod := map[string]float64{postgresClusterTotalKey: writeTotal}
+			io.ReadTotal9m = c.sessionAcc.Observe(ns, seriesPgRead, readByPod)
+			io.WriteTotal9m = c.sessionAcc.Observe(ns, seriesPgWrite, writeByPod)
 		}
 		if prov.ReadLatencyQuery != nil {
 			io.ReadLatency, _ = c.query(ctx, prov.ReadLatencyQuery(ns, nsSel))

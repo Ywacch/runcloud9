@@ -218,13 +218,33 @@ func TestPostgreSQLUserTableReadTotal9mQuery(t *testing.T) {
 	q := postgresUserTableReadTotal9mQuery("ns1")
 	for _, want := range []string{
 		`namespace="ns1"`,
-		"increase(pg_stat_user_tables_seq_tup_read",
-		"increase(pg_stat_user_tables_idx_tup_fetch",
-		"[9m]",
+		"pg_stat_user_tables_seq_tup_read",
+		"pg_stat_user_tables_idx_tup_fetch",
+		`sum(pg_stat_user_tables_seq_tup_read`,
 	} {
 		if !strings.Contains(q, want) {
 			t.Fatalf("read total query missing %q: %s", want, q)
 		}
+	}
+	if strings.Contains(q, "increase(") || strings.Contains(q, "[9m]") {
+		t.Fatalf("read total must not use increase window: %s", q)
+	}
+}
+
+func TestPostgreSQLUserTableWriteTotal9mQuery(t *testing.T) {
+	t.Parallel()
+	q := postgresUserTableWriteTotal9mQuery("ns1")
+	for _, want := range []string{
+		"pg_stat_user_tables_n_tup_ins",
+		"pg_stat_user_tables_n_tup_upd",
+		"pg_stat_user_tables_n_tup_del",
+	} {
+		if !strings.Contains(q, want) {
+			t.Fatalf("write total query missing %q: %s", want, q)
+		}
+	}
+	if strings.Contains(q, "increase(") || strings.Contains(q, "[9m]") {
+		t.Fatalf("write total must not use increase window: %s", q)
 	}
 }
 
@@ -232,10 +252,30 @@ func TestRedisStorageTotal9mQueries_SocialFeed(t *testing.T) {
 	t.Parallel()
 	readQ := redisStorageReadTotal9mQuery("ns-feed", "social-feed")
 	writeQ := redisStorageWriteTotal9mQuery("ns-feed", "social-feed")
-	if !strings.Contains(readQ, `cmd=~"zrevrange"`) || !strings.Contains(readQ, "[9m]") {
+	if !strings.Contains(readQ, `cmd=~"zrevrange"`) || !strings.Contains(readQ, "sum by (pod)") {
 		t.Fatalf("read total: %s", readQ)
 	}
-	if !strings.Contains(writeQ, `cmd=~"zadd|zremrangebyrank"`) || !strings.Contains(writeQ, "[9m]") {
+	if !strings.Contains(writeQ, `cmd=~"zadd|zremrangebyrank"`) || !strings.Contains(writeQ, "sum by (pod)") {
 		t.Fatalf("write total: %s", writeQ)
+	}
+	for _, q := range []string{readQ, writeQ} {
+		if strings.Contains(q, "increase(") || strings.Contains(q, "[9m]") {
+			t.Fatalf("redis total must not use increase window: %s", q)
+		}
+	}
+}
+
+func TestRedisStorageTotal9mQueries_UrlShortener(t *testing.T) {
+	t.Parallel()
+	readQ := redisStorageReadTotal9mQuery("ns-us", "url-shortener")
+	writeQ := redisStorageWriteTotal9mQuery("ns-us", "url-shortener")
+	if !strings.Contains(readQ, "get|mget|hget|hmget") {
+		t.Fatalf("read total cmd filter: %s", readQ)
+	}
+	if !strings.Contains(writeQ, "set|del|mset|hset|hdel") {
+		t.Fatalf("write total cmd filter: %s", writeQ)
+	}
+	if !strings.Contains(readQ, "sum by (pod)") {
+		t.Fatalf("read total must sum by pod: %s", readQ)
 	}
 }
