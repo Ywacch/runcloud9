@@ -47,10 +47,26 @@ func (a *sessionAccumulator) Cleanup(namespace string) {
 }
 
 // Observe ingests the current per-pod counter values for one series and returns
-// the running session sum. Empty nowByPod leaves state unchanged and returns the
+// the running session sum. The first scrape for a pod adds the full counter
+// (pod lifetime). Empty nowByPod leaves state unchanged and returns the
 // existing sum (e.g. when Prometheus is temporarily unavailable).
 func (a *sessionAccumulator) Observe(namespace, series string, nowByPod map[string]float64) float64 {
+	return a.observe(namespace, series, nowByPod, false)
+}
+
+// ObserveDeltas is like Observe but the first scrape for a pod only records a
+// baseline (sum is unchanged). Use this for engine counters that already include
+// seed dumps or process-lifetime exporter traffic. Later scrapes add deltas;
+// a counter reset still adds now.
+func (a *sessionAccumulator) ObserveDeltas(namespace, series string, nowByPod map[string]float64) float64 {
+	return a.observe(namespace, series, nowByPod, true)
+}
+
+func (a *sessionAccumulator) observe(namespace, series string, nowByPod map[string]float64, baselineFirst bool) float64 {
 	if a == nil || namespace == "" || series == "" {
+		if baselineFirst {
+			return 0
+		}
 		return sumByPod(nowByPod)
 	}
 	a.mu.Lock()
@@ -74,6 +90,10 @@ func (a *sessionAccumulator) Observe(namespace, series string, nowByPod map[stri
 	for pod, now := range nowByPod {
 		last, seen := sa.last[pod]
 		if !seen {
+			if baselineFirst {
+				sa.last[pod] = now
+				continue
+			}
 			last = 0
 		}
 		if now >= last {
