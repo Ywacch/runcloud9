@@ -99,7 +99,7 @@ const (
 type StorageIO struct {
 	ReadRate  float64 `json:"readRate"`
 	WriteRate float64 `json:"writeRate"`
-	// ReadTotal9m / WriteTotal9m are Prometheus increase(...[9m]) sums for session inspector totals.
+	// ReadTotal9m / WriteTotal9m are deployment-lifetime engine I/O totals (session accumulator).
 	ReadTotal9m  float64 `json:"readTotal9m,omitempty"`
 	WriteTotal9m float64 `json:"writeTotal9m,omitempty"`
 	Unit         string  `json:"unit"` // "rows/s" | "keys/s" | "ops/s"

@@ -8,6 +8,10 @@ const (
 	seriesSQL         = "sql"
 	seriesCacheHits   = "cache_hits"
 	seriesCacheMisses = "cache_misses"
+	seriesRedisRead   = "redis_read"
+	seriesRedisWrite  = "redis_write"
+	seriesPgRead      = "pg_read"
+	seriesPgWrite     = "pg_write"
 )
 
 type seriesAcc struct {
