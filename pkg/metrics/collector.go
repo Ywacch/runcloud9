@@ -60,6 +60,8 @@ type MetricsCollector struct {
 	podHealthMu     sync.Mutex
 	podHealth       map[string]*podHealthTracker
 	sessionAcc      *sessionAccumulator
+	pgHoldMu        sync.Mutex
+	pgHold          map[string]bool
 }
 
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
@@ -81,6 +83,7 @@ func NewMetricsCollector(prometheusURL string, lg loadgen.LoadGenerator, clients
 		consistency:   NewConsistencyDetector(observer),
 		mqRates:       make(map[string]rabbitCounterSnapshot),
 		sessionAcc:    newSessionAccumulator(),
+		pgHold:        make(map[string]bool),
 	}
 }
 
@@ -149,6 +152,7 @@ func (c *MetricsCollector) Cleanup(namespace string) {
 	if c.sessionAcc != nil {
 		c.sessionAcc.Cleanup(namespace)
 	}
+	c.OpenPostgresSession(namespace)
 }
 
 // RingBufferFor returns the snapshot ring for a namespace, or nil if none yet.

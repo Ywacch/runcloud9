@@ -283,3 +283,28 @@ func TestOrchestrate_LoadgenReadyWithClientset(t *testing.T) {
 		t.Fatalf("loadgen_status: want ready, got %q", got)
 	}
 }
+
+func TestDesignHasDBNode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		nodes []deployer.DeploymentNode
+		want  bool
+	}{
+		{name: "withDB", nodes: []deployer.DeploymentNode{{Type: "db"}}, want: true},
+		{name: "appOnly", nodes: []deployer.DeploymentNode{{Type: "app-server"}}, want: false},
+		{name: "empty", nodes: nil, want: false},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := designHasDBNode(deployer.DeploymentDesign{Nodes: tc.nodes})
+			if got != tc.want {
+				t.Fatalf("designHasDBNode: want %v, got %v", tc.want, got)
+			}
+		})
+	}
+}

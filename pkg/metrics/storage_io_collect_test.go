@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCollect_StorageIO_PostgresLive(t *testing.T) {
@@ -271,4 +272,67 @@ func TestRebaselinePostgresSession_NilSafe(t *testing.T) {
 	t.Parallel()
 	var c *MetricsCollector
 	c.RebaselinePostgresSession(context.Background(), "ns")
+	c.HoldPostgresSession("ns")
+	c.OpenPostgresSession("ns")
+	c.WaitAndRebaselinePostgresSession(context.Background(), "ns")
+}
+
+func TestCollect_StorageIO_PostgresHoldUntilStable(t *testing.T) {
+	oldInterval := pgSessionStableInterval
+	oldTimeout := pgSessionStableTimeout
+	pgSessionStableInterval = time.Millisecond
+	pgSessionStableTimeout = 2 * time.Second
+	t.Cleanup(func() {
+		pgSessionStableInterval = oldInterval
+		pgSessionStableTimeout = oldTimeout
+	})
+
+	var writeTotal = "1000000"
+	var readTotal = "2000000"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "pg_stat_user_tables_n_tup_ins") && !strings.Contains(q, "rate("):
+			_ = json.NewEncoder(w).Encode(promVectorJSON(writeTotal))
+		case strings.Contains(q, "pg_stat_user_tables_seq_tup_read") && !strings.Contains(q, "rate("):
+			_ = json.NewEncoder(w).Encode(promVectorJSON(readTotal))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
+	ctx := context.Background()
+	topo := TopologyFlags{HasDB: true, DBEngine: "postgresql", DBRole: "primary"}
+	const ns = "ns-pg-hold"
+
+	c.HoldPostgresSession(ns)
+
+	dm1, err := c.Collect(ctx, ns, "url-shortener", topo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dm1.Components["db"].StorageIO.WriteTotal9m; got != 0 {
+		t.Fatalf("held WriteTotal9m: want 0, got %v", got)
+	}
+	if got := dm1.Components["db"].StorageIO.ReadTotal9m; got != 0 {
+		t.Fatalf("held ReadTotal9m: want 0, got %v", got)
+	}
+
+	c.WaitAndRebaselinePostgresSession(ctx, ns)
+
+	writeTotal = "1000008"
+	readTotal = "2000012"
+	dm2, err := c.Collect(ctx, ns, "url-shortener", topo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dm2.Components["db"].StorageIO.WriteTotal9m; got != 8 {
+		t.Fatalf("after open WriteTotal9m: want 8, got %v", got)
+	}
+	if got := dm2.Components["db"].StorageIO.ReadTotal9m; got != 12 {
+		t.Fatalf("after open ReadTotal9m: want 12, got %v", got)
+	}
 }

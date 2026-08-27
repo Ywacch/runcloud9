@@ -322,26 +322,6 @@ func redisStorageWriteLatencyQuery(ns, template string) string {
 	)
 }
 
-// RebaselinePostgresSession zeros Postgres engine session totals and snapshots
-// current user-table counters so seed inserts are excluded from Session tiles.
-// Missing PromQL results clear last instead of recording zero, so the next
-// ObserveDeltas scrape becomes the baseline.
-func (c *MetricsCollector) RebaselinePostgresSession(ctx context.Context, ns string) {
-	if c == nil || ns == "" || c.sessionAcc == nil {
-		return
-	}
-	readByPod := map[string]float64{}
-	writeByPod := map[string]float64{}
-	if v, ok, err := c.queryScalar(ctx, postgresUserTableReadTotal9mQuery(ns)); err == nil && ok {
-		readByPod[postgresClusterTotalKey] = v
-	}
-	if v, ok, err := c.queryScalar(ctx, postgresUserTableWriteTotal9mQuery(ns)); err == nil && ok {
-		writeByPod[postgresClusterTotalKey] = v
-	}
-	c.sessionAcc.rebaseline(ns, seriesPgRead, readByPod)
-	c.sessionAcc.rebaseline(ns, seriesPgWrite, writeByPod)
-}
-
 // collectStorageIO runs registry PromQL and returns engine-native storage metrics.
 // template adjusts Redis read/write command filters (e.g. social-feed sorted-set ops).
 func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel string, engine StorageEngineID, template string) *StorageIO {
@@ -370,10 +350,12 @@ func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel strin
 		if engine == StorageEnginePostgreSQL {
 			readTotal, _ := c.query(ctx, postgresUserTableReadTotal9mQuery(ns))
 			writeTotal, _ := c.query(ctx, postgresUserTableWriteTotal9mQuery(ns))
-			readByPod := map[string]float64{postgresClusterTotalKey: readTotal}
-			writeByPod := map[string]float64{postgresClusterTotalKey: writeTotal}
-			io.ReadTotal9m = c.sessionAcc.ObserveDeltas(ns, seriesPgRead, readByPod)
-			io.WriteTotal9m = c.sessionAcc.ObserveDeltas(ns, seriesPgWrite, writeByPod)
+			if !c.postgresSessionHeld(ns) {
+				readByPod := map[string]float64{postgresClusterTotalKey: readTotal}
+				writeByPod := map[string]float64{postgresClusterTotalKey: writeTotal}
+				io.ReadTotal9m = c.sessionAcc.ObserveDeltas(ns, seriesPgRead, readByPod)
+				io.WriteTotal9m = c.sessionAcc.ObserveDeltas(ns, seriesPgWrite, writeByPod)
+			}
 		}
 		if prov.ReadLatencyQuery != nil {
 			io.ReadLatency, _ = c.query(ctx, prov.ReadLatencyQuery(ns, nsSel))
