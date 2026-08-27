@@ -797,7 +797,10 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	))
 	cmApp.ErrorRate = errRate
 
-	latBucketRate9m := fmt.Sprintf(`sum(rate(http_request_duration_seconds_bucket{%s}[9m])) by (le)`, nsSel)
+	// Session p99: rate() over elapsed deployment time (clamped 1m–30m), not a fixed 9m window.
+	// After an app-server pod kill, the quantile reflects only pods still live in Prometheus.
+	sessionP99Range := sessionP99PromRange(c.sessionAcc.Elapsed(ns, time.Now()))
+	latBucketRate9m := fmt.Sprintf(`sum(rate(http_request_duration_seconds_bucket{%s}%s)) by (le)`, nsSel, sessionP99Range)
 	p99_9m, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.99, %s)`, latBucketRate9m))
 	cmApp.P99Latency9m = p99_9m
 

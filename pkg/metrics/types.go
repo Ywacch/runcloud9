@@ -149,7 +149,8 @@ type ComponentMetrics struct {
 	// TotalErrors9m is the session sum of http_requests_total{status=~"5.."} on app-server pods.
 	// JSON name kept for the inspector contract.
 	TotalErrors9m float64 `json:"totalErrors9m,omitempty"`
-	// P99Latency9m is histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[9m])) in seconds.
+	// P99Latency9m is histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[elapsed])) in seconds.
+	// Elapsed session time is clamped to [1m, 30m]; JSON name kept for API compatibility.
 	P99Latency9m float64 `json:"p99Latency9m,omitempty"`
 	// Db* metrics come from app db_query_duration_seconds when scraped (app-server /metrics).
 	DbQueryRate    float64 `json:"dbQueryRate"`             // queries/sec; meaningful when dbQuerySource=app

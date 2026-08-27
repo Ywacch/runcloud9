@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func promVectorJSON(value string) map[string]any {
@@ -23,6 +24,11 @@ func promVectorJSON(value string) map[string]any {
 			},
 		},
 	}
+}
+
+func isSessionP99HistogramQuery(q string) bool {
+	return strings.Contains(q, "histogram_quantile(0.99") &&
+		strings.Contains(q, "http_request_duration_seconds_bucket")
 }
 
 func promMultiVectorJSON(labelKey string, series map[string]string) map[string]any {
@@ -165,6 +171,7 @@ func TestCollect_CacheSessionAccumulatorSurvivesPodKill(t *testing.T) {
 func TestCollect_Session9mAggregates(t *testing.T) {
 	t.Parallel()
 
+	var sessionP99Q string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
 		w.Header().Set("Content-Type", "application/json")
@@ -188,11 +195,8 @@ func TestCollect_Session9mAggregates(t *testing.T) {
 				"app-server-abc": "16240",
 				"app-server-def": "16105",
 			}))
-		case strings.Contains(q, `increase(http_requests_total{namespace="ns-test",status=~"5.."}[9m])`):
-			_ = json.NewEncoder(w).Encode(promVectorJSON("12"))
-		case strings.Contains(q, `sum(increase(http_requests_total{namespace="ns-test"}[9m]))`):
-			_ = json.NewEncoder(w).Encode(promVectorJSON("32345"))
-		case strings.Contains(q, `histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{namespace="ns-test"}[9m])) by (le))`):
+		case strings.Contains(q, `histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{namespace="ns-test"}`):
+			sessionP99Q = q
 			_ = json.NewEncoder(w).Encode(promVectorJSON("0.042"))
 		default:
 			_ = json.NewEncoder(w).Encode(promEmptyJSON())
@@ -204,6 +208,16 @@ func TestCollect_Session9mAggregates(t *testing.T) {
 	dm, err := c.Collect(context.Background(), "ns-test", "", TopologyFlags{})
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	if sessionP99Q == "" {
+		t.Fatal("session p99 query not issued")
+	}
+	if strings.Contains(sessionP99Q, "[9m]") {
+		t.Fatalf("session p99 still uses [9m]: %s", sessionP99Q)
+	}
+	if !strings.Contains(sessionP99Q, "[1m]") {
+		t.Fatalf("first tick should use at least [1m]: %s", sessionP99Q)
 	}
 
 	app := dm.Components["app-server"]
@@ -240,6 +254,64 @@ func TestCollect_Session9mAggregates(t *testing.T) {
 	}
 	if byPod["app-server-def"].TotalRequests != 16105 {
 		t.Fatalf("pod def totalRequests: want 16105, got %v", byPod["app-server-def"].TotalRequests)
+	}
+}
+
+func TestCollect_SessionP99UsesElapsedWindow(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		elapsed   time.Duration
+		wantRange string
+	}{
+		{name: "fifteenMinutes", elapsed: 15 * time.Minute, wantRange: "[15m]"},
+		{name: "maxCapThirtyMinutes", elapsed: 45 * time.Minute, wantRange: "[30m]"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var sessionP99Q string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				q := r.URL.Query().Get("query")
+				w.Header().Set("Content-Type", "application/json")
+				if strings.Contains(q, `histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{namespace="ns-p99"}`) {
+					sessionP99Q = q
+					_ = json.NewEncoder(w).Encode(promVectorJSON("0.050"))
+					return
+				}
+				_ = json.NewEncoder(w).Encode(promEmptyJSON())
+			}))
+			t.Cleanup(srv.Close)
+
+			c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
+			now := time.Now()
+			c.sessionAcc.mu.Lock()
+			c.sessionAcc.ns["ns-p99"] = &nsSession{
+				firstObserve: now.Add(-tc.elapsed),
+				series:       make(map[string]*seriesAcc),
+			}
+			c.sessionAcc.mu.Unlock()
+
+			dm, err := c.Collect(context.Background(), "ns-p99", "", TopologyFlags{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sessionP99Q == "" {
+				t.Fatal("session p99 query not issued")
+			}
+			if strings.Contains(sessionP99Q, "[9m]") {
+				t.Fatalf("session p99 still uses [9m]: %s", sessionP99Q)
+			}
+			if !strings.Contains(sessionP99Q, tc.wantRange) {
+				t.Fatalf("session p99 range: want %s in %s", tc.wantRange, sessionP99Q)
+			}
+			if got := dm.Components["app-server"].P99Latency9m; got != 0.050 {
+				t.Fatalf("P99Latency9m: want 0.050, got %v", got)
+			}
+		})
 	}
 }
 
@@ -413,7 +485,11 @@ func TestCollect_NoDeprecatedRateWindows(t *testing.T) {
 		if strings.Contains(q, "[15s]") {
 			t.Fatalf("query must not use deprecated [15s] rate window: %s", q)
 		}
-		if strings.Contains(q, "[1m]") {
+		if strings.Contains(q, "[9m]") {
+			t.Fatalf("query must not use deprecated [9m] session window: %s", q)
+		}
+		// Session p99 uses elapsed time clamped to [1m, 30m]; live rates stay [10s].
+		if strings.Contains(q, "[1m]") && !isSessionP99HistogramQuery(q) {
 			t.Fatalf("query must not use [1m] window: %s", q)
 		}
 	}
@@ -458,12 +534,13 @@ func TestCollect_HistogramQuantilesUsePromRateWindowBucketRate(t *testing.T) {
 	defer mu.Unlock()
 	for _, q := range seen {
 		if strings.Contains(q, "http_request_duration_seconds_bucket") && strings.Contains(q, "histogram_quantile") {
+			if strings.Contains(q, promRateRange()) {
+				continue
+			}
 			if strings.Contains(q, "[9m]") {
-				continue // session p99 (P99Latency9m)
+				t.Fatalf("session p99 should not use [9m]: %s", q)
 			}
-			if !strings.Contains(q, promRateRange()) {
-				t.Fatalf("histogram quantile query missing %s in bucket rate: %s", promRateRange(), q)
-			}
+			continue
 		}
 	}
 }

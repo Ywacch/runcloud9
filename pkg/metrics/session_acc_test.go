@@ -1,6 +1,9 @@
 package metrics
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestSessionAccumulator_Observe(t *testing.T) {
 	t.Parallel()
@@ -227,5 +230,116 @@ func TestSessionAccumulator_RebaselineDoesNotTouchHTTP(t *testing.T) {
 	}
 	if got := acc.ObserveDeltas(ns, seriesPgWrite, map[string]float64{"postgres": 1_000_008}); got != 8 {
 		t.Fatalf("pg after rebaseline: want 8, got %v", got)
+	}
+}
+
+func TestSessionAccumulator_FirstObserve(t *testing.T) {
+	t.Parallel()
+
+	acc := newSessionAccumulator()
+	const ns = "ns-first"
+	before := time.Now()
+	acc.Observe(ns, seriesHTTP, map[string]float64{"A": 1})
+
+	acc.mu.Lock()
+	fo := acc.ns[ns].firstObserve
+	acc.mu.Unlock()
+	if fo.IsZero() || fo.Before(before) {
+		t.Fatalf("firstObserve not set on Observe: %v", fo)
+	}
+
+	first := fo
+	acc.ObserveDeltas(ns, seriesPgRead, map[string]float64{"pg": 1})
+	acc.mu.Lock()
+	fo2 := acc.ns[ns].firstObserve
+	acc.mu.Unlock()
+	if !fo2.Equal(first) {
+		t.Fatalf("firstObserve changed on second series: %v -> %v", first, fo2)
+	}
+
+	acc.Cleanup(ns)
+	if got := acc.Elapsed(ns, time.Now()); got != 0 {
+		t.Fatalf("elapsed after cleanup: want 0, got %v", got)
+	}
+	acc.Observe(ns, seriesHTTP, map[string]float64{"A": 2})
+	acc.mu.Lock()
+	fo3 := acc.ns[ns].firstObserve
+	acc.mu.Unlock()
+	if fo3.IsZero() {
+		t.Fatal("firstObserve not set after cleanup+observe")
+	}
+}
+
+func TestSessionAccumulator_Elapsed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		elapsed  time.Duration
+		now      time.Time
+		wantZero bool
+		want     time.Duration
+	}{
+		{
+			name:     "unset",
+			wantZero: true,
+		},
+		{
+			name:    "fiveMinutes",
+			elapsed: 5 * time.Minute,
+			now:     time.Date(2026, 1, 1, 12, 15, 0, 0, time.UTC),
+			want:    5 * time.Minute,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			acc := newSessionAccumulator()
+			const ns = "ns-elapsed"
+			if tc.wantZero {
+				if got := acc.Elapsed(ns, time.Now()); got != 0 {
+					t.Fatalf("unset: want 0, got %v", got)
+				}
+				return
+			}
+			acc.mu.Lock()
+			acc.ns[ns] = &nsSession{
+				firstObserve: tc.now.Add(-tc.elapsed),
+				series:       make(map[string]*seriesAcc),
+			}
+			acc.mu.Unlock()
+			if got := acc.Elapsed(ns, tc.now); got != tc.want {
+				t.Fatalf("Elapsed: want %v, got %v", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestSessionP99PromRange(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input time.Duration
+		want  string
+	}{
+		{name: "zeroUsesMin", input: 0, want: "[1m]"},
+		{name: "subMinuteUsesMin", input: 30 * time.Second, want: "[1m]"},
+		{name: "fiveMinutes", input: 5 * time.Minute, want: "[5m]"},
+		{name: "fifteenMinutes", input: 15 * time.Minute, want: "[15m]"},
+		{name: "maxCap", input: 45 * time.Minute, want: "[30m]"},
+		{name: "exactMax", input: 30 * time.Minute, want: "[30m]"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := sessionP99PromRange(tc.input); got != tc.want {
+				t.Fatalf("sessionP99PromRange(%v): want %q, got %q", tc.input, tc.want, got)
+			}
+		})
 	}
 }
