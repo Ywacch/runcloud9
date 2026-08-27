@@ -216,3 +216,59 @@ func TestCollect_StorageIO_PostgresSessionBaselinesSeed(t *testing.T) {
 		t.Fatalf("collect 2 WriteTotal9m: want 8 (post-seed delta), got %v", got)
 	}
 }
+
+func TestCollect_StorageIO_PostgresRebaselineAfterSeed(t *testing.T) {
+	t.Parallel()
+
+	var writeTotal = "0"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "pg_stat_user_tables_n_tup_ins") && !strings.Contains(q, "rate("):
+			_ = json.NewEncoder(w).Encode(promVectorJSON(writeTotal))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
+	ctx := context.Background()
+	topo := TopologyFlags{HasDB: true, DBEngine: "postgresql", DBRole: "primary"}
+	const ns = "ns-pg-rebaseline"
+
+	dm1, err := c.Collect(ctx, ns, "url-shortener", topo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dm1.Components["db"].StorageIO.WriteTotal9m; got != 0 {
+		t.Fatalf("collect 1 WriteTotal9m: want 0 (pre-seed baseline), got %v", got)
+	}
+
+	writeTotal = "1000000"
+	dm2, err := c.Collect(ctx, ns, "url-shortener", topo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dm2.Components["db"].StorageIO.WriteTotal9m; got != 1_000_000 {
+		t.Fatalf("collect 2 WriteTotal9m: want 1000000 (seed in flight), got %v", got)
+	}
+
+	c.RebaselinePostgresSession(ctx, ns)
+
+	writeTotal = "1000008"
+	dm3, err := c.Collect(ctx, ns, "url-shortener", topo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dm3.Components["db"].StorageIO.WriteTotal9m; got != 8 {
+		t.Fatalf("collect 3 WriteTotal9m: want 8 (post-rebaseline), got %v", got)
+	}
+}
+
+func TestRebaselinePostgresSession_NilSafe(t *testing.T) {
+	t.Parallel()
+	var c *MetricsCollector
+	c.RebaselinePostgresSession(context.Background(), "ns")
+}

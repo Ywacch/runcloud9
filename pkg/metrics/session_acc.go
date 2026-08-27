@@ -62,6 +62,29 @@ func (a *sessionAccumulator) ObserveDeltas(namespace, series string, nowByPod ma
 	return a.observe(namespace, series, nowByPod, true)
 }
 
+// rebaseline zeros the session sum for series and replaces last with nowByPod.
+// Call after a seed dump so engine session totals exclude inserts that already
+// landed. An empty nowByPod clears last so the next ObserveDeltas scrape becomes
+// the baseline.
+func (a *sessionAccumulator) rebaseline(namespace, series string, nowByPod map[string]float64) {
+	if a == nil || namespace == "" || series == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	nsAcc, ok := a.ns[namespace]
+	if !ok {
+		nsAcc = &nsSession{series: make(map[string]*seriesAcc)}
+		a.ns[namespace] = nsAcc
+	}
+	last := make(map[string]float64, len(nowByPod))
+	for pod, now := range nowByPod {
+		last[pod] = now
+	}
+	nsAcc.series[series] = &seriesAcc{sum: 0, last: last}
+}
+
 func (a *sessionAccumulator) observe(namespace, series string, nowByPod map[string]float64, baselineFirst bool) float64 {
 	if a == nil || namespace == "" || series == "" {
 		if baselineFirst {

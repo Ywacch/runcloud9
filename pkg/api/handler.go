@@ -606,6 +606,9 @@ func (h *Handler) orchestrate(
 		} else {
 			seeded = res.seeded
 			seedingStatus = "done"
+			if seeded && h.metricsCollector != nil {
+				h.metricsCollector.RebaselinePostgresSession(ctx, namespace)
+			}
 		}
 	}
 
