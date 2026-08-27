@@ -506,6 +506,11 @@ func (h *Handler) orchestrate(
 	}
 	h.emitProvisionStatus(namespace, "deploying", componentStatus, "pending", loadgenStatusPending(h.clientset))
 
+	if h.seeder != nil && h.metricsCollector != nil && designHasDBNode(design) {
+		h.metricsCollector.HoldPostgresSession(namespace)
+		defer h.metricsCollector.OpenPostgresSession(namespace)
+	}
+
 	type dumpResult struct {
 		path string
 		err  error
@@ -603,11 +608,18 @@ func (h *Handler) orchestrate(
 		if res.err != nil {
 			log.Printf("seeding failed for namespace=%s (continuing deployment): %v", namespace, res.err)
 			seedingStatus = "failed"
+			if h.metricsCollector != nil {
+				h.metricsCollector.OpenPostgresSession(namespace)
+			}
 		} else {
 			seeded = res.seeded
 			seedingStatus = "done"
-			if seeded && h.metricsCollector != nil {
-				h.metricsCollector.RebaselinePostgresSession(ctx, namespace)
+			if h.metricsCollector != nil {
+				if seeded {
+					h.metricsCollector.WaitAndRebaselinePostgresSession(ctx, namespace)
+				} else {
+					h.metricsCollector.OpenPostgresSession(namespace)
+				}
 			}
 		}
 	}
@@ -683,6 +695,15 @@ func (h *Handler) emitProvisionStatus(namespace, phase string, components map[st
 func layerContainsType(layer []deployer.DeploymentNode, nodeType string) bool {
 	for _, n := range layer {
 		if n.Type == nodeType {
+			return true
+		}
+	}
+	return false
+}
+
+func designHasDBNode(design deployer.DeploymentDesign) bool {
+	for _, n := range design.Nodes {
+		if n.Type == "db" {
 			return true
 		}
 	}
