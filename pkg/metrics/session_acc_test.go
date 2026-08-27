@@ -102,6 +102,7 @@ func TestSessionAccumulator_NilSafe(t *testing.T) {
 		t.Fatalf("nil acc ObserveDeltas: want 0, got %v", got)
 	}
 	acc.Cleanup("ns") // must not panic
+	acc.rebaseline("ns", seriesPgWrite, map[string]float64{"postgres": 1})
 }
 
 func TestSessionAccumulator_ObserveDeltas(t *testing.T) {
@@ -153,5 +154,78 @@ func TestSessionAccumulator_ObserveDeltas(t *testing.T) {
 				t.Fatalf("ObserveDeltas: want %v, got %v", tc.want, got)
 			}
 		})
+	}
+}
+
+func TestSessionAccumulator_Rebaseline(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		before   []map[string]float64
+		snapshot map[string]float64
+		after    []map[string]float64
+		want     float64
+	}{
+		{
+			name:     "dropsSeedThenCountsDelta",
+			before:   []map[string]float64{{"postgres": 0}, {"postgres": 1_000_000}},
+			snapshot: map[string]float64{"postgres": 1_000_000},
+			after:    []map[string]float64{{"postgres": 1_000_008}},
+			want:     8,
+		},
+		{
+			name:     "emptySnapshotRebaselinesNextScrape",
+			before:   []map[string]float64{{"postgres": 0}, {"postgres": 1_000_000}},
+			snapshot: nil,
+			after:    []map[string]float64{{"postgres": 1_000_000}, {"postgres": 1_000_008}},
+			want:     8,
+		},
+		{
+			name:     "idempotentWhenCountersUnchanged",
+			before:   []map[string]float64{{"postgres": 1_000_000}},
+			snapshot: map[string]float64{"postgres": 1_000_000},
+			after:    []map[string]float64{{"postgres": 1_000_000}},
+			want:     0,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			acc := newSessionAccumulator()
+			const ns = "ns-rebaseline"
+			for _, scrape := range tc.before {
+				_ = acc.ObserveDeltas(ns, seriesPgWrite, scrape)
+			}
+			acc.rebaseline(ns, seriesPgWrite, tc.snapshot)
+			var got float64
+			for _, scrape := range tc.after {
+				got = acc.ObserveDeltas(ns, seriesPgWrite, scrape)
+			}
+			if got != tc.want {
+				t.Fatalf("after Rebaseline: want %v, got %v", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestSessionAccumulator_RebaselineDoesNotTouchHTTP(t *testing.T) {
+	t.Parallel()
+
+	acc := newSessionAccumulator()
+	const ns = "ns-rebaseline-http"
+	if got := acc.Observe(ns, seriesHTTP, map[string]float64{"app": 40}); got != 40 {
+		t.Fatalf("http before: want 40, got %v", got)
+	}
+	_ = acc.ObserveDeltas(ns, seriesPgWrite, map[string]float64{"postgres": 0})
+	_ = acc.ObserveDeltas(ns, seriesPgWrite, map[string]float64{"postgres": 1_000_000})
+	acc.rebaseline(ns, seriesPgWrite, map[string]float64{"postgres": 1_000_000})
+	if got := acc.Observe(ns, seriesHTTP, map[string]float64{"app": 45}); got != 45 {
+		t.Fatalf("http after pg rebaseline: want 45, got %v", got)
+	}
+	if got := acc.ObserveDeltas(ns, seriesPgWrite, map[string]float64{"postgres": 1_000_008}); got != 8 {
+		t.Fatalf("pg after rebaseline: want 8, got %v", got)
 	}
 }
