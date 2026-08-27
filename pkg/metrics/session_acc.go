@@ -1,6 +1,10 @@
 package metrics
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+	"time"
+)
 
 const (
 	seriesHTTP        = "http"
@@ -14,13 +18,20 @@ const (
 	seriesPgWrite     = "pg_write"
 )
 
+// sessionP99MinWindow is the minimum PromQL range for session p99 histogram rates.
+const sessionP99MinWindow = 1 * time.Minute
+
+// sessionP99MaxWindow matches the internal-tier SessionCapMins ceiling in pkg/store/user_tier.go.
+const sessionP99MaxWindow = 30 * time.Minute
+
 type seriesAcc struct {
 	sum  float64
 	last map[string]float64
 }
 
 type nsSession struct {
-	series map[string]*seriesAcc
+	series       map[string]*seriesAcc
+	firstObserve time.Time // set on first Observe/ObserveDeltas for this namespace
 }
 
 // sessionAccumulator tracks deployment-lifetime counter totals per namespace.
@@ -44,6 +55,36 @@ func (a *sessionAccumulator) Cleanup(namespace string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	delete(a.ns, namespace)
+}
+
+// Elapsed returns wall time since the first Observe/ObserveDeltas for namespace.
+// Returns 0 when no scrape has been recorded yet (caller should clamp to sessionP99MinWindow).
+func (a *sessionAccumulator) Elapsed(namespace string, now time.Time) time.Duration {
+	if a == nil || namespace == "" {
+		return 0
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	nsAcc, ok := a.ns[namespace]
+	if !ok || nsAcc.firstObserve.IsZero() {
+		return 0
+	}
+	return now.Sub(nsAcc.firstObserve)
+}
+
+// sessionP99PromRange formats elapsed session time as a PromQL range vector, clamped to [1m, 30m].
+func sessionP99PromRange(elapsed time.Duration) string {
+	if elapsed < sessionP99MinWindow {
+		elapsed = sessionP99MinWindow
+	}
+	if elapsed > sessionP99MaxWindow {
+		elapsed = sessionP99MaxWindow
+	}
+	mins := int(elapsed / time.Minute)
+	if mins < 1 {
+		mins = 1
+	}
+	return fmt.Sprintf("[%dm]", mins)
 }
 
 // Observe ingests the current per-pod counter values for one series and returns
@@ -108,6 +149,10 @@ func (a *sessionAccumulator) observe(namespace, series string, nowByPod map[stri
 
 	if len(nowByPod) == 0 {
 		return sa.sum
+	}
+
+	if nsAcc.firstObserve.IsZero() {
+		nsAcc.firstObserve = time.Now()
 	}
 
 	for pod, now := range nowByPod {
