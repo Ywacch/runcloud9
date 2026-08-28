@@ -3,7 +3,7 @@ package postgres
 import "testing"
 
 func TestReadReplicaHostsFromEnv(t *testing.T) {
-	t.Parallel()
+	// Cannot use t.Parallel with t.Setenv (Go 1.25).
 	tests := []struct {
 		name     string
 		env      string
