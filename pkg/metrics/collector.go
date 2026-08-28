@@ -1089,7 +1089,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 				c.debugCompare("db", "storage_write_rows", cm.StorageIO.WriteRate, 0,
 					"pg_stat_user_tables ins+upd+del", "none")
 			}
-			dbLayerSplit := c.collectDBReplicaLayers(ctx, ns)
+			dbLayerSplit := c.collectDBReplicaLayers(ctx, ns, cm.StorageIO)
 			applyDBReplicaLayers(&cm, dbLayerSplit)
 			needReplica := len(dbLayerSplit.replicaPods) > 0
 			needCache := topo.HasCache

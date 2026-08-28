@@ -135,7 +135,7 @@ func TestCollectDBReplicaLayers_primaryResourceQueriesExcludeReplicas(t *testing
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
-	_ = c.collectDBReplicaLayers(context.Background(), ns)
+	_ = c.collectDBReplicaLayers(context.Background(), ns, nil)
 	if primaryCPUQuery == "" {
 		t.Fatal("expected primary CPU PromQL query")
 	}
@@ -201,7 +201,7 @@ func TestCollectDBReplicaLayers_replicaResourceQueriesUseReplicaContainer(t *tes
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
-	split := c.collectDBReplicaLayers(context.Background(), ns)
+	split := c.collectDBReplicaLayers(context.Background(), ns, nil)
 	if len(split.replicas) != 1 {
 		t.Fatalf("replicas: got %d want 1", len(split.replicas))
 	}
@@ -272,7 +272,7 @@ func TestCollectDBReplicaLayers_layerRequestRates(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
-	split := c.collectDBReplicaLayers(context.Background(), ns)
+	split := c.collectDBReplicaLayers(context.Background(), ns, nil)
 	if split.primary.RequestRate != 20 {
 		t.Fatalf("primary requestRate: got %v, want 20", split.primary.RequestRate)
 	}
@@ -331,7 +331,7 @@ func TestCollectDBReplicaLayers_zeroReplicaPods(t *testing.T) {
 	t.Parallel()
 	clientset := fake.NewSimpleClientset()
 	c := NewMetricsCollector("", nil, clientset, nil, nil)
-	split := c.collectDBReplicaLayers(context.Background(), "cloud9-ns")
+	split := c.collectDBReplicaLayers(context.Background(), "cloud9-ns", nil)
 	if len(split.replicaPods) != 0 {
 		t.Fatalf("replicaPods: want none, got %v", split.replicaPods)
 	}
@@ -390,7 +390,7 @@ func TestCollectDBReplicaLayers_lagFromPrimaryCustomQuery(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
-	split := c.collectDBReplicaLayers(context.Background(), ns)
+	split := c.collectDBReplicaLayers(context.Background(), ns, nil)
 	if replicaLagSeconds(split.replicas[0]) != 1.25 {
 		t.Fatalf("lag: got %v, want 1.25", replicaLagSeconds(split.replicas[0]))
 	}
@@ -446,7 +446,7 @@ func TestCollectDBReplicaLayers_fallbackWhenCustomSeriesMissing(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
-	split := c.collectDBReplicaLayers(context.Background(), ns)
+	split := c.collectDBReplicaLayers(context.Background(), ns, nil)
 	if replicaLagSeconds(split.replicas[0]) != 0.75 {
 		t.Fatalf("fallback lag: got %v, want 0.75", replicaLagSeconds(split.replicas[0]))
 	}
@@ -570,5 +570,290 @@ func TestCollect_StorageProfileWithReplicaLayers(t *testing.T) {
 	}
 	if replicaLagSeconds(db.Layers[1]) != 0.05 {
 		t.Fatalf("replica layer: %+v", db.Layers[1])
+	}
+}
+
+func TestPostgresXactTotalByPodQuery(t *testing.T) {
+	t.Parallel()
+	q := postgresXactTotalByPodQuery("ns-xact-total")
+	for _, want := range []string{
+		`namespace="ns-xact-total"`,
+		`sum by (pod)`,
+		`pg_stat_database_xact_commit`,
+		`pg_stat_database_xact_rollback`,
+		`datname!=""`,
+	} {
+		if !strings.Contains(q, want) {
+			t.Fatalf("missing %q in query: %s", want, q)
+		}
+	}
+	if strings.Contains(q, "rate(") {
+		t.Fatalf("xact total query should not use rate(): %s", q)
+	}
+}
+
+func TestPostgresReplicaUserTableReadRateQuery_targetsReplicaPod(t *testing.T) {
+	t.Parallel()
+	replicaPod := "postgres-replica-scan"
+	q := postgresReplicaUserTableReadRateQuery("ns-scan", replicaPod)
+	for _, want := range []string{
+		`namespace="ns-scan"`,
+		`pod=~"^postgres-replica-scan$"`,
+		`pg_stat_user_tables_seq_tup_read`,
+		`pg_stat_user_tables_idx_tup_fetch`,
+		`relname!~"_c9_.*"`,
+	} {
+		if !strings.Contains(q, want) {
+			t.Fatalf("missing %q in query: %s", want, q)
+		}
+	}
+	if strings.Contains(q, `pod!~"postgres-replica.*"`) {
+		t.Fatalf("replica scan query should target replica pod, not exclude replicas: %s", q)
+	}
+}
+
+func TestCollectDBReplicaLayers_engineMetrics(t *testing.T) {
+	t.Parallel()
+	ns := "cloud9-engine-layers-ns"
+	replicaPod := "postgres-replica-engine"
+	primaryPod := "postgres-primary-engine"
+	desired := int32(1)
+	clusterIO := &StorageIO{
+		Unit:         "rows/s",
+		Source:       "postgres_exporter",
+		ReadRate:     100,
+		WriteRate:    40,
+		ReadTotal9m:  5000,
+		WriteTotal9m: 900,
+		ReadLabel:    "Rows scanned/s",
+		WriteLabel:   "Rows written/s",
+	}
+
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      dbReplicaDeploymentName,
+			Namespace: ns,
+			Labels:    map[string]string{"app": dbReplicaAppLabel},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &desired,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": dbReplicaAppLabel}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": dbReplicaAppLabel, "deployment": ns}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "postgres", Image: "postgres:16"}}},
+			},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      replicaPod,
+			Namespace: ns,
+			Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+		},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+		},
+	}
+	clientset := fake.NewSimpleClientset(deployment, pod)
+
+	var replicaScanQuery string
+	xactTotals := map[string]string{
+		primaryPod: "1000",
+		replicaPod: "200",
+	}
+	readTotal := "800"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "pg_stat_database_xact_commit") && !strings.Contains(q, "rate("):
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", xactTotals))
+		case strings.Contains(q, "pg_stat_activity_count"):
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				primaryPod: "3",
+				replicaPod: "1",
+			}))
+		case strings.Contains(q, "pg_stat_user_tables_seq_tup_read") && strings.Contains(q, replicaPod):
+			replicaScanQuery = q
+			if strings.Contains(q, "rate(") {
+				_ = json.NewEncoder(w).Encode(promVectorJSON("12.5"))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(promVectorJSON(readTotal))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
+	_ = c.collectDBReplicaLayers(context.Background(), ns, clusterIO)
+	split := c.collectDBReplicaLayers(context.Background(), ns, clusterIO)
+
+	if replicaScanQuery == "" {
+		t.Fatal("expected replica user-table scan PromQL query")
+	}
+	if !strings.Contains(replicaScanQuery, `pod=~"^`+replicaPod+`$"`) {
+		t.Fatalf("replica scan query should target replica pod: %s", replicaScanQuery)
+	}
+
+	if split.primary.StorageIO == nil {
+		t.Fatal("primary layer should copy cluster storageIo")
+	}
+	if split.primary.StorageIO.ReadRate != 100 || split.primary.StorageIO.WriteRate != 40 {
+		t.Fatalf("primary storageIo: %+v", split.primary.StorageIO)
+	}
+	if split.primary.DbActiveConnections != 3 {
+		t.Fatalf("primary connections: got %v want 3", split.primary.DbActiveConnections)
+	}
+
+	if len(split.replicas) != 1 {
+		t.Fatalf("replicas: got %d want 1", len(split.replicas))
+	}
+	replica := split.replicas[0]
+	if replica.DbActiveConnections != 1 {
+		t.Fatalf("replica connections: got %v want 1", replica.DbActiveConnections)
+	}
+	if replica.StorageIO == nil {
+		t.Fatal("replica layer should have read-only storageIo")
+	}
+	if replica.StorageIO.ReadRate != 12.5 {
+		t.Fatalf("replica readRate: got %v want 12.5", replica.StorageIO.ReadRate)
+	}
+	if replica.StorageIO.WriteRate != 0 || replica.StorageIO.WriteTotal9m != 0 {
+		t.Fatalf("replica layer should omit write I/O: %+v", replica.StorageIO)
+	}
+
+	// Baseline scrape then unchanged counters → session totals stay 0.
+	if split.replicas[0].TotalRequests != 0 {
+		t.Fatalf("replica xact session after baseline with stable counter: got %v want 0", split.replicas[0].TotalRequests)
+	}
+	if split.replicas[0].StorageIO.ReadTotal9m != 0 {
+		t.Fatalf("replica read session after baseline with stable counter: got %v want 0", split.replicas[0].StorageIO.ReadTotal9m)
+	}
+
+	xactTotals[replicaPod] = "250"
+	readTotal = "850"
+	split2 := c.collectDBReplicaLayers(context.Background(), ns, clusterIO)
+	if split2.replicas[0].TotalRequests != 50 {
+		t.Fatalf("replica xact session delta: got %v want 50", split2.replicas[0].TotalRequests)
+	}
+	if split2.replicas[0].StorageIO.ReadTotal9m != 50 {
+		t.Fatalf("replica read session delta: got %v want 50", split2.replicas[0].StorageIO.ReadTotal9m)
+	}
+}
+
+func TestCollectDBReplicaLayers_xactSessionRebaselineOnCounterDrop(t *testing.T) {
+	t.Parallel()
+	ns := "cloud9-xact-rebaseline-ns"
+	replicaPod := "postgres-replica-xact"
+	desired := int32(1)
+
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: dbReplicaDeploymentName, Namespace: ns},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &desired,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": dbReplicaAppLabel}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": dbReplicaAppLabel, "deployment": ns}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "postgres", Image: "postgres:16"}}},
+			},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      replicaPod,
+			Namespace: ns,
+			Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+		},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+		},
+	}
+	clientset := fake.NewSimpleClientset(deployment, pod)
+
+	xactTotal := "500"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(q, "pg_stat_database_xact_commit") && !strings.Contains(q, "rate(") {
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				replicaPod: xactTotal,
+			}))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(promEmptyJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
+	_ = c.collectDBReplicaLayers(context.Background(), ns, nil)
+	split := c.collectDBReplicaLayers(context.Background(), ns, nil)
+	if split.replicas[0].TotalRequests != 0 {
+		t.Fatalf("after baseline+delta expect 0 delta on stable counter, got %v", split.replicas[0].TotalRequests)
+	}
+
+	xactTotal = "50" // pod restart counter drop
+	split = c.collectDBReplicaLayers(context.Background(), ns, nil)
+	if split.replicas[0].TotalRequests != 50 {
+		t.Fatalf("counter drop should rebaseline session total to now, got %v want 50", split.replicas[0].TotalRequests)
+	}
+}
+
+func TestCollectDBReplicaLayers_postgresSessionHeldSkipsLayerTotals(t *testing.T) {
+	t.Parallel()
+	ns := "cloud9-pg-held-ns"
+	replicaPod := "postgres-replica-held"
+	desired := int32(1)
+
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: dbReplicaDeploymentName, Namespace: ns},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &desired,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": dbReplicaAppLabel}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": dbReplicaAppLabel, "deployment": ns}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "postgres", Image: "postgres:16"}}},
+			},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      replicaPod,
+			Namespace: ns,
+			Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+		},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+		},
+	}
+	clientset := fake.NewSimpleClientset(deployment, pod)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(q, "pg_stat_database_xact_commit") && !strings.Contains(q, "rate(") {
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{replicaPod: "999"}))
+			return
+		}
+		if strings.Contains(q, "pg_stat_user_tables_seq_tup_read") && strings.Contains(q, replicaPod) && !strings.Contains(q, "rate(") {
+			_ = json.NewEncoder(w).Encode(promVectorJSON("777"))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(promEmptyJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
+	c.HoldPostgresSession(ns)
+	split := c.collectDBReplicaLayers(context.Background(), ns, nil)
+	if split.primary.TotalRequests != 0 {
+		t.Fatalf("held session should skip primary xact totals, got %v", split.primary.TotalRequests)
+	}
+	if split.replicas[0].TotalRequests != 0 {
+		t.Fatalf("held session should skip replica xact totals, got %v", split.replicas[0].TotalRequests)
+	}
+	if split.replicas[0].StorageIO == nil || split.replicas[0].StorageIO.ReadTotal9m != 0 {
+		t.Fatalf("held session should skip replica read totals, got %+v", split.replicas[0].StorageIO)
 	}
 }
