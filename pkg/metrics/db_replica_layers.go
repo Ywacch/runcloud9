@@ -338,6 +338,7 @@ func (c *MetricsCollector) collectDBReplicaLayers(ctx context.Context, ns string
 		out.replicas = append(out.replicas, replicaLayer)
 	}
 	c.enrichDBLayerEngineMetrics(ctx, ns, &out, clusterStorageIO)
+	c.enrichDBLayerAppSQL(ctx, ns, &out)
 	return out
 }
 
