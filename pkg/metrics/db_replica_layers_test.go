@@ -11,12 +11,32 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
 func float64Ptr(v float64) *float64 {
 	return &v
+}
+
+func fakeDBReplicaStatefulSet(ns string, desired int32) *appsv1.StatefulSet {
+	return &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      dbReplicaStatefulSetName,
+			Namespace: ns,
+			Labels:    map[string]string{"app": dbReplicaAppLabel},
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: &desired,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": dbReplicaAppLabel}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": dbReplicaAppLabel, "deployment": ns}},
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{
+					Name:  dbReplicaContainerName,
+					Image: "postgres:16",
+				}}},
+			},
+		},
+	}
 }
 
 func replicaLagSeconds(layer ComponentLayerMetrics) float64 {
@@ -87,19 +107,49 @@ func TestMapPostgresLayerRequestRates(t *testing.T) {
 	}
 }
 
+func TestListDBReplicaPods_statefulSetDesiredCount(t *testing.T) {
+	t.Parallel()
+	ns := "cloud9-sts-count-ns"
+	desired := int32(2)
+	clientset := fake.NewSimpleClientset(
+		fakeDBReplicaStatefulSet(ns, desired),
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "postgres-replica-0",
+				Namespace: ns,
+				Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+			},
+			Status: corev1.PodStatus{
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			},
+		},
+	)
+	c := NewMetricsCollector("", nil, clientset, nil, nil)
+	names, _, counts := c.listDBReplicaPods(context.Background(), ns)
+	if counts.Desired != 2 {
+		t.Fatalf("desired: got %d want 2", counts.Desired)
+	}
+	if counts.Ready != 1 {
+		t.Fatalf("ready: got %d want 1", counts.Ready)
+	}
+	if len(names) != 1 || names[0] != "postgres-replica-0" {
+		t.Fatalf("names: got %v", names)
+	}
+}
+
 func TestCollectDBReplicaLayers_primaryResourceQueriesExcludeReplicas(t *testing.T) {
 	t.Parallel()
 	ns := "cloud9-primary-only-ns"
 	replicaPod := "postgres-replica-only"
 	desired := int32(1)
 
-	deployment := &appsv1.Deployment{
+	statefulSet := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      dbReplicaDeploymentName,
+			Name:      dbReplicaStatefulSetName,
 			Namespace: ns,
 			Labels:    map[string]string{"app": dbReplicaAppLabel},
 		},
-		Spec: appsv1.DeploymentSpec{
+		Spec: appsv1.StatefulSetSpec{
 			Replicas: &desired,
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": dbReplicaAppLabel}},
 			Template: corev1.PodTemplateSpec{
@@ -118,7 +168,7 @@ func TestCollectDBReplicaLayers_primaryResourceQueriesExcludeReplicas(t *testing
 			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
 		},
 	}
-	clientset := fake.NewSimpleClientset(deployment, pod)
+	clientset := fake.NewSimpleClientset(statefulSet, pod)
 
 	var primaryCPUQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -150,13 +200,13 @@ func TestCollectDBReplicaLayers_replicaResourceQueriesUseReplicaContainer(t *tes
 	replicaPod := "postgres-replica-metrics"
 	desired := int32(1)
 
-	deployment := &appsv1.Deployment{
+	statefulSet := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      dbReplicaDeploymentName,
+			Name:      dbReplicaStatefulSetName,
 			Namespace: ns,
 			Labels:    map[string]string{"app": dbReplicaAppLabel},
 		},
-		Spec: appsv1.DeploymentSpec{
+		Spec: appsv1.StatefulSetSpec{
 			Replicas: &desired,
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": dbReplicaAppLabel}},
 			Template: corev1.PodTemplateSpec{
@@ -178,7 +228,7 @@ func TestCollectDBReplicaLayers_replicaResourceQueriesUseReplicaContainer(t *tes
 			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
 		},
 	}
-	clientset := fake.NewSimpleClientset(deployment, pod)
+	clientset := fake.NewSimpleClientset(statefulSet, pod)
 
 	var replicaCPUQuery, replicaMemQuery, replicaCPULimitQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -229,13 +279,13 @@ func TestCollectDBReplicaLayers_layerRequestRates(t *testing.T) {
 	primaryPod := "postgres-primary"
 	desired := int32(1)
 
-	deployment := &appsv1.Deployment{
+	statefulSet := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      dbReplicaDeploymentName,
+			Name:      dbReplicaStatefulSetName,
 			Namespace: ns,
 			Labels:    map[string]string{"app": dbReplicaAppLabel},
 		},
-		Spec: appsv1.DeploymentSpec{
+		Spec: appsv1.StatefulSetSpec{
 			Replicas: &desired,
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": dbReplicaAppLabel}},
 			Template: corev1.PodTemplateSpec{
@@ -254,7 +304,7 @@ func TestCollectDBReplicaLayers_layerRequestRates(t *testing.T) {
 			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
 		},
 	}
-	clientset := fake.NewSimpleClientset(deployment, pod)
+	clientset := fake.NewSimpleClientset(statefulSet, pod)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
@@ -297,7 +347,7 @@ func TestApplyDBReplicaLayers_withReplicas(t *testing.T) {
 	t.Parallel()
 	cm := ComponentMetrics{Component: "db", StorageRole: StorageRolePrimary}
 	split := dbReplicaLayerSplit{
-		replicaPods: []string{"postgres-replica-abc"},
+		replicaPods: []string{"postgres-replica-0"},
 		counts:      BackendReplicas{Desired: 1, Ready: 1},
 		primary: ComponentLayerMetrics{
 			ID:     dbLayerIDPostgresPrimary,
@@ -305,7 +355,7 @@ func TestApplyDBReplicaLayers_withReplicas(t *testing.T) {
 			Engine: dbLayerEnginePostgreSQL,
 		},
 		replicas: []ComponentLayerMetrics{{
-			ID:                    "postgres-replica-abc",
+			ID:                    "postgres-replica-0",
 			Role:                  dbLayerRoleReplica,
 			Engine:                dbLayerEnginePostgreSQL,
 			ReplicationLagSeconds: float64Ptr(0.42),
@@ -343,13 +393,13 @@ func TestCollectDBReplicaLayers_lagFromPrimaryCustomQuery(t *testing.T) {
 	replicaPod := "postgres-replica-7d8f9"
 	desired := int32(1)
 
-	deployment := &appsv1.Deployment{
+	statefulSet := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      dbReplicaDeploymentName,
+			Name:      dbReplicaStatefulSetName,
 			Namespace: ns,
 			Labels:    map[string]string{"app": dbReplicaAppLabel},
 		},
-		Spec: appsv1.DeploymentSpec{
+		Spec: appsv1.StatefulSetSpec{
 			Replicas: &desired,
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": dbReplicaAppLabel}},
 			Template: corev1.PodTemplateSpec{
@@ -371,7 +421,7 @@ func TestCollectDBReplicaLayers_lagFromPrimaryCustomQuery(t *testing.T) {
 			}},
 		},
 	}
-	clientset := fake.NewSimpleClientset(deployment, pod)
+	clientset := fake.NewSimpleClientset(statefulSet, pod)
 
 	var lagQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -408,12 +458,16 @@ func TestCollectDBReplicaLayers_lagFromPrimaryCustomQuery(t *testing.T) {
 func TestCollectDBReplicaLayers_fallbackWhenCustomSeriesMissing(t *testing.T) {
 	t.Parallel()
 	ns := "cloud9-fallback-ns"
-	replicaPod := "postgres-replica-fb"
+	replicaPod := "postgres-replica-0"
 	desired := int32(1)
 
-	deployment := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: dbReplicaDeploymentName, Namespace: ns},
-		Spec: appsv1.DeploymentSpec{
+	statefulSet := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      dbReplicaStatefulSetName,
+			Namespace: ns,
+			Labels:    map[string]string{"app": dbReplicaAppLabel},
+		},
+		Spec: appsv1.StatefulSetSpec{
 			Replicas: &desired,
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": dbReplicaAppLabel}},
 			Template: corev1.PodTemplateSpec{
@@ -432,7 +486,7 @@ func TestCollectDBReplicaLayers_fallbackWhenCustomSeriesMissing(t *testing.T) {
 			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
 		},
 	}
-	clientset := fake.NewSimpleClientset(deployment, pod)
+	clientset := fake.NewSimpleClientset(statefulSet, pod)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
@@ -504,15 +558,15 @@ func TestAnnotateFreshness_DBReplicaLayerReplication(t *testing.T) {
 func TestCollect_StorageProfileWithReplicaLayers(t *testing.T) {
 	t.Parallel()
 	ns := "ns-storage-replica"
-	replicaPod := "postgres-replica-roll"
+	replicaPod := "postgres-replica-0"
 	desired := int32(1)
-	deployment := &appsv1.Deployment{
+	statefulSet := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      dbReplicaDeploymentName,
+			Name:      dbReplicaStatefulSetName,
 			Namespace: ns,
 			Labels:    map[string]string{"app": dbReplicaAppLabel},
 		},
-		Spec: appsv1.DeploymentSpec{
+		Spec: appsv1.StatefulSetSpec{
 			Replicas: &desired,
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": dbReplicaAppLabel}},
 			Template: corev1.PodTemplateSpec{
@@ -522,13 +576,6 @@ func TestCollect_StorageProfileWithReplicaLayers(t *testing.T) {
 					Image: "postgres:16",
 					Ports: []corev1.ContainerPort{{ContainerPort: 5432, Protocol: corev1.ProtocolTCP}},
 				}}},
-			},
-			Strategy: appsv1.DeploymentStrategy{
-				Type: appsv1.RollingUpdateDeploymentStrategyType,
-				RollingUpdate: &appsv1.RollingUpdateDeployment{
-					MaxUnavailable: &intstr.IntOrString{Type: intstr.Int, IntVal: 0},
-					MaxSurge:       &intstr.IntOrString{Type: intstr.Int, IntVal: 1},
-				},
 			},
 		},
 	}
@@ -542,7 +589,7 @@ func TestCollect_StorageProfileWithReplicaLayers(t *testing.T) {
 			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
 		},
 	}
-	clientset := fake.NewSimpleClientset(deployment, pod)
+	clientset := fake.NewSimpleClientset(statefulSet, pod)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
@@ -629,13 +676,13 @@ func TestCollectDBReplicaLayers_engineMetrics(t *testing.T) {
 		WriteLabel:   "Rows written/s",
 	}
 
-	deployment := &appsv1.Deployment{
+	statefulSet := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      dbReplicaDeploymentName,
+			Name:      dbReplicaStatefulSetName,
 			Namespace: ns,
 			Labels:    map[string]string{"app": dbReplicaAppLabel},
 		},
-		Spec: appsv1.DeploymentSpec{
+		Spec: appsv1.StatefulSetSpec{
 			Replicas: &desired,
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": dbReplicaAppLabel}},
 			Template: corev1.PodTemplateSpec{
@@ -654,7 +701,7 @@ func TestCollectDBReplicaLayers_engineMetrics(t *testing.T) {
 			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
 		},
 	}
-	clientset := fake.NewSimpleClientset(deployment, pod)
+	clientset := fake.NewSimpleClientset(statefulSet, pod)
 
 	var replicaScanQuery string
 	xactTotals := map[string]string{
@@ -746,12 +793,16 @@ func TestCollectDBReplicaLayers_engineMetrics(t *testing.T) {
 func TestCollectDBReplicaLayers_xactSessionRebaselineOnCounterDrop(t *testing.T) {
 	t.Parallel()
 	ns := "cloud9-xact-rebaseline-ns"
-	replicaPod := "postgres-replica-xact"
+	replicaPod := "postgres-replica-0"
 	desired := int32(1)
 
-	deployment := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: dbReplicaDeploymentName, Namespace: ns},
-		Spec: appsv1.DeploymentSpec{
+	statefulSet := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      dbReplicaStatefulSetName,
+			Namespace: ns,
+			Labels:    map[string]string{"app": dbReplicaAppLabel},
+		},
+		Spec: appsv1.StatefulSetSpec{
 			Replicas: &desired,
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": dbReplicaAppLabel}},
 			Template: corev1.PodTemplateSpec{
@@ -770,7 +821,7 @@ func TestCollectDBReplicaLayers_xactSessionRebaselineOnCounterDrop(t *testing.T)
 			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
 		},
 	}
-	clientset := fake.NewSimpleClientset(deployment, pod)
+	clientset := fake.NewSimpleClientset(statefulSet, pod)
 
 	xactTotal := "500"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -803,12 +854,16 @@ func TestCollectDBReplicaLayers_xactSessionRebaselineOnCounterDrop(t *testing.T)
 func TestCollectDBReplicaLayers_postgresSessionHeldSkipsLayerTotals(t *testing.T) {
 	t.Parallel()
 	ns := "cloud9-pg-held-ns"
-	replicaPod := "postgres-replica-held"
+	replicaPod := "postgres-replica-0"
 	desired := int32(1)
 
-	deployment := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: dbReplicaDeploymentName, Namespace: ns},
-		Spec: appsv1.DeploymentSpec{
+	statefulSet := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      dbReplicaStatefulSetName,
+			Namespace: ns,
+			Labels:    map[string]string{"app": dbReplicaAppLabel},
+		},
+		Spec: appsv1.StatefulSetSpec{
 			Replicas: &desired,
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": dbReplicaAppLabel}},
 			Template: corev1.PodTemplateSpec{
@@ -827,7 +882,7 @@ func TestCollectDBReplicaLayers_postgresSessionHeldSkipsLayerTotals(t *testing.T
 			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
 		},
 	}
-	clientset := fake.NewSimpleClientset(deployment, pod)
+	clientset := fake.NewSimpleClientset(statefulSet, pod)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")

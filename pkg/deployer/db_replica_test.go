@@ -49,7 +49,7 @@ func TestPostgresPrimaryCommand_syncWithoutReplicaOmitsStandbyNames(t *testing.T
 	}
 }
 
-func TestDBReplicaDeploymentSpec_readReplicaShape(t *testing.T) {
+func TestDBReplicaStatefulSetSpec_readReplicaShape(t *testing.T) {
 	t.Parallel()
 
 	cfg := DeployConfig{
@@ -64,28 +64,25 @@ func TestDBReplicaDeploymentSpec_readReplicaShape(t *testing.T) {
 			},
 		},
 	}
-	dep := dbReplicaDeploymentSpec(cfg, DBResources(), 1)
+	sts := dbReplicaStatefulSetSpec(cfg, DBResources(), 1, "small")
 
-	if dep.Name != dbReplicaDeploymentName {
-		t.Fatalf("deployment name: got %q want %q", dep.Name, dbReplicaDeploymentName)
+	if sts.Name != dbReplicaStatefulSetName {
+		t.Fatalf("statefulset name: got %q want %q", sts.Name, dbReplicaStatefulSetName)
 	}
-	if dep.Namespace != cfg.Namespace {
-		t.Fatalf("namespace: got %q want %q", dep.Namespace, cfg.Namespace)
+	if sts.Namespace != cfg.Namespace {
+		t.Fatalf("namespace: got %q want %q", sts.Namespace, cfg.Namespace)
 	}
-	if got := dep.Spec.Selector.MatchLabels["app"]; got != dbReplicaAppLabel {
+	if sts.Spec.ServiceName != dbReplicaHeadlessServiceName {
+		t.Fatalf("serviceName: got %q want %q", sts.Spec.ServiceName, dbReplicaHeadlessServiceName)
+	}
+	if got := sts.Spec.Selector.MatchLabels["app"]; got != dbReplicaAppLabel {
 		t.Fatalf("selector app: got %q want %q", got, dbReplicaAppLabel)
 	}
-	if got := dep.Spec.Selector.MatchLabels["deployment"]; got != cfg.Namespace {
-		t.Fatalf("selector deployment: got %q want %q", got, cfg.Namespace)
-	}
-	if got := dep.Spec.Template.Labels["app"]; got != dbReplicaAppLabel {
+	if got := sts.Spec.Template.Labels["app"]; got != dbReplicaAppLabel {
 		t.Fatalf("pod label app: got %q want %q", got, dbReplicaAppLabel)
 	}
-	if got := dep.Spec.Template.Labels["deployment"]; got != cfg.Namespace {
-		t.Fatalf("pod label deployment: got %q want %q", got, cfg.Namespace)
-	}
 
-	podSpec := dep.Spec.Template.Spec
+	podSpec := sts.Spec.Template.Spec
 	if len(podSpec.Volumes) != 1 || podSpec.Volumes[0].EmptyDir == nil {
 		t.Fatal("expected one emptyDir volume for PGDATA")
 	}
@@ -118,6 +115,22 @@ func TestDBReplicaDeploymentSpec_readReplicaShape(t *testing.T) {
 		t.Fatalf("main container name: got %q want %q", podSpec.Containers[0].Name, dbReplicaAppLabel)
 	}
 	assertEphemeralStorage(t, podSpec.Containers[0].Resources, wantEphemeral)
+}
+
+func TestDBReplicaHeadlessServiceSpec_clusterIPNone(t *testing.T) {
+	t.Parallel()
+
+	cfg := DeployConfig{Namespace: "cloud9-test-ns"}
+	svc := dbReplicaHeadlessServiceSpec(cfg)
+	if svc.Name != dbReplicaHeadlessServiceName {
+		t.Fatalf("service name: got %q want %q", svc.Name, dbReplicaHeadlessServiceName)
+	}
+	if svc.Spec.ClusterIP != corev1.ClusterIPNone {
+		t.Fatalf("clusterIP: got %q want None", svc.Spec.ClusterIP)
+	}
+	if got := svc.Spec.Selector["app"]; got != dbReplicaAppLabel {
+		t.Fatalf("selector app: got %q want %q", got, dbReplicaAppLabel)
+	}
 }
 
 func TestDBReplicaServiceSpec_selectorAndPort(t *testing.T) {
@@ -153,7 +166,7 @@ func TestDBReadReplicaCount_engineGate(t *testing.T) {
 	}
 }
 
-func TestDBReplicaDeploymentSpec_usesStandbyInstanceSize(t *testing.T) {
+func TestDBReplicaStatefulSetSpec_usesStandbyInstanceSize(t *testing.T) {
 	t.Parallel()
 
 	cfg := DeployConfig{
@@ -170,9 +183,9 @@ func TestDBReplicaDeploymentSpec_usesStandbyInstanceSize(t *testing.T) {
 	}
 	large := dbResourcesForSize("large")
 	small := dbResourcesForSize("small")
-	dep := dbReplicaDeploymentSpec(cfg, small, 1)
+	sts := dbReplicaStatefulSetSpec(cfg, small, 1, "small")
 
-	replicaCPU := dep.Spec.Template.Spec.Containers[0].Resources.Limits.Cpu()
+	replicaCPU := sts.Spec.Template.Spec.Containers[0].Resources.Limits.Cpu()
 	if replicaCPU.Cmp(*large.Limits.Cpu()) == 0 {
 		t.Fatalf("replica CPU limit should follow instanceSizes[1]=small, not primary large")
 	}
@@ -181,7 +194,7 @@ func TestDBReplicaDeploymentSpec_usesStandbyInstanceSize(t *testing.T) {
 	}
 }
 
-func TestDBReplicaDeploymentSpec_mixedStandbySizesUseSizeSuffix(t *testing.T) {
+func TestDBReplicaStatefulSetSpec_mixedStandbySizesUseSizeSuffix(t *testing.T) {
 	t.Parallel()
 
 	cfg := DeployConfig{
@@ -197,16 +210,67 @@ func TestDBReplicaDeploymentSpec_mixedStandbySizesUseSizeSuffix(t *testing.T) {
 	if len(groups) != 2 {
 		t.Fatalf("size groups: got %d want 2", len(groups))
 	}
-	largeDep := dbReplicaDeploymentSpecNamed(cfg, dbReplicaDeploymentName, dbResourcesForSize("large"), groups[0].Count)
-	smallDep := dbReplicaDeploymentSpecNamed(cfg, dbReplicaDeploymentName+"-small", dbResourcesForSize("small"), groups[1].Count)
-	if largeDep.Name != dbReplicaDeploymentName {
-		t.Fatalf("large dep name: got %q", largeDep.Name)
+	largeSTS := dbReplicaStatefulSetSpecNamed(cfg, dbReplicaStatefulSetName, dbResourcesForSize("large"), groups[0].Count, "large")
+	smallSTS := dbReplicaStatefulSetSpecNamed(cfg, dbReplicaStatefulSetName+"-small", dbResourcesForSize("small"), groups[1].Count, "small")
+	if largeSTS.Name != dbReplicaStatefulSetName {
+		t.Fatalf("large sts name: got %q", largeSTS.Name)
 	}
-	if smallDep.Name != "postgres-replica-small" {
-		t.Fatalf("small dep name: got %q", smallDep.Name)
+	if smallSTS.Name != "postgres-replica-small" {
+		t.Fatalf("small sts name: got %q", smallSTS.Name)
 	}
-	if *largeDep.Spec.Replicas != 1 || *smallDep.Spec.Replicas != 1 {
-		t.Fatalf("replica counts: large=%d small=%d", *largeDep.Spec.Replicas, *smallDep.Spec.Replicas)
+	if *largeSTS.Spec.Replicas != 1 || *smallSTS.Spec.Replicas != 1 {
+		t.Fatalf("replica counts: large=%d small=%d", *largeSTS.Spec.Replicas, *smallSTS.Spec.Replicas)
+	}
+}
+
+func TestDBReplicaHostnames_uniformSizes(t *testing.T) {
+	t.Parallel()
+
+	got := dbReplicaHostnames(2, []string{"large", "large"})
+	want := []string{"postgres-replica-0", "postgres-replica-1"}
+	if len(got) != len(want) {
+		t.Fatalf("hosts: got %v want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("hosts[%d]: got %q want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestDBReplicaHostnames_mixedSizeGroups(t *testing.T) {
+	t.Parallel()
+
+	got := dbReplicaHostnames(2, []string{"large", "small"})
+	want := []string{"postgres-replica-0", "postgres-replica-small-0"}
+	if len(got) != len(want) {
+		t.Fatalf("hosts: got %v want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("hosts[%d]: got %q want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestDBReplicaHostsFromConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := map[string]any{
+		"readReplicas":  2,
+		"instanceSizes": []any{"large", "large", "large"},
+	}
+	if got := dbReplicaHostsFromConfig(cfg); got != "postgres-replica-0,postgres-replica-1" {
+		t.Fatalf("hosts: got %q", got)
+	}
+}
+
+func TestDBReplicaLayerIDMatchesOrdinalHostname(t *testing.T) {
+	t.Parallel()
+	// StatefulSet ordinal-0 keeps the same layer id after pod kill/recreate.
+	const hostname = "postgres-replica-0"
+	if hostname != dbReplicaHostnames(1, []string{"large"})[0] {
+		t.Fatalf("layer id hostname mismatch")
 	}
 }
 

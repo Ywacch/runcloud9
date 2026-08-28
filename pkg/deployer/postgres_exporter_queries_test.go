@@ -106,7 +106,7 @@ func TestDBReplicaDeploymentSpec_noExporterQueriesVolume(t *testing.T) {
 			},
 		},
 	}
-	dep := dbReplicaDeploymentSpec(cfg, DBResources(), 1)
+	dep := dbReplicaStatefulSetSpec(cfg, DBResources(), 1, "small")
 	for _, vol := range dep.Spec.Template.Spec.Volumes {
 		if vol.Name == postgresExporterQueriesVolumeName {
 			t.Fatalf("replica pod must not mount postgres exporter queries volume")

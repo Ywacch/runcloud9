@@ -1097,6 +1097,7 @@ func TestDeriveEnvVars_ReadConsistencyEnvInjection(t *testing.T) {
 		design     DeploymentDesign
 		nodeID     string
 		wantHost   string
+		wantHosts  string
 		wantPort   string
 		wantPolicy string
 	}{
@@ -1110,7 +1111,8 @@ func TestDeriveEnvVars_ReadConsistencyEnvInjection(t *testing.T) {
 				Connections: []DeploymentConn{{SourceID: "app", TargetID: "db"}},
 			},
 			nodeID:     "app",
-			wantHost:   DBReplicaServiceName,
+			wantHost:   "postgres-replica-0",
+			wantHosts:  "postgres-replica-0",
 			wantPort:   "5432",
 			wantPolicy: "replica",
 		},
@@ -1146,7 +1148,8 @@ func TestDeriveEnvVars_ReadConsistencyEnvInjection(t *testing.T) {
 				Connections: []DeploymentConn{{SourceID: "app", TargetID: "db"}},
 			},
 			nodeID:     "app",
-			wantHost:   DBReplicaServiceName,
+			wantHost:   "postgres-replica-0",
+			wantHosts:  "postgres-replica-0",
 			wantPort:   "5432",
 			wantPolicy: "ryw",
 		},
@@ -1160,9 +1163,29 @@ func TestDeriveEnvVars_ReadConsistencyEnvInjection(t *testing.T) {
 				Connections: []DeploymentConn{{SourceID: "app", TargetID: "db"}},
 			},
 			nodeID:     "app",
-			wantHost:   DBReplicaServiceName,
+			wantHost:   "postgres-replica-0",
+			wantHosts:  "postgres-replica-0,postgres-replica-1",
 			wantPort:   "5432",
 			wantPolicy: "monotonic",
+		},
+		{
+			name: "mixed instance sizes inject distinct hostnames",
+			design: DeploymentDesign{
+				Nodes: []DeploymentNode{
+					{ID: "app", Type: "app-server", Name: "App"},
+					{ID: "db", Type: "db", Name: "PostgreSQL", Config: map[string]any{
+						"readReplicas":    2,
+						"readConsistency": "replica",
+						"instanceSizes":   []any{"large", "large", "small"},
+					}},
+				},
+				Connections: []DeploymentConn{{SourceID: "app", TargetID: "db"}},
+			},
+			nodeID:     "app",
+			wantHost:   "postgres-replica-0",
+			wantHosts:  "postgres-replica-0,postgres-replica-small-0",
+			wantPort:   "5432",
+			wantPolicy: "replica",
 		},
 		{
 			name: "proxy cache injects read replica env",
@@ -1185,7 +1208,8 @@ func TestDeriveEnvVars_ReadConsistencyEnvInjection(t *testing.T) {
 				},
 			},
 			nodeID:     "cache",
-			wantHost:   DBReplicaServiceName,
+			wantHost:   "postgres-replica-0",
+			wantHosts:  "postgres-replica-0",
 			wantPort:   "5432",
 			wantPolicy: "ryw",
 		},
@@ -1237,6 +1261,9 @@ func TestDeriveEnvVars_ReadConsistencyEnvInjection(t *testing.T) {
 				if _, ok := env["READ_REPLICA_HOST"]; ok {
 					t.Fatalf("expected READ_REPLICA_HOST absent, got %q", env["READ_REPLICA_HOST"])
 				}
+				if _, ok := env["READ_REPLICA_HOSTS"]; ok {
+					t.Fatalf("expected READ_REPLICA_HOSTS absent, got %q", env["READ_REPLICA_HOSTS"])
+				}
 				if _, ok := env["READ_REPLICA_PORT"]; ok {
 					t.Fatalf("expected READ_REPLICA_PORT absent, got %q", env["READ_REPLICA_PORT"])
 				}
@@ -1244,6 +1271,9 @@ func TestDeriveEnvVars_ReadConsistencyEnvInjection(t *testing.T) {
 					t.Fatalf("expected READ_CONSISTENCY absent, got %q", env["READ_CONSISTENCY"])
 				}
 				return
+			}
+			if env["READ_REPLICA_HOSTS"] != tc.wantHosts {
+				t.Fatalf("READ_REPLICA_HOSTS: got %q want %q", env["READ_REPLICA_HOSTS"], tc.wantHosts)
 			}
 			if env["READ_REPLICA_HOST"] != tc.wantHost {
 				t.Fatalf("READ_REPLICA_HOST: got %q want %q", env["READ_REPLICA_HOST"], tc.wantHost)
