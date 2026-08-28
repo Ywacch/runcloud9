@@ -323,7 +323,7 @@ func (c *MetricsCollector) queryMultiResult(ctx context.Context, promql, labelKe
 	for i := range pr.Data.Result {
 		r := &pr.Data.Result[i]
 		key := r.Metric[labelKey]
-		if key == "" {
+		if key == "" && labelKey != "target" {
 			continue
 		}
 		valStr, ok := r.Value[1].(string)

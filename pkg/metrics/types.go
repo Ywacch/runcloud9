@@ -275,6 +275,15 @@ type ComponentLayerMetrics struct {
 	// StorageIO holds engine-native I/O for this layer. Primary layers copy cluster
 	// storageIo (read+write). Replica layers expose read scans only (no write totals).
 	StorageIO *StorageIO `json:"storageIo,omitempty"`
+	// App SQL from db_query_duration_seconds{target} on app-server pods (after PR8 images).
+	DbQueryRate    float64 `json:"dbQueryRate,omitempty"`
+	DbTotalQueries float64 `json:"dbTotalQueries,omitempty"`
+	P50Latency     float64 `json:"p50Latency,omitempty"`
+	P95Latency     float64 `json:"p95Latency,omitempty"`
+	P99Latency     float64 `json:"p99Latency,omitempty"`
+	P50Latency9m   float64 `json:"p50Latency9m,omitempty"`
+	P95Latency9m   float64 `json:"p95Latency9m,omitempty"`
+	P99Latency9m   float64 `json:"p99Latency9m,omitempty"`
 	// Freshness tags containerCpu / containerMem for this layer (proxy vs backing store
 	// can sit on different tiers). See freshness.go.
 	Freshness map[string]SignalFreshness `json:"freshness,omitempty"`
