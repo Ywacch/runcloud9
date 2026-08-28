@@ -88,6 +88,27 @@ func poolMaxConnsFromEnv() int {
 	return maxConns
 }
 
+// ReplicaConnectHost maps a stable ordinal hostname (postgres-replica-0) to the
+// in-cluster StatefulSet DNS name (postgres-replica-0.postgres-replica).
+// Histogram Observe targets must keep the bare ordinal so PR9 can map target → layer id.
+// Already-qualified names (containing a dot) are returned unchanged.
+func ReplicaConnectHost(host string) string {
+	host = strings.TrimSpace(host)
+	if host == "" || strings.Contains(host, ".") {
+		return host
+	}
+	dash := strings.LastIndex(host, "-")
+	if dash <= 0 || dash == len(host)-1 {
+		return host
+	}
+	for _, c := range host[dash+1:] {
+		if c < '0' || c > '9' {
+			return host
+		}
+	}
+	return host + "." + host[:dash]
+}
+
 // NormalizeObserveTarget maps an empty target to the primary hostname label.
 func NormalizeObserveTarget(target string) string {
 	if strings.TrimSpace(target) == "" {

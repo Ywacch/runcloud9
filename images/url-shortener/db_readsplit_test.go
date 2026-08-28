@@ -175,6 +175,22 @@ func TestReadReplicaHostsFromEnv(t *testing.T) {
 	}
 }
 
+func TestReplicaConnectHost_keepsBareOrdinalForMetrics(t *testing.T) {
+	t.Parallel()
+	hosts := []string{"postgres-replica-0", "postgres-replica-1"}
+	replicas := make([]readrouter.ReplicaPool, len(hosts))
+	for i, host := range hosts {
+		if got := postgres.ReplicaConnectHost(host); got != host+".postgres-replica" {
+			t.Fatalf("connect host for %q = %q", host, got)
+		}
+		replicas[i] = readrouter.ReplicaPool{Host: host}
+	}
+	r := readrouter.NewReadRouter(nil, replicas, readrouter.PostgresEngine{}, readrouter.PolicyReplica)
+	if got := r.RouteRead("203.0.113.1", readrouter.PolicyReplica); got != readrouter.RouteReplica {
+		t.Fatalf("RouteRead() = %v want replica", got)
+	}
+}
+
 func TestReadReplicaHosts_buildsMultiPoolRouter(t *testing.T) {
 	t.Setenv("READ_REPLICA_HOSTS", "postgres-replica-0,postgres-replica-1")
 	hosts := readReplicaHostsFromEnv(Config{})

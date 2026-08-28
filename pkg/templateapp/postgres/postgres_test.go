@@ -31,6 +31,32 @@ func TestObserve_RunsFn(t *testing.T) {
 	}
 }
 
+func TestReplicaConnectHost(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		host string
+		want string
+	}{
+		{name: "ordinal 0", host: "postgres-replica-0", want: "postgres-replica-0.postgres-replica"},
+		{name: "ordinal 1", host: "postgres-replica-1", want: "postgres-replica-1.postgres-replica"},
+		{name: "mixed size group", host: "postgres-replica-small-0", want: "postgres-replica-small-0.postgres-replica-small"},
+		{name: "already qualified", host: "postgres-replica-0.postgres-replica", want: "postgres-replica-0.postgres-replica"},
+		{name: "clusterip leftover", host: "db-replica", want: "db-replica"},
+		{name: "empty", host: "", want: ""},
+		{name: "trim space", host: "  postgres-replica-0  ", want: "postgres-replica-0.postgres-replica"},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ReplicaConnectHost(tc.host); got != tc.want {
+				t.Fatalf("ReplicaConnectHost(%q) = %q want %q", tc.host, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeObserveTarget(t *testing.T) {
 	t.Parallel()
 	if got := NormalizeObserveTarget(""); got != "postgres" {

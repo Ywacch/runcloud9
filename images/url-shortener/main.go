@@ -668,7 +668,7 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 			Password: cfg.DBPassword,
 		}
 		for _, host := range replicaHosts {
-			pgCfg.Host = host
+			pgCfg.Host = postgres.ReplicaConnectHost(host)
 			readPool, poolErr := postgres.NewPoolWithMaxConns(ctx, pgCfg, replicaEachMax)
 			if poolErr != nil {
 				pool.Close()
