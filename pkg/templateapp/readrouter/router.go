@@ -3,18 +3,22 @@
 package readrouter
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
-	defaultMaxClients = 10_000
-	defaultClientTTL  = time.Hour
+	defaultMaxClients  = 10_000
+	defaultClientTTL   = time.Hour
+	defaultWriteTarget = "postgres"
 )
 
 // ConsistencyToken compares replication positions for routing and violation detection.
@@ -107,32 +111,61 @@ type clientState struct {
 	seenAt    time.Time
 }
 
+type queryPool interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// ReplicaPool binds one replica pgx pool to its stable DNS hostname for Observe targets.
+type ReplicaPool struct {
+	Pool *pgxpool.Pool
+	Host string
+}
+
+type replicaEntry struct {
+	pool queryPool
+	host string
+}
+
 // ReadRouter tracks per-client tokens, applies a routing policy, and optionally
 // executes reads against leader/replica pools.
 type ReadRouter struct {
-	mu        sync.Mutex
-	engine    Engine
-	policy    RoutingPolicy
-	clients   map[string]*clientState
-	maxSize   int
-	clientTTL time.Duration
-	writePool *pgxpool.Pool
-	readPool  *pgxpool.Pool
+	mu          sync.Mutex
+	engine      Engine
+	policy      RoutingPolicy
+	clients     map[string]*clientState
+	maxSize     int
+	clientTTL   time.Duration
+	writePool   queryPool
+	writeTarget string
+	readPools   []replicaEntry
+	rrIndex     atomic.Uint64
 }
 
 // NewReadRouter builds a router. Pools may be nil when only testing enforcement.
-func NewReadRouter(writePool, readPool *pgxpool.Pool, eng Engine, pol RoutingPolicy) *ReadRouter {
+func NewReadRouter(writePool *pgxpool.Pool, replicas []ReplicaPool, eng Engine, pol RoutingPolicy) *ReadRouter {
 	if eng == nil {
 		eng = PostgresEngine{}
 	}
+	entries := make([]replicaEntry, 0, len(replicas))
+	for _, rp := range replicas {
+		if rp.Pool == nil || strings.TrimSpace(rp.Host) == "" {
+			continue
+		}
+		entries = append(entries, replicaEntry{pool: rp.Pool, host: rp.Host})
+	}
+	var write queryPool
+	if writePool != nil {
+		write = writePool
+	}
 	return &ReadRouter{
-		engine:    eng,
-		policy:    pol,
-		clients:   make(map[string]*clientState),
-		maxSize:   defaultMaxClients,
-		clientTTL: defaultClientTTL,
-		writePool: writePool,
-		readPool:  readPool,
+		engine:      eng,
+		policy:      pol,
+		clients:     make(map[string]*clientState),
+		maxSize:     defaultMaxClients,
+		clientTTL:   defaultClientTTL,
+		writePool:   write,
+		writeTarget: defaultWriteTarget,
+		readPools:   entries,
 	}
 }
 
@@ -247,4 +280,19 @@ func (r *ReadRouter) pruneLocked() {
 			break
 		}
 	}
+}
+
+func (r *ReadRouter) leaderTarget() string {
+	if strings.TrimSpace(r.writeTarget) == "" {
+		return defaultWriteTarget
+	}
+	return r.writeTarget
+}
+
+func (r *ReadRouter) nextReplicaStart() int {
+	n := len(r.readPools)
+	if n == 0 {
+		return 0
+	}
+	return int(r.rrIndex.Add(1)-1) % n
 }

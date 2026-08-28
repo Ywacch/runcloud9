@@ -206,3 +206,14 @@ func TestCompileAssertions(t *testing.T) {
 	var _ EnforcementPoint = (*ReadRouter)(nil)
 	var _ Engine = PostgresEngine{}
 }
+
+func TestNewReadRouter_skipsInvalidReplicaPools(t *testing.T) {
+	t.Parallel()
+	r := NewReadRouter(nil, []ReplicaPool{
+		{Host: "postgres-replica-0"},
+		{Host: "  "},
+	}, PostgresEngine{}, PolicyReplica)
+	if len(r.readPools) != 0 {
+		t.Fatalf("invalid entries should be skipped, got %d read pools", len(r.readPools))
+	}
+}
