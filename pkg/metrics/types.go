@@ -146,8 +146,8 @@ type ComponentMetrics struct {
 	CacheHitsLast9m   float64 `json:"cacheHitsLast9m"`
 	CacheMissesLast9m float64 `json:"cacheMissesLast9m"`
 	ErrorRate         float64 `json:"errorRate"` // errors/sec (rate over 30s)
-	// TotalErrors9m is the session sum of http_requests_total{status=~"5.."} on app-server pods.
-	// JSON name kept for the inspector contract.
+	// TotalErrors9m is the session sum of http_requests_total{status=~"5.."} on app-server pods,
+	// or process-lifetime *_worker_errors_total on worker pods. JSON name kept for the inspector contract.
 	TotalErrors9m float64 `json:"totalErrors9m,omitempty"`
 	// P50Latency9m / P95Latency9m / P99Latency9m are histogram_quantile over
 	// rate(http_request_duration_seconds_bucket[elapsed]) in seconds.
@@ -200,7 +200,7 @@ type ComponentMetrics struct {
 	LBBackends  []string `json:"lbBackends,omitempty"`
 	// PerBackendRPS is set only for the lb component: RPS per app-server pod (from Prometheus pod label).
 	PerBackendRPS map[string]float64 `json:"perBackendRps,omitempty"`
-	// Replicas is per-pod breakdown on app-server (empty when single replica or pods not listed).
+	// Replicas is per-pod breakdown on app-server and worker (empty when single replica or pods not listed).
 	Replicas []ReplicaMetrics `json:"replicas,omitempty"`
 	// BackendReplicas / BackendPods expose LB-facing pod rollout and per-backend metrics.
 	BackendReplicas *BackendReplicas `json:"backendReplicas,omitempty"`

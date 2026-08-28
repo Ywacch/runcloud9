@@ -976,15 +976,29 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	} else {
 		cmWorker.RequestRate = cmMQ.ConsumeRate
 	}
-	workerP99, _ := c.query(ctx, fmt.Sprintf(
-		`histogram_quantile(0.99, sum(rate({__name__=~".*_worker_processing_duration_seconds_bucket",namespace=%q}%s)) by (le))`,
+	workerLiveBucketRate := fmt.Sprintf(
+		`sum(rate({__name__=~".*_worker_processing_duration_seconds_bucket",namespace=%q}%s)) by (le)`,
 		ns, promRateRange(),
-	))
-	if workerP99 > 0 && !math.IsNaN(workerP99) && !math.IsInf(workerP99, 0) {
-		cmWorker.P99Latency = workerP99
-	}
+	)
+	workerP50, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.50, %s)`, workerLiveBucketRate))
+	workerP95, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.95, %s)`, workerLiveBucketRate))
+	workerP99, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.99, %s)`, workerLiveBucketRate))
+	cmWorker.P50Latency = workerP50
+	cmWorker.P95Latency = workerP95
+	cmWorker.P99Latency = workerP99
 	workerErrors, _ := c.query(ctx, fmt.Sprintf(`sum(rate({__name__=~".*_worker_errors_total",namespace=%q}%s))`, ns, promRateRange()))
 	cmWorker.ErrorRate = workerErrors
+	workerSessionRange := sessionP99PromRange(c.sessionAcc.Elapsed(ns, time.Now()))
+	workerSessionBucketRate := fmt.Sprintf(
+		`sum(rate({__name__=~".*_worker_processing_duration_seconds_bucket",namespace=%q}%s)) by (le)`,
+		ns, workerSessionRange,
+	)
+	wP50Session, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.50, %s)`, workerSessionBucketRate))
+	wP95Session, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.95, %s)`, workerSessionBucketRate))
+	wP99Session, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.99, %s)`, workerSessionBucketRate))
+	cmWorker.P50Latency9m = wP50Session
+	cmWorker.P95Latency9m = wP95Session
+	cmWorker.P99Latency9m = wP99Session
 	cmWorker.QueueDepth = cmMQ.QueueDepth
 	if cmMQ.QueueDepth > 0 {
 		sat := cmMQ.QueueDepth / 100.0
@@ -992,6 +1006,17 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 			sat = 1.0
 		}
 		cmWorker.WorkerSaturation = sat
+	}
+	wRpsByPod, wP50ByPod, wP95ByPod, wP99ByPod, wP50SessionByPod, wP95SessionByPod, wP99SessionByPod, wCPUByPod, wErrByPod, wTotalProcessedByPod, wTotalErrorsByPod, wMemByPod := c.workerReplicaSeries(ctx, ns)
+	workerPodNames, workerReadyByPod, _ := c.listWorkerPods(ctx, ns)
+	workerReplicaRows := mergePodMetricMaps(
+		workerPodNames, workerReadyByPod,
+		wRpsByPod, wP50ByPod, wP95ByPod, wP99ByPod,
+		wP50SessionByPod, wP95SessionByPod, wP99SessionByPod,
+		wCPUByPod, wErrByPod, wTotalProcessedByPod, wTotalErrorsByPod, wMemByPod,
+	)
+	if len(workerReplicaRows) > 0 {
+		cmWorker.Replicas = workerReplicaRows
 	}
 	dm.Components["worker"] = cmWorker
 	if workerRPS > 0 {

@@ -29,6 +29,17 @@ func httpPodLatencyQuantile(ctx context.Context, c *MetricsCollector, nsSel, ran
 	return c.queryMultiResult(ctx, q, "pod")
 }
 
+func workerPodLatencyQuantile(ctx context.Context, c *MetricsCollector, ns, rangeVec string, quantile float64) map[string]float64 {
+	if c == nil {
+		return nil
+	}
+	q := fmt.Sprintf(
+		`histogram_quantile(%.2f, sum by (pod, le) (rate({__name__=~".*_worker_processing_duration_seconds_bucket",namespace=%q}%s)))`,
+		quantile, ns, rangeVec,
+	)
+	return c.queryMultiResult(ctx, q, "pod")
+}
+
 func (c *MetricsCollector) appServerReplicaSeries(ctx context.Context, ns string) (
 	rps, p50, p95, p99 map[string]float64,
 	p50Session, p95Session, p99Session map[string]float64,
@@ -74,6 +85,64 @@ func (c *MetricsCollector) listAppServerPods(ctx context.Context, ns string) (na
 	}
 	list, err := c.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("app=app-server,deployment=%s", ns),
+	})
+	if err != nil {
+		return nil, ready, counts
+	}
+	for _, p := range list.Items {
+		isReady := podReadyStatus(p)
+		ready[p.Name] = isReady
+		names = append(names, p.Name)
+		if isReady {
+			counts.Ready++
+		}
+	}
+	return names, ready, counts
+}
+
+func (c *MetricsCollector) workerReplicaSeries(ctx context.Context, ns string) (
+	rps, p50, p95, p99 map[string]float64,
+	p50Session, p95Session, p99Session map[string]float64,
+	cpu, errRate, totalProcessed, totalErrors map[string]float64,
+	memBytes map[string]int64,
+) {
+	podRe := "worker.*"
+	liveRange := promRateRange()
+
+	rps = c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (rate({__name__=~".*_worker_processed_total",namespace=%q}%s))`, ns, liveRange), "pod")
+	p50 = workerPodLatencyQuantile(ctx, c, ns, liveRange, 0.50)
+	p95 = workerPodLatencyQuantile(ctx, c, ns, liveRange, 0.95)
+	p99 = workerPodLatencyQuantile(ctx, c, ns, liveRange, 0.99)
+	cpu = c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (rate(process_cpu_seconds_total{namespace=%q,pod=~%q}%s))`, ns, podRe, liveRange), "pod")
+	errRate = c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) (rate({__name__=~".*_worker_errors_total",namespace=%q}%s))`, ns, liveRange), "pod")
+	totalProcessed = c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) ({__name__=~".*_worker_processed_total",namespace=%q})`, ns), "pod")
+	totalErrors = c.queryMultiResult(ctx, fmt.Sprintf(`sum by (pod) ({__name__=~".*_worker_errors_total",namespace=%q})`, ns), "pod")
+	memBytes = c.metricsAPIPodContainerMemory(ctx, ns, podRe, "worker")
+
+	sessionRange := sessionP99PromRange(c.sessionAcc.Elapsed(ns, time.Now()))
+	p50Session = workerPodLatencyQuantile(ctx, c, ns, sessionRange, 0.50)
+	p95Session = workerPodLatencyQuantile(ctx, c, ns, sessionRange, 0.95)
+	p99Session = workerPodLatencyQuantile(ctx, c, ns, sessionRange, 0.99)
+	return
+}
+
+func (c *MetricsCollector) listWorkerPods(ctx context.Context, ns string) (names []string, ready map[string]bool, counts BackendReplicas) {
+	ready = make(map[string]bool)
+	if c == nil || c.clientset == nil {
+		return nil, ready, counts
+	}
+	depList, err := c.clientset.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=worker",
+	})
+	if err == nil {
+		for _, dep := range depList.Items {
+			if dep.Spec.Replicas != nil {
+				counts.Desired += *dep.Spec.Replicas
+			}
+		}
+	}
+	list, err := c.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app=worker,deployment=%s", ns),
 	})
 	if err != nil {
 		return nil, ready, counts

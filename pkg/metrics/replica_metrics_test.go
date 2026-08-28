@@ -1,6 +1,14 @@
 package metrics
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+)
 
 func TestMergePodMetricMaps(t *testing.T) {
 	t.Parallel()
@@ -71,5 +79,59 @@ func TestMergePodMetricMaps(t *testing.T) {
 	}
 	if def.MemoryBytes != 268_435_456 {
 		t.Fatalf("def memoryBytes: want 268435456, got %d", def.MemoryBytes)
+	}
+}
+
+func TestListWorkerPods(t *testing.T) {
+	t.Parallel()
+	const ns = "ns-worker-list"
+	desired := int32(2)
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "worker",
+			Namespace: ns,
+			Labels:    map[string]string{"app": "worker"},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &desired,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "worker", "deployment": ns}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "worker", "deployment": ns}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "worker", Image: "worker:v1"}}},
+			},
+		},
+	}
+	podA := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "worker-abc",
+			Namespace: ns,
+			Labels:    map[string]string{"app": "worker", "deployment": ns},
+		},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+		},
+	}
+	podB := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "worker-def",
+			Namespace: ns,
+			Labels:    map[string]string{"app": "worker", "deployment": ns},
+		},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}},
+		},
+	}
+	clientset := fake.NewSimpleClientset(deployment, podA, podB)
+	c := NewMetricsCollector("", nil, clientset, nil, nil)
+
+	names, ready, counts := c.listWorkerPods(context.Background(), ns)
+	if len(names) != 2 {
+		t.Fatalf("names len = %d want 2", len(names))
+	}
+	if !ready["worker-abc"] || ready["worker-def"] {
+		t.Fatalf("ready map: %+v", ready)
+	}
+	if counts.Desired != 2 || counts.Ready != 1 {
+		t.Fatalf("counts: %+v", counts)
 	}
 }

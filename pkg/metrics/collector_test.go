@@ -27,7 +27,8 @@ func promVectorJSON(value string) map[string]any {
 }
 
 func isSessionLatencyHistogramQuery(q string) bool {
-	if !strings.Contains(q, "http_request_duration_seconds_bucket") {
+	if !strings.Contains(q, "http_request_duration_seconds_bucket") &&
+		!strings.Contains(q, "_worker_processing_duration_seconds_bucket") {
 		return false
 	}
 	return strings.Contains(q, "histogram_quantile(0.50") ||
@@ -315,6 +316,176 @@ func TestCollect_Session9mAggregates(t *testing.T) {
 	}
 	if byPod["app-server-def"].P99Latency9m != 0.042 {
 		t.Fatalf("pod def P99Latency9m: want 0.042, got %v", byPod["app-server-def"].P99Latency9m)
+	}
+}
+
+func TestCollect_WorkerReplicaMetrics(t *testing.T) {
+	t.Parallel()
+
+	var sessionP50Q, sessionP95Q, sessionP99Q string
+	var podSessionP50Q, podSessionP99Q string
+	var sawPodByWorker bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "sum by (pod)") &&
+			strings.Contains(q, "_worker_errors_total") &&
+			!strings.Contains(q, "rate("):
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				"worker-abc": "2",
+				"worker-def": "1",
+			}))
+		case strings.Contains(q, "sum by (pod)") &&
+			strings.Contains(q, "_worker_processed_total") &&
+			!strings.Contains(q, "rate("):
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				"worker-abc": "500",
+				"worker-def": "480",
+			}))
+		case strings.Contains(q, "sum by (pod)") &&
+			strings.Contains(q, "_worker_processed_total") &&
+			strings.Contains(q, "rate("):
+			sawPodByWorker = true
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				"worker-abc": "10",
+				"worker-def": "8",
+			}))
+		case strings.Contains(q, `{__name__=~".*_worker_processing_duration_seconds_bucket"`) &&
+			strings.Contains(q, "by (pod, le)") &&
+			strings.Contains(q, `histogram_quantile(0.50`) &&
+			!strings.Contains(q, promRateRange()):
+			podSessionP50Q = q
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				"worker-abc": "0.015",
+			}))
+		case strings.Contains(q, `{__name__=~".*_worker_processing_duration_seconds_bucket"`) &&
+			strings.Contains(q, "by (pod, le)") &&
+			strings.Contains(q, `histogram_quantile(0.99`) &&
+			!strings.Contains(q, promRateRange()):
+			podSessionP99Q = q
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				"worker-def": "0.050",
+			}))
+		case strings.Contains(q, `{__name__=~".*_worker_processing_duration_seconds_bucket"`) &&
+			strings.Contains(q, `histogram_quantile(0.50`) &&
+			strings.Contains(q, " by (le)") &&
+			!strings.Contains(q, "by (pod") &&
+			!strings.Contains(q, promRateRange()):
+			sessionP50Q = q
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.012"))
+		case strings.Contains(q, `{__name__=~".*_worker_processing_duration_seconds_bucket"`) &&
+			strings.Contains(q, `histogram_quantile(0.95`) &&
+			strings.Contains(q, " by (le)") &&
+			!strings.Contains(q, "by (pod") &&
+			!strings.Contains(q, promRateRange()):
+			sessionP95Q = q
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.030"))
+		case strings.Contains(q, `{__name__=~".*_worker_processing_duration_seconds_bucket"`) &&
+			strings.Contains(q, `histogram_quantile(0.99`) &&
+			strings.Contains(q, " by (le)") &&
+			!strings.Contains(q, "by (pod") &&
+			!strings.Contains(q, promRateRange()):
+			sessionP99Q = q
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.045"))
+		case strings.Contains(q, `{__name__=~".*_worker_processing_duration_seconds_bucket"`) &&
+			strings.Contains(q, `histogram_quantile(0.50`) &&
+			strings.Contains(q, promRateRange()) &&
+			!strings.Contains(q, "by (pod"):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.002"))
+		case strings.Contains(q, `{__name__=~".*_worker_processing_duration_seconds_bucket"`) &&
+			strings.Contains(q, `histogram_quantile(0.95`) &&
+			strings.Contains(q, promRateRange()) &&
+			!strings.Contains(q, "by (pod"):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.008"))
+		case strings.Contains(q, `{__name__=~".*_worker_processing_duration_seconds_bucket"`) &&
+			strings.Contains(q, `histogram_quantile(0.99`) &&
+			strings.Contains(q, promRateRange()) &&
+			!strings.Contains(q, "by (pod"):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.020"))
+		case strings.Contains(q, `sum(rate({__name__=~".*_worker_processed_total",namespace="ns-worker"`) &&
+			!strings.Contains(q, "by (pod)"):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("18"))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
+	dm, err := c.Collect(context.Background(), "ns-worker", "", TopologyFlags{HasWorker: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, q := range map[string]string{
+		"sessionP50": sessionP50Q,
+		"sessionP95": sessionP95Q,
+		"sessionP99": sessionP99Q,
+	} {
+		if q == "" {
+			t.Fatalf("%s query not issued", name)
+		}
+		if strings.Contains(q, "[9m]") {
+			t.Fatalf("%s still uses [9m]: %s", name, q)
+		}
+		if !strings.Contains(q, "[1m]") {
+			t.Fatalf("first tick should use at least [1m] for %s: %s", name, q)
+		}
+		if !strings.Contains(q, `{__name__=~".*_worker_processing_duration_seconds_bucket"`) {
+			t.Fatalf("%s should query worker histogram: %s", name, q)
+		}
+	}
+	if podSessionP50Q == "" || !strings.Contains(podSessionP50Q, "by (pod, le)") {
+		t.Fatalf("expected per-pod session p50 query, got %q", podSessionP50Q)
+	}
+	if podSessionP99Q == "" || !strings.Contains(podSessionP99Q, "by (pod, le)") {
+		t.Fatalf("expected per-pod session p99 query, got %q", podSessionP99Q)
+	}
+	if !sawPodByWorker {
+		t.Fatal("expected per-pod worker processed rate query")
+	}
+
+	worker := dm.Components["worker"]
+	if worker.P50Latency != 0.002 {
+		t.Fatalf("worker P50Latency: want 0.002, got %v", worker.P50Latency)
+	}
+	if worker.P95Latency != 0.008 {
+		t.Fatalf("worker P95Latency: want 0.008, got %v", worker.P95Latency)
+	}
+	if worker.P99Latency != 0.020 {
+		t.Fatalf("worker P99Latency: want 0.020, got %v", worker.P99Latency)
+	}
+	if worker.P50Latency9m != 0.012 {
+		t.Fatalf("worker P50Latency9m: want 0.012, got %v", worker.P50Latency9m)
+	}
+	if worker.P95Latency9m != 0.030 {
+		t.Fatalf("worker P95Latency9m: want 0.030, got %v", worker.P95Latency9m)
+	}
+	if worker.P99Latency9m != 0.045 {
+		t.Fatalf("worker P99Latency9m: want 0.045, got %v", worker.P99Latency9m)
+	}
+	if worker.RequestRate != 18 {
+		t.Fatalf("worker RequestRate: want 18, got %v", worker.RequestRate)
+	}
+	if len(worker.Replicas) != 2 {
+		t.Fatalf("worker replicas: want 2, got %d", len(worker.Replicas))
+	}
+	byPod := make(map[string]ReplicaMetrics)
+	for _, r := range worker.Replicas {
+		byPod[r.Name] = r
+	}
+	if byPod["worker-abc"].TotalRequests != 500 {
+		t.Fatalf("worker abc totalRequests: want 500, got %v", byPod["worker-abc"].TotalRequests)
+	}
+	if byPod["worker-def"].TotalErrors9m != 1 {
+		t.Fatalf("worker def totalErrors9m: want 1, got %v", byPod["worker-def"].TotalErrors9m)
+	}
+	if byPod["worker-abc"].P50Latency9m != 0.015 {
+		t.Fatalf("worker abc P50Latency9m: want 0.015, got %v", byPod["worker-abc"].P50Latency9m)
+	}
+	if byPod["worker-def"].P99Latency9m != 0.050 {
+		t.Fatalf("worker def P99Latency9m: want 0.050, got %v", byPod["worker-def"].P99Latency9m)
 	}
 }
 
