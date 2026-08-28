@@ -2,6 +2,7 @@ package readrouter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -11,48 +12,92 @@ import (
 // build receives readTokenExpr when routed to replica; include it as the last
 // selected column (text). scan must read application columns and, when
 // replayToken is non-nil, scan the replay token into *replayToken last.
+// The returned target is the hostname used for postgres.Observe (postgres on leader).
 func (r *ReadRouter) QueryRead(
 	ctx context.Context,
 	clientID string,
 	build func(readTokenExpr string) (sql string, args []any),
 	scan func(row pgx.Row, replayToken *string) error,
-) (Route, error) {
+) (Route, string, error) {
 	if r == nil {
-		return RouteLeader, fmt.Errorf("readrouter: nil ReadRouter")
+		return RouteLeader, defaultWriteTarget, fmt.Errorf("readrouter: nil ReadRouter")
 	}
 	if r.writePool == nil {
-		return RouteLeader, fmt.Errorf("readrouter: nil write pool")
+		return RouteLeader, r.leaderTarget(), fmt.Errorf("readrouter: nil write pool")
 	}
 
 	route := r.RouteRead(clientID, r.policy)
-	pool := r.writePool
-	var replayToken *string
-	tokenExpr := ""
-	if route == RouteReplica {
-		if r.readPool == nil {
-			route = RouteLeader
-		} else {
-			pool = r.readPool
-			tokenExpr = r.engine.ReadTokenExpr()
-			var tokenText string
-			replayToken = &tokenText
+	if route == RouteReplica && len(r.readPools) > 0 {
+		target, err := r.queryReplicaRoundRobin(ctx, clientID, build, scan)
+		if err == nil || errors.Is(err, pgx.ErrNoRows) {
+			return RouteReplica, target, err
 		}
 	}
 
-	sql, args := build(tokenExpr)
-	row := pool.QueryRow(ctx, sql, args...)
-	if err := scan(row, replayToken); err != nil {
-		return route, err
+	target, err := r.queryLeader(ctx, clientID, build, scan)
+	return RouteLeader, target, err
+}
+
+func (r *ReadRouter) queryLeader(
+	ctx context.Context,
+	clientID string,
+	build func(readTokenExpr string) (sql string, args []any),
+	scan func(row pgx.Row, replayToken *string) error,
+) (string, error) {
+	sql, args := build("")
+	row := r.writePool.QueryRow(ctx, sql, args...)
+	if err := scan(row, nil); err != nil {
+		return r.leaderTarget(), err
 	}
+	dbReadTotal.WithLabelValues(RouteLeader.String()).Inc()
+	return r.leaderTarget(), nil
+}
 
-	dbReadTotal.WithLabelValues(route.String()).Inc()
+func (r *ReadRouter) queryReplicaRoundRobin(
+	ctx context.Context,
+	clientID string,
+	build func(readTokenExpr string) (sql string, args []any),
+	scan func(row pgx.Row, replayToken *string) error,
+) (string, error) {
+	tokenExpr := r.engine.ReadTokenExpr()
+	start := r.nextReplicaStart()
+	var lastErr error
 
-	if replayToken != nil && *replayToken != "" {
-		tok, err := r.engine.ParseToken(*replayToken)
-		if err != nil {
-			return route, fmt.Errorf("parse replay token: %w", err)
+	for i := 0; i < len(r.readPools); i++ {
+		idx := (start + i) % len(r.readPools)
+		entry := r.readPools[idx]
+		var tokenText string
+		replayToken := &tokenText
+		sql, args := build(tokenExpr)
+		row := entry.pool.QueryRow(ctx, sql, args...)
+		err := scan(row, replayToken)
+		if err == nil {
+			dbReadTotal.WithLabelValues(RouteReplica.String()).Inc()
+			if tokenText != "" {
+				tok, parseErr := r.engine.ParseToken(tokenText)
+				if parseErr != nil {
+					return entry.host, fmt.Errorf("parse replay token: %w", parseErr)
+				}
+				r.RecordRead(clientID, tok)
+			}
+			return entry.host, nil
 		}
-		r.RecordRead(clientID, tok)
+		if errors.Is(err, pgx.ErrNoRows) {
+			dbReadTotal.WithLabelValues(RouteReplica.String()).Inc()
+			return entry.host, err
+		}
+		if shouldFailover(err) {
+			lastErr = err
+			continue
+		}
+		return entry.host, err
 	}
-	return route, nil
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", fmt.Errorf("readrouter: no replica pools configured")
+}
+
+func shouldFailover(err error) bool {
+	return err != nil && !errors.Is(err, pgx.ErrNoRows)
 }

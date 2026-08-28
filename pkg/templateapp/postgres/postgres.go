@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -14,6 +15,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 )
+
+const primaryObserveTarget = "postgres"
 
 // Config holds Postgres connection settings (same env shape as template images).
 type Config struct {
@@ -30,11 +33,17 @@ var dbQueryDuration = promauto.NewHistogramVec(
 		Help:    "Database query latency in seconds",
 		Buckets: prometheus.DefBuckets,
 	},
-	[]string{"operation"},
+	[]string{"operation", "target"},
 )
 
 // NewPool builds a pgx pool from cfg and sets MaxConns from DB_POOL_MAX_CONNS (default 25).
 func NewPool(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
+	writeMax, _ := SplitPoolMaxConns(0)
+	return NewPoolWithMaxConns(ctx, cfg, writeMax)
+}
+
+// NewPoolWithMaxConns builds a pgx pool with an explicit MaxConns limit.
+func NewPoolWithMaxConns(ctx context.Context, cfg Config, maxConns int32) (*pgxpool.Pool, error) {
 	connURL := &url.URL{
 		Scheme: "postgres",
 		Host:   fmt.Sprintf("%s:%s", cfg.Host, cfg.Port),
@@ -45,11 +54,10 @@ func NewPool(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse db pool config: %w", err)
 	}
-	maxConns, convErr := strconv.Atoi(envOrDefault("DB_POOL_MAX_CONNS", "25"))
-	if convErr != nil || maxConns < 1 {
-		maxConns = 25
+	if maxConns < 1 {
+		maxConns = 1
 	}
-	poolCfg.MaxConns = int32(maxConns)
+	poolCfg.MaxConns = maxConns
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return nil, fmt.Errorf("create db pool: %w", err)
@@ -57,11 +65,42 @@ func NewPool(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
-// Observe times fn, records db_query_duration_seconds, and emits trace logs when enabled.
-func Observe(ctx context.Context, op string, fn func() error) error {
+// SplitPoolMaxConns divides DB_POOL_MAX_CONNS across one write pool and replicaCount
+// replica pools using integer division with a minimum of 1 connection per pool.
+func SplitPoolMaxConns(replicaCount int) (writeMax int32, replicaEachMax int32) {
+	total := poolMaxConnsFromEnv()
+	poolCount := 1 + replicaCount
+	if poolCount < 1 {
+		poolCount = 1
+	}
+	each := total / poolCount
+	if each < 1 {
+		each = 1
+	}
+	return int32(each), int32(each)
+}
+
+func poolMaxConnsFromEnv() int {
+	maxConns, convErr := strconv.Atoi(envOrDefault("DB_POOL_MAX_CONNS", "25"))
+	if convErr != nil || maxConns < 1 {
+		return 25
+	}
+	return maxConns
+}
+
+// NormalizeObserveTarget maps an empty target to the primary hostname label.
+func NormalizeObserveTarget(target string) string {
+	if strings.TrimSpace(target) == "" {
+		return primaryObserveTarget
+	}
+	return target
+}
+
+// Observe times fn, records db_query_duration_seconds{operation,target}, and emits trace logs when enabled.
+func Observe(ctx context.Context, op, target string, fn func() error) error {
 	start := time.Now()
 	err := fn()
-	dbQueryDuration.WithLabelValues(op).Observe(time.Since(start).Seconds())
+	dbQueryDuration.WithLabelValues(op, NormalizeObserveTarget(target)).Observe(time.Since(start).Seconds())
 	trace.LogDB(ctx, op, start)
 	return err
 }
