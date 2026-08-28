@@ -64,13 +64,13 @@ func TestCollect_startsConsistencyObserverWhenReplicasPresent(t *testing.T) {
 	t.Parallel()
 	ns := "ns-observer-start"
 	desired := int32(1)
-	deployment := &appsv1.Deployment{
+	statefulSet := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      dbReplicaDeploymentName,
+			Name:      dbReplicaStatefulSetName,
 			Namespace: ns,
 			Labels:    map[string]string{"app": dbReplicaAppLabel},
 		},
-		Spec: appsv1.DeploymentSpec{
+		Spec: appsv1.StatefulSetSpec{
 			Replicas: &desired,
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": dbReplicaAppLabel}},
 			Template: corev1.PodTemplateSpec{
@@ -89,7 +89,7 @@ func TestCollect_startsConsistencyObserverWhenReplicasPresent(t *testing.T) {
 			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
 		},
 	}
-	clientset := fake.NewSimpleClientset(deployment, pod)
+	clientset := fake.NewSimpleClientset(statefulSet, pod)
 	rec := newRecordingConsistencyObserver()
 	c := NewMetricsCollector("", nil, clientset, nil, nil)
 	c.observer = rec

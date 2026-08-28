@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -11,7 +12,7 @@ import (
 
 const (
 	dbReplicaAppLabel        = "postgres-replica"
-	dbReplicaDeploymentName  = "postgres-replica"
+	dbReplicaStatefulSetName = "postgres-replica"
 	dbLayerRolePrimary       = "primary"
 	dbLayerRoleReplica       = "replica"
 	dbLayerEnginePostgreSQL  = "postgresql"
@@ -36,19 +37,19 @@ type dbReplicaLayerSplit struct {
 	replicas    []ComponentLayerMetrics
 }
 
-// listDBReplicaPods returns replica pod names, readiness, and Deployment desired/ready counts.
+// listDBReplicaPods returns replica pod names, readiness, and StatefulSet desired/ready counts.
 func (c *MetricsCollector) listDBReplicaPods(ctx context.Context, ns string) (names []string, ready map[string]bool, counts BackendReplicas) {
 	ready = make(map[string]bool)
 	if c == nil || c.clientset == nil {
 		return nil, ready, counts
 	}
-	depList, err := c.clientset.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{
+	stsList, err := c.clientset.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("app=%s", dbReplicaAppLabel),
 	})
 	if err == nil {
-		for _, dep := range depList.Items {
-			if dep.Spec.Replicas != nil {
-				counts.Desired += *dep.Spec.Replicas
+		for _, sts := range stsList.Items {
+			if sts.Spec.Replicas != nil {
+				counts.Desired += *sts.Spec.Replicas
 			}
 		}
 	}
@@ -66,6 +67,7 @@ func (c *MetricsCollector) listDBReplicaPods(ctx context.Context, ns string) (na
 			counts.Ready++
 		}
 	}
+	sort.Strings(names)
 	return names, ready, counts
 }
 
@@ -339,7 +341,7 @@ func (c *MetricsCollector) collectDBReplicaLayers(ctx context.Context, ns string
 	return out
 }
 
-// applyDBReplicaLayers attaches db instance layers and replica Deployment rollout counts.
+// applyDBReplicaLayers attaches db instance layers and replica StatefulSet rollout counts.
 func applyDBReplicaLayers(cm *ComponentMetrics, split dbReplicaLayerSplit) {
 	if cm == nil || len(split.replicaPods) == 0 {
 		return

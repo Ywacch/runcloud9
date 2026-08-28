@@ -609,7 +609,16 @@ func injectReadReplicaEnv(env map[string]string, dbNode, consumer DeploymentNode
 	if policy == readConsistencyLeaderOnly {
 		return
 	}
-	env["READ_REPLICA_HOST"] = DBReplicaServiceName
+	hosts := dbReplicaHostsFromConfig(dbNode.Config)
+	if hosts == "" {
+		return
+	}
+	firstHost := hosts
+	if idx := strings.Index(hosts, ","); idx >= 0 {
+		firstHost = hosts[:idx]
+	}
+	env["READ_REPLICA_HOSTS"] = hosts
+	env["READ_REPLICA_HOST"] = firstHost
 	env["READ_REPLICA_PORT"] = "5432"
 	env["READ_CONSISTENCY"] = policy
 }

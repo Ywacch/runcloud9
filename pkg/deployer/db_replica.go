@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -13,11 +14,12 @@ import (
 )
 
 const (
-	dbReplicaAppLabel       = "postgres-replica"
-	dbReplicaDeploymentName = "postgres-replica"
-	DBReplicaServiceName    = "db-replica"
-	dbReplicaDataVolumeName = "pgdata"
-	dbReplicaEphemeralSize  = "500Mi"
+	dbReplicaAppLabel            = "postgres-replica"
+	dbReplicaStatefulSetName     = "postgres-replica"
+	dbReplicaHeadlessServiceName = "postgres-replica"
+	DBReplicaServiceName         = "db-replica"
+	dbReplicaDataVolumeName      = "pgdata"
+	dbReplicaEphemeralSize       = "500Mi"
 )
 
 // postgresPrimaryCommand returns the postgres primary command, including sync flags when configured.
@@ -66,23 +68,53 @@ func dbResourcesForSize(size string) corev1.ResourceRequirements {
 	})
 }
 
-func dbReplicaDeploymentSpec(
-	cfg DeployConfig,
-	resources corev1.ResourceRequirements,
-	replicas int32,
-) *appsv1.Deployment {
-	return dbReplicaDeploymentSpecNamed(cfg, dbReplicaDeploymentName, resources, replicas)
+// dbReplicaHostnames returns stable DNS hostnames for deployed read replicas.
+// Uniform sizes use one StatefulSet (postgres-replica-0, postgres-replica-1, ...).
+// Mixed size groups use one StatefulSet per group (postgres-replica-0, postgres-replica-small-0, ...).
+func dbReplicaHostnames(readReplicas int, standbySizes []string) []string {
+	if readReplicas <= 0 {
+		return nil
+	}
+	groups := sizeGroups(standbySizes)
+	if len(groups) == 1 {
+		hosts := make([]string, 0, readReplicas)
+		for i := 0; i < readReplicas; i++ {
+			hosts = append(hosts, fmt.Sprintf("%s-%d", dbReplicaStatefulSetName, i))
+		}
+		return hosts
+	}
+	hosts := make([]string, 0, readReplicas)
+	for i, group := range groups {
+		stsName := dbReplicaStatefulSetName
+		if i > 0 {
+			stsName = dbReplicaStatefulSetName + "-" + group.Size
+		}
+		for ord := int32(0); ord < group.Count; ord++ {
+			hosts = append(hosts, fmt.Sprintf("%s-%d", stsName, ord))
+		}
+	}
+	return hosts
 }
 
-func dbReplicaDeploymentSpecNamed(
+func dbReplicaStatefulSetNameForGroup(groupIndex int, size string) string {
+	if groupIndex == 0 {
+		return dbReplicaStatefulSetName
+	}
+	return dbReplicaStatefulSetName + "-" + size
+}
+
+func dbReplicaPodTemplateSpec(
 	cfg DeployConfig,
-	depName string,
 	resources corev1.ResourceRequirements,
-	replicas int32,
-) *appsv1.Deployment {
+	size string,
+) corev1.PodTemplateSpec {
 	dbSpec := componentRegistry["db"]
 	replicaResources := dbReplicaResources(resources)
-	labels := map[string]string{"app": dbReplicaAppLabel, "deployment": cfg.Namespace}
+	labels := map[string]string{
+		"app":                dbReplicaAppLabel,
+		"deployment":         cfg.Namespace,
+		instanceSizeLabelKey: normalizeInstanceSize(size),
+	}
 
 	tcpPort := intstr.FromInt32(dbSpec.Ports[0])
 	readiness := &corev1.Probe{
@@ -144,26 +176,69 @@ func dbReplicaDeploymentSpecNamed(
 	}
 
 	sizeLimit := resource.MustParse(dbReplicaEphemeralSize)
-	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: depName, Namespace: cfg.Namespace},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr(replicas),
-			Selector: &metav1.LabelSelector{MatchLabels: labels},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: podAnnotations},
-				Spec: corev1.PodSpec{
-					InitContainers: []corev1.Container{initContainer},
-					Containers:     containers,
-					Volumes: []corev1.Volume{{
-						Name: dbReplicaDataVolumeName,
-						VolumeSource: corev1.VolumeSource{
-							EmptyDir: &corev1.EmptyDirVolumeSource{
-								SizeLimit: &sizeLimit,
-							},
-						},
-					}},
+	return corev1.PodTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: podAnnotations},
+		Spec: corev1.PodSpec{
+			InitContainers: []corev1.Container{initContainer},
+			Containers:     containers,
+			Volumes: []corev1.Volume{{
+				Name: dbReplicaDataVolumeName,
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{
+						SizeLimit: &sizeLimit,
+					},
 				},
-			},
+			}},
+		},
+	}
+}
+
+func dbReplicaStatefulSetSpec(
+	cfg DeployConfig,
+	resources corev1.ResourceRequirements,
+	replicas int32,
+	size string,
+) *appsv1.StatefulSet {
+	return dbReplicaStatefulSetSpecNamed(cfg, dbReplicaStatefulSetName, resources, replicas, size)
+}
+
+func dbReplicaStatefulSetSpecNamed(
+	cfg DeployConfig,
+	stsName string,
+	resources corev1.ResourceRequirements,
+	replicas int32,
+	size string,
+) *appsv1.StatefulSet {
+	labels := map[string]string{
+		"app":                dbReplicaAppLabel,
+		"deployment":         cfg.Namespace,
+		instanceSizeLabelKey: normalizeInstanceSize(size),
+	}
+	return &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: stsName, Namespace: cfg.Namespace},
+		Spec: appsv1.StatefulSetSpec{
+			ServiceName:         dbReplicaHeadlessServiceName,
+			Replicas:            ptr(replicas),
+			PodManagementPolicy: appsv1.ParallelPodManagement,
+			Selector:            &metav1.LabelSelector{MatchLabels: labels},
+			Template:            dbReplicaPodTemplateSpec(cfg, resources, size),
+		},
+	}
+}
+
+func dbReplicaHeadlessServiceSpec(cfg DeployConfig) *corev1.Service {
+	dbSpec := componentRegistry["db"]
+	labels := map[string]string{"app": dbReplicaAppLabel, "deployment": cfg.Namespace}
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: dbReplicaHeadlessServiceName, Namespace: cfg.Namespace},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: corev1.ClusterIPNone,
+			Selector:  labels,
+			Ports: []corev1.ServicePort{{
+				Name:       "postgres",
+				Port:       dbSpec.ServicePort,
+				TargetPort: intstr.FromInt32(dbSpec.Ports[0]),
+			}},
 		},
 	}
 }
@@ -198,16 +273,18 @@ func (k *K8sDeployer) deployDBReadReplicas(ctx context.Context, cfg DeployConfig
 	standbySizes := sizes[1:]
 	groups := sizeGroups(standbySizes)
 
+	headless := dbReplicaHeadlessServiceSpec(cfg)
+	if _, err := k.clientset.CoreV1().Services(cfg.Namespace).Create(ctx, headless, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("create postgres-replica headless service: %w", err)
+	}
+
 	var desiredReady int32
 	for i, group := range groups {
-		depName := dbReplicaDeploymentName
-		if i > 0 {
-			depName = dbReplicaDeploymentName + "-" + group.Size
-		}
+		stsName := dbReplicaStatefulSetNameForGroup(i, group.Size)
 		resources := dbResourcesForSize(group.Size)
-		dep := dbReplicaDeploymentSpecNamed(cfg, depName, resources, group.Count)
-		if _, err := k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil {
-			return fmt.Errorf("create postgres-replica deployment %s: %w", depName, err)
+		sts := dbReplicaStatefulSetSpecNamed(cfg, stsName, resources, group.Count, group.Size)
+		if _, err := k.clientset.AppsV1().StatefulSets(cfg.Namespace).Create(ctx, sts, metav1.CreateOptions{}); err != nil {
+			return fmt.Errorf("create postgres-replica statefulset %s: %w", stsName, err)
 		}
 		desiredReady += group.Count
 	}
@@ -218,4 +295,19 @@ func (k *K8sDeployer) deployDBReadReplicas(ctx context.Context, cfg DeployConfig
 	}
 
 	return k.waitForReady(ctx, cfg.Namespace, dbReplicaAppLabel, desiredReady)
+}
+
+// dbReplicaHostsFromConfig builds READ_REPLICA_HOSTS for a db node config.
+func dbReplicaHostsFromConfig(dbConfig map[string]any) string {
+	readReplicas := int(parseReadReplicaCount(dbConfig))
+	if readReplicas <= 0 {
+		return ""
+	}
+	total := 1 + readReplicas
+	sizes := instanceSizesFromConfig(dbConfig, total)
+	if len(sizes) < total {
+		return ""
+	}
+	hosts := dbReplicaHostnames(readReplicas, sizes[1:])
+	return strings.Join(hosts, ",")
 }
