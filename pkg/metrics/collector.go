@@ -797,17 +797,21 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	))
 	cmApp.ErrorRate = errRate
 
-	// Session p99: rate() over elapsed deployment time (clamped 1m–30m), not a fixed 9m window.
+	// Session p50/p95/p99: rate() over elapsed deployment time (clamped 1m–30m), not a fixed 9m window.
 	// After an app-server pod kill, the quantile reflects only pods still live in Prometheus.
 	sessionP99Range := sessionP99PromRange(c.sessionAcc.Elapsed(ns, time.Now()))
 	latBucketRate9m := fmt.Sprintf(`sum(rate(http_request_duration_seconds_bucket{%s}%s)) by (le)`, nsSel, sessionP99Range)
+	p50_9m, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.50, %s)`, latBucketRate9m))
+	p95_9m, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.95, %s)`, latBucketRate9m))
 	p99_9m, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.99, %s)`, latBucketRate9m))
+	cmApp.P50Latency9m = p50_9m
+	cmApp.P95Latency9m = p95_9m
 	cmApp.P99Latency9m = p99_9m
 
 	cmApp.CPULimit = c.kubeLimitCPU(ctx, ns, "app-server.*", "app-server")
 	cmApp.MemoryLimit = c.kubeLimitMem(ctx, ns, "app-server.*", "app-server")
 
-	rpsByPod, p99ByPod, cpuByPod, errByPod, totalReqsByPod, memByPod := c.appServerReplicaSeries(ctx, ns)
+	rpsByPod, p50ByPod, p95ByPod, p99ByPod, p50SessionByPod, p95SessionByPod, p99SessionByPod, cpuByPod, errByPod, totalReqsByPod, totalErrsByPod, memByPod := c.appServerReplicaSeries(ctx, ns)
 	httpErrByPod := c.queryMultiResult(ctx, fmt.Sprintf(
 		`sum by (pod) (http_requests_total{%s,status=~"5.."})`,
 		appServerSel,
@@ -834,7 +838,12 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	}
 
 	podNames, readyByPod, backendReplicas := c.listAppServerPods(ctx, ns)
-	replicaRows := mergePodMetricMaps(podNames, readyByPod, rpsByPod, p99ByPod, cpuByPod, errByPod, totalReqsByPod, memByPod)
+	replicaRows := mergePodMetricMaps(
+		podNames, readyByPod,
+		rpsByPod, p50ByPod, p95ByPod, p99ByPod,
+		p50SessionByPod, p95SessionByPod, p99SessionByPod,
+		cpuByPod, errByPod, totalReqsByPod, totalErrsByPod, memByPod,
+	)
 	if len(replicaRows) > 0 {
 		cmApp.Replicas = replicaRows
 	}
@@ -1033,6 +1042,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	}
 	cmLB.TotalRequests = cmApp.TotalRequests
 	cmLB.TotalErrors9m = cmApp.TotalErrors9m
+	cmLB.P50Latency9m = cmApp.P50Latency9m
+	cmLB.P95Latency9m = cmApp.P95Latency9m
 	cmLB.P99Latency9m = cmApp.P99Latency9m
 	c.debugCompare("lb", "rps", cmLB.RequestRate, cmApp.RequestRate, "sum(perBackendRPS)", "mirrored app requestRate")
 	dm.Components["lb"] = cmLB

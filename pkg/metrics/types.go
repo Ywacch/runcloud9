@@ -149,8 +149,11 @@ type ComponentMetrics struct {
 	// TotalErrors9m is the session sum of http_requests_total{status=~"5.."} on app-server pods.
 	// JSON name kept for the inspector contract.
 	TotalErrors9m float64 `json:"totalErrors9m,omitempty"`
-	// P99Latency9m is histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[elapsed])) in seconds.
-	// Elapsed session time is clamped to [1m, 30m]; JSON name kept for API compatibility.
+	// P50Latency9m / P95Latency9m / P99Latency9m are histogram_quantile over
+	// rate(http_request_duration_seconds_bucket[elapsed]) in seconds.
+	// Elapsed session time is clamped to [1m, 30m]; JSON *9m names kept for API compatibility.
+	P50Latency9m float64 `json:"p50Latency9m,omitempty"`
+	P95Latency9m float64 `json:"p95Latency9m,omitempty"`
 	P99Latency9m float64 `json:"p99Latency9m,omitempty"`
 	// Db* metrics come from app db_query_duration_seconds when scraped (app-server /metrics).
 	DbQueryRate    float64 `json:"dbQueryRate"`             // queries/sec; meaningful when dbQuerySource=app
@@ -283,7 +286,14 @@ type PodMetrics struct {
 	RequestRate float64 `json:"requestRate"`
 	// TotalRequests is sum(http_requests_total) for this pod since process start.
 	TotalRequests float64 `json:"totalRequests,omitempty"`
+	P50Latency    float64 `json:"p50Latency,omitempty"`
+	P95Latency    float64 `json:"p95Latency,omitempty"`
 	P99Latency    float64 `json:"p99Latency"`
+	// TotalErrors9m is sum(http_requests_total{status=~"5.."}) for this pod since process start.
+	TotalErrors9m float64 `json:"totalErrors9m,omitempty"`
+	P50Latency9m  float64 `json:"p50Latency9m,omitempty"`
+	P95Latency9m  float64 `json:"p95Latency9m,omitempty"`
+	P99Latency9m  float64 `json:"p99Latency9m,omitempty"`
 	CPUUsage      float64 `json:"cpuUsage,omitempty"`
 	MemoryBytes   int64   `json:"memoryBytes,omitempty"`
 	ErrorRate     float64 `json:"errorRate,omitempty"`
