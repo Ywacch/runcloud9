@@ -16,6 +16,7 @@ const (
 	seriesRedisWrite  = "redis_write"
 	seriesPgRead      = "pg_read"
 	seriesPgWrite     = "pg_write"
+	seriesPgXact      = "pg_xact"
 )
 
 // sessionP99MinWindow is the minimum PromQL range for session p99 histogram rates.

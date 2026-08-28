@@ -268,6 +268,13 @@ type ComponentLayerMetrics struct {
 	ReplicationLagSeconds *float64 `json:"replicationLagSeconds,omitempty"`
 	// RequestRate is per-layer PostgreSQL transaction throughput (xact/s) when known.
 	RequestRate float64 `json:"requestRate,omitempty"`
+	// TotalRequests is the session sum of pg_stat_database xact commit+rollback for this layer.
+	TotalRequests float64 `json:"totalRequests,omitempty"`
+	// DbActiveConnections is active backends on this layer's postgres pod(s).
+	DbActiveConnections float64 `json:"dbActiveConnections,omitempty"`
+	// StorageIO holds engine-native I/O for this layer. Primary layers copy cluster
+	// storageIo (read+write). Replica layers expose read scans only (no write totals).
+	StorageIO *StorageIO `json:"storageIo,omitempty"`
 	// Freshness tags containerCpu / containerMem for this layer (proxy vs backing store
 	// can sit on different tiers). See freshness.go.
 	Freshness map[string]SignalFreshness `json:"freshness,omitempty"`

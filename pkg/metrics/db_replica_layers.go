@@ -93,20 +93,49 @@ func postgresXactRateByPodQuery(ns string) string {
 	)
 }
 
-func mapPostgresLayerRequestRates(rpsByPod map[string]float64) map[string]float64 {
+func postgresXactTotalByPodQuery(ns string) string {
+	return fmt.Sprintf(
+		`sum by (pod) (pg_stat_database_xact_commit{namespace=%q,datname!=""} + pg_stat_database_xact_rollback{namespace=%q,datname!=""})`,
+		ns, ns,
+	)
+}
+
+func postgresActiveConnectionsByPodQuery(ns string) string {
+	return fmt.Sprintf(
+		`sum by (pod) (pg_stat_activity_count{namespace=%q,state="active"})`,
+		ns,
+	)
+}
+
+func postgresNumBackendsByPodQuery(ns string) string {
+	return fmt.Sprintf(
+		`sum by (pod) (pg_stat_database_numbackends{namespace=%q,datname!=""})`,
+		ns,
+	)
+}
+
+func dbLayerSessionSeries(baseSeries, layerID string) string {
+	return baseSeries + "." + layerID
+}
+
+func mapPostgresLayerPodValues(byPod map[string]float64) map[string]float64 {
 	out := make(map[string]float64)
 	replicaRE, err := regexp.Compile("^" + dbReplicaPodSelector + "$")
 	if err != nil {
 		return out
 	}
-	for pod, rate := range rpsByPod {
+	for pod, v := range byPod {
 		if replicaRE.MatchString(pod) {
-			out[pod] = rate
+			out[pod] = v
 			continue
 		}
-		out[dbLayerIDPostgresPrimary] += rate
+		out[dbLayerIDPostgresPrimary] += v
 	}
 	return out
+}
+
+func mapPostgresLayerRequestRates(rpsByPod map[string]float64) map[string]float64 {
+	return mapPostgresLayerPodValues(rpsByPod)
 }
 
 func (c *MetricsCollector) dbLayerRequestRateByPod(ctx context.Context, ns string) map[string]float64 {
@@ -114,6 +143,97 @@ func (c *MetricsCollector) dbLayerRequestRateByPod(ctx context.Context, ns strin
 		return nil
 	}
 	return mapPostgresLayerRequestRates(c.queryMultiResult(ctx, postgresXactRateByPodQuery(ns), "pod"))
+}
+
+func (c *MetricsCollector) postgresConnectionsByPod(ctx context.Context, ns string) map[string]float64 {
+	if c == nil || c.prometheusURL == "" {
+		return nil
+	}
+	byPod := c.queryMultiResult(ctx, postgresActiveConnectionsByPodQuery(ns), "pod")
+	if len(byPod) == 0 {
+		byPod = c.queryMultiResult(ctx, postgresNumBackendsByPodQuery(ns), "pod")
+	}
+	return byPod
+}
+
+func replicaReadOnlyStorageIO(cluster *StorageIO, readRate, readTotal9m float64) *StorageIO {
+	io := &StorageIO{
+		Unit:        "rows/s",
+		Source:      "postgres_exporter",
+		ReadRate:    readRate,
+		ReadTotal9m: readTotal9m,
+		ReadLabel:   "Rows scanned/s",
+	}
+	if cluster == nil {
+		return io
+	}
+	if cluster.Unit != "" {
+		io.Unit = cluster.Unit
+	}
+	if cluster.Source != "" {
+		io.Source = cluster.Source
+	}
+	if cluster.ReadLabel != "" {
+		io.ReadLabel = cluster.ReadLabel
+	}
+	return io
+}
+
+func (c *MetricsCollector) enrichDBLayerEngineMetrics(ctx context.Context, ns string, split *dbReplicaLayerSplit, clusterStorageIO *StorageIO) {
+	if c == nil || split == nil || len(split.replicaPods) == 0 {
+		return
+	}
+	held := c.postgresSessionHeld(ns)
+
+	xactByPod := c.queryMultiResult(ctx, postgresXactTotalByPodQuery(ns), "pod")
+	xactByLayer := mapPostgresLayerPodValues(xactByPod)
+	connByPod := c.postgresConnectionsByPod(ctx, ns)
+	connByLayer := mapPostgresLayerPodValues(connByPod)
+
+	if !held {
+		if count, ok := xactByLayer[dbLayerIDPostgresPrimary]; ok {
+			split.primary.TotalRequests = c.sessionAcc.ObserveDeltas(
+				ns,
+				dbLayerSessionSeries(seriesPgXact, dbLayerIDPostgresPrimary),
+				map[string]float64{dbLayerIDPostgresPrimary: count},
+			)
+		}
+	}
+	if conn, ok := connByLayer[dbLayerIDPostgresPrimary]; ok {
+		split.primary.DbActiveConnections = conn
+	}
+	split.primary.StorageIO = cloneStorageIO(clusterStorageIO)
+
+	for i := range split.replicas {
+		layer := &split.replicas[i]
+		podName := layer.ID
+
+		if !held {
+			if count, ok := xactByPod[podName]; ok {
+				layer.TotalRequests = c.sessionAcc.ObserveDeltas(
+					ns,
+					dbLayerSessionSeries(seriesPgXact, podName),
+					map[string]float64{podName: count},
+				)
+			}
+		}
+		if conn, ok := connByPod[podName]; ok {
+			layer.DbActiveConnections = conn
+		}
+
+		readRate, _ := c.query(ctx, postgresReplicaUserTableReadRateQuery(ns, podName))
+		var readTotal9m float64
+		if !held {
+			if total, ok, _ := c.queryScalar(ctx, postgresReplicaUserTableReadTotalQuery(ns, podName)); ok {
+				readTotal9m = c.sessionAcc.ObserveDeltas(
+					ns,
+					dbLayerSessionSeries(seriesPgRead, podName),
+					map[string]float64{podName: total},
+				)
+			}
+		}
+		layer.StorageIO = replicaReadOnlyStorageIO(clusterStorageIO, readRate, readTotal9m)
+	}
 }
 
 func (c *MetricsCollector) replicaLagByPod(ctx context.Context, ns string, replicaPods []string) map[string]float64 {
@@ -188,7 +308,7 @@ func (c *MetricsCollector) buildDBReplicaLayer(ctx context.Context, ns, podName 
 }
 
 // collectDBReplicaLayers builds primary + per-replica instance layers when postgres-replica pods exist.
-func (c *MetricsCollector) collectDBReplicaLayers(ctx context.Context, ns string) dbReplicaLayerSplit {
+func (c *MetricsCollector) collectDBReplicaLayers(ctx context.Context, ns string, clusterStorageIO *StorageIO) dbReplicaLayerSplit {
 	out := dbReplicaLayerSplit{ready: make(map[string]bool)}
 	if c == nil {
 		return out
@@ -215,6 +335,7 @@ func (c *MetricsCollector) collectDBReplicaLayers(ctx context.Context, ns string
 		replicaLayer.RequestRate = rpsByLayer[podName]
 		out.replicas = append(out.replicas, replicaLayer)
 	}
+	c.enrichDBLayerEngineMetrics(ctx, ns, &out, clusterStorageIO)
 	return out
 }
 

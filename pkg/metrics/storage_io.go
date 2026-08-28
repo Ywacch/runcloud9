@@ -151,6 +151,38 @@ func postgresUserTableWriteTotal9mQuery(ns string) string {
 		` + sum(pg_stat_user_tables_n_tup_del{` + filter + `})`
 }
 
+// postgresReplicaUserTableMetricFilter scopes pg_stat_user_tables to one replica pod.
+func postgresReplicaUserTableMetricFilter(ns, podName string) string {
+	return fmt.Sprintf(
+		`namespace=%q,datname!~"template0|template1",relname!~"_c9_.*",pod=~%q`,
+		ns, fmt.Sprintf("^%s$", podName),
+	)
+}
+
+// postgresReplicaUserTableReadRateQuery sums live rows read on user tables for one replica pod.
+func postgresReplicaUserTableReadRateQuery(ns, podName string) string {
+	filter := postgresReplicaUserTableMetricFilter(ns, podName)
+	rw := promRateRange()
+	return `sum(rate(pg_stat_user_tables_seq_tup_read{` + filter + `}` + rw + `))` +
+		` + sum(rate(pg_stat_user_tables_idx_tup_fetch{` + filter + `}` + rw + `))`
+}
+
+// postgresReplicaUserTableReadTotalQuery sums cumulative rows read on user tables for one replica pod.
+func postgresReplicaUserTableReadTotalQuery(ns, podName string) string {
+	filter := postgresReplicaUserTableMetricFilter(ns, podName)
+	return `sum(pg_stat_user_tables_seq_tup_read{` + filter + `})` +
+		` + sum(pg_stat_user_tables_idx_tup_fetch{` + filter + `})`
+}
+
+// cloneStorageIO returns a shallow copy of src, or nil when src is nil.
+func cloneStorageIO(src *StorageIO) *StorageIO {
+	if src == nil {
+		return nil
+	}
+	cp := *src
+	return &cp
+}
+
 // LookupStorageProvider returns the metrics provider for an engine id, if registered.
 func LookupStorageProvider(engine StorageEngineID) (StorageIOProvider, bool) {
 	p, ok := storageIORegistry[engine]
