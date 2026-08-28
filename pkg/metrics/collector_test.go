@@ -26,9 +26,17 @@ func promVectorJSON(value string) map[string]any {
 	}
 }
 
+func isSessionLatencyHistogramQuery(q string) bool {
+	if !strings.Contains(q, "http_request_duration_seconds_bucket") {
+		return false
+	}
+	return strings.Contains(q, "histogram_quantile(0.50") ||
+		strings.Contains(q, "histogram_quantile(0.95") ||
+		strings.Contains(q, "histogram_quantile(0.99")
+}
+
 func isSessionP99HistogramQuery(q string) bool {
-	return strings.Contains(q, "histogram_quantile(0.99") &&
-		strings.Contains(q, "http_request_duration_seconds_bucket")
+	return isSessionLatencyHistogramQuery(q) && strings.Contains(q, "histogram_quantile(0.99")
 }
 
 func promMultiVectorJSON(labelKey string, series map[string]string) map[string]any {
@@ -171,7 +179,8 @@ func TestCollect_CacheSessionAccumulatorSurvivesPodKill(t *testing.T) {
 func TestCollect_Session9mAggregates(t *testing.T) {
 	t.Parallel()
 
-	var sessionP99Q string
+	var sessionP50Q, sessionP95Q, sessionP99Q string
+	var podSessionP50Q, podSessionP99Q string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
 		w.Header().Set("Content-Type", "application/json")
@@ -195,7 +204,26 @@ func TestCollect_Session9mAggregates(t *testing.T) {
 				"app-server-abc": "16240",
 				"app-server-def": "16105",
 			}))
-		case strings.Contains(q, `histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{namespace="ns-test"}`):
+		case strings.Contains(q, `histogram_quantile(0.50, sum by (pod, le) (rate(http_request_duration_seconds_bucket{namespace="ns-test"}`):
+			podSessionP50Q = q
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				"app-server-abc": "0.010",
+			}))
+		case strings.Contains(q, `histogram_quantile(0.99, sum by (pod, le) (rate(http_request_duration_seconds_bucket{namespace="ns-test"}`):
+			podSessionP99Q = q
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				"app-server-def": "0.042",
+			}))
+		case strings.Contains(q, `histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{namespace="ns-test"}`) &&
+			strings.Contains(q, " by (le)"):
+			sessionP50Q = q
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.010"))
+		case strings.Contains(q, `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{namespace="ns-test"}`) &&
+			strings.Contains(q, " by (le)"):
+			sessionP95Q = q
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.025"))
+		case strings.Contains(q, `histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{namespace="ns-test"}`) &&
+			strings.Contains(q, " by (le)"):
 			sessionP99Q = q
 			_ = json.NewEncoder(w).Encode(promVectorJSON("0.042"))
 		default:
@@ -210,14 +238,26 @@ func TestCollect_Session9mAggregates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if sessionP99Q == "" {
-		t.Fatal("session p99 query not issued")
+	for name, q := range map[string]string{
+		"sessionP50": sessionP50Q,
+		"sessionP95": sessionP95Q,
+		"sessionP99": sessionP99Q,
+	} {
+		if q == "" {
+			t.Fatalf("%s query not issued", name)
+		}
+		if strings.Contains(q, "[9m]") {
+			t.Fatalf("%s still uses [9m]: %s", name, q)
+		}
+		if !strings.Contains(q, "[1m]") {
+			t.Fatalf("first tick should use at least [1m] for %s: %s", name, q)
+		}
 	}
-	if strings.Contains(sessionP99Q, "[9m]") {
-		t.Fatalf("session p99 still uses [9m]: %s", sessionP99Q)
+	if podSessionP50Q == "" || !strings.Contains(podSessionP50Q, "by (pod, le)") {
+		t.Fatalf("expected per-pod session p50 query, got %q", podSessionP50Q)
 	}
-	if !strings.Contains(sessionP99Q, "[1m]") {
-		t.Fatalf("first tick should use at least [1m]: %s", sessionP99Q)
+	if podSessionP99Q == "" || !strings.Contains(podSessionP99Q, "by (pod, le)") {
+		t.Fatalf("expected per-pod session p99 query, got %q", podSessionP99Q)
 	}
 
 	app := dm.Components["app-server"]
@@ -226,6 +266,12 @@ func TestCollect_Session9mAggregates(t *testing.T) {
 	}
 	if app.TotalErrors9m != 12 {
 		t.Fatalf("app TotalErrors9m: want 12, got %v", app.TotalErrors9m)
+	}
+	if app.P50Latency9m != 0.010 {
+		t.Fatalf("app P50Latency9m: want 0.010, got %v", app.P50Latency9m)
+	}
+	if app.P95Latency9m != 0.025 {
+		t.Fatalf("app P95Latency9m: want 0.025, got %v", app.P95Latency9m)
 	}
 	if app.P99Latency9m != 0.042 {
 		t.Fatalf("app P99Latency9m: want 0.042, got %v", app.P99Latency9m)
@@ -237,6 +283,12 @@ func TestCollect_Session9mAggregates(t *testing.T) {
 	}
 	if lb.TotalErrors9m != 12 {
 		t.Fatalf("lb TotalErrors9m: want 12, got %v", lb.TotalErrors9m)
+	}
+	if lb.P50Latency9m != 0.010 {
+		t.Fatalf("lb P50Latency9m: want 0.010, got %v", lb.P50Latency9m)
+	}
+	if lb.P95Latency9m != 0.025 {
+		t.Fatalf("lb P95Latency9m: want 0.025, got %v", lb.P95Latency9m)
 	}
 	if lb.P99Latency9m != 0.042 {
 		t.Fatalf("lb P99Latency9m: want 0.042, got %v", lb.P99Latency9m)
@@ -254,6 +306,15 @@ func TestCollect_Session9mAggregates(t *testing.T) {
 	}
 	if byPod["app-server-def"].TotalRequests != 16105 {
 		t.Fatalf("pod def totalRequests: want 16105, got %v", byPod["app-server-def"].TotalRequests)
+	}
+	if byPod["app-server-abc"].TotalErrors9m != 7 {
+		t.Fatalf("pod abc totalErrors9m: want 7, got %v", byPod["app-server-abc"].TotalErrors9m)
+	}
+	if byPod["app-server-abc"].P50Latency9m != 0.010 {
+		t.Fatalf("pod abc P50Latency9m: want 0.010, got %v", byPod["app-server-abc"].P50Latency9m)
+	}
+	if byPod["app-server-def"].P99Latency9m != 0.042 {
+		t.Fatalf("pod def P99Latency9m: want 0.042, got %v", byPod["app-server-def"].P99Latency9m)
 	}
 }
 
@@ -489,7 +550,7 @@ func TestCollect_NoDeprecatedRateWindows(t *testing.T) {
 			t.Fatalf("query must not use deprecated [9m] session window: %s", q)
 		}
 		// Session p99 uses elapsed time clamped to [1m, 30m]; live rates stay [10s].
-		if strings.Contains(q, "[1m]") && !isSessionP99HistogramQuery(q) {
+		if strings.Contains(q, "[1m]") && !isSessionLatencyHistogramQuery(q) {
 			t.Fatalf("query must not use [1m] window: %s", q)
 		}
 	}
@@ -532,16 +593,26 @@ func TestCollect_HistogramQuantilesUsePromRateWindowBucketRate(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
+	var sawPodLive bool
 	for _, q := range seen {
 		if strings.Contains(q, "http_request_duration_seconds_bucket") && strings.Contains(q, "histogram_quantile") {
 			if strings.Contains(q, promRateRange()) {
-				continue
+				if strings.Contains(q, "by (pod, le)") {
+					sawPodLive = true
+					continue
+				}
+				if strings.Contains(q, " by (le)") {
+					continue
+				}
+				t.Fatalf("live histogram should use by (le) or by (pod, le): %s", q)
 			}
 			if strings.Contains(q, "[9m]") {
-				t.Fatalf("session p99 should not use [9m]: %s", q)
+				t.Fatalf("session histogram should not use [9m]: %s", q)
 			}
-			continue
 		}
+	}
+	if !sawPodLive {
+		t.Fatal("expected per-pod live latency histogram queries")
 	}
 }
 
