@@ -42,15 +42,6 @@ var (
 		Help: "Total cache misses",
 	})
 
-	dbQueryDuration = promauto.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Name:    "db_query_duration_seconds",
-			Help:    "Database query latency in seconds",
-			Buckets: prometheus.DefBuckets,
-		},
-		[]string{"operation"},
-	)
-
 	shortenerCodeCollisionsTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "shortener_code_collisions_total",
 		Help: "Short code collisions detected while allocating a new code",

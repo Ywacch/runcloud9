@@ -100,9 +100,22 @@ func NormalizeObserveTarget(target string) string {
 func Observe(ctx context.Context, op, target string, fn func() error) error {
 	start := time.Now()
 	err := fn()
+	recordQueryDuration(ctx, op, target, start)
+	return err
+}
+
+// ObserveTarget times fn and records latency under the target hostname fn returns.
+// Use for reads where the chosen pool is only known after routing.
+func ObserveTarget(ctx context.Context, op string, fn func() (target string, err error)) error {
+	start := time.Now()
+	target, err := fn()
+	recordQueryDuration(ctx, op, target, start)
+	return err
+}
+
+func recordQueryDuration(ctx context.Context, op, target string, start time.Time) {
 	dbQueryDuration.WithLabelValues(op, NormalizeObserveTarget(target)).Observe(time.Since(start).Seconds())
 	trace.LogDB(ctx, op, start)
-	return err
 }
 
 func envOrDefault(key, fallback string) string {

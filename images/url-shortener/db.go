@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/ywacch/cloud9/pkg/templateapp/postgres"
 	"github.com/ywacch/cloud9/pkg/templateapp/readrouter"
 	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 )
@@ -23,30 +24,32 @@ type readSplitRouter interface {
 		clientID string,
 		build func(readTokenExpr string) (sql string, args []any),
 		scan func(row pgx.Row, replayToken *string) error,
-	) (readrouter.Route, error)
+	) (readrouter.Route, string, error)
 	AfterWrite(clientID string, t readrouter.ConsistencyToken)
 }
 
 type DB struct {
-	pool     *pgxpool.Pool
-	readPool *pgxpool.Pool
-	router   readSplitRouter
-	engine   readrouter.Engine
+	pool      *pgxpool.Pool
+	readPools []*pgxpool.Pool
+	router    readSplitRouter
+	engine    readrouter.Engine
 }
 
-func newDB(pool, readPool *pgxpool.Pool, router readSplitRouter) *DB {
+func newDB(pool *pgxpool.Pool, readPools []*pgxpool.Pool, router readSplitRouter) *DB {
 	eng := readrouter.PostgresEngine{}
 	return &DB{
-		pool:     pool,
-		readPool: readPool,
-		router:   router,
-		engine:   eng,
+		pool:      pool,
+		readPools: readPools,
+		router:    router,
+		engine:    eng,
 	}
 }
 
 func (db *DB) Close() {
-	if db.readPool != nil {
-		db.readPool.Close()
+	for _, p := range db.readPools {
+		if p != nil {
+			p.Close()
+		}
 	}
 }
 
@@ -108,52 +111,53 @@ func (db *DB) recordWriteToken(ctx context.Context, clientID string) error {
 
 // InsertURL inserts a row; on primary-key conflict it does nothing and returns inserted=false.
 func (db *DB) InsertURL(ctx context.Context, code, original string) (inserted bool, err error) {
-	start := time.Now()
-	defer func() {
-		dbQueryDuration.WithLabelValues("insert_url").Observe(time.Since(start).Seconds())
-		trace.LogDB(ctx, "insert_url", start)
-	}()
-	tag, err := db.pool.Exec(ctx, `
-		INSERT INTO urls (code, original)
-		VALUES ($1, $2)
-		ON CONFLICT (code) DO NOTHING
-	`, code, original)
-	if err != nil {
-		return false, err
-	}
-	inserted = tag.RowsAffected() > 0
-	if inserted {
-		if err := db.recordWriteToken(ctx, trace.ClientID(ctx)); err != nil {
-			return true, err
+	err = postgres.Observe(ctx, "insert_url", "postgres", func() error {
+		tag, execErr := db.pool.Exec(ctx, `
+			INSERT INTO urls (code, original)
+			VALUES ($1, $2)
+			ON CONFLICT (code) DO NOTHING
+		`, code, original)
+		if execErr != nil {
+			return execErr
 		}
-	}
-	return inserted, nil
+		inserted = tag.RowsAffected() > 0
+		if inserted {
+			if tokenErr := db.recordWriteToken(ctx, trace.ClientID(ctx)); tokenErr != nil {
+				return tokenErr
+			}
+		}
+		return nil
+	})
+	return inserted, err
 }
 
 func (db *DB) GetURL(ctx context.Context, code string) (URLStats, error) {
-	start := time.Now()
-	defer func() {
-		dbQueryDuration.WithLabelValues("get_url").Observe(time.Since(start).Seconds())
-		trace.LogDB(ctx, "get_url", start)
-	}()
-
 	if !routerActive(db.router) {
-		return db.getURLLeader(ctx, code)
+		var record URLStats
+		err := postgres.Observe(ctx, "get_url", "postgres", func() error {
+			var err error
+			record, err = db.getURLLeader(ctx, code)
+			return err
+		})
+		return record, err
 	}
 
 	clientID := trace.ClientID(ctx)
 	var record URLStats
-	_, err := db.router.QueryRead(ctx, clientID,
-		func(tokenExpr string) (string, []any) {
-			return getURLQuery(tokenExpr), []any{code}
-		},
-		func(row pgx.Row, replayToken *string) error {
-			if replayToken != nil {
-				return row.Scan(&record.Code, &record.Original, &record.CreatedAt, replayToken)
-			}
-			return row.Scan(&record.Code, &record.Original, &record.CreatedAt)
-		},
-	)
+	err := postgres.ObserveTarget(ctx, "get_url", func() (string, error) {
+		_, target, err := db.router.QueryRead(ctx, clientID,
+			func(tokenExpr string) (string, []any) {
+				return getURLQuery(tokenExpr), []any{code}
+			},
+			func(row pgx.Row, replayToken *string) error {
+				if replayToken != nil {
+					return row.Scan(&record.Code, &record.Original, &record.CreatedAt, replayToken)
+				}
+				return row.Scan(&record.Code, &record.Original, &record.CreatedAt)
+			},
+		)
+		return target, err
+	})
 	if err != nil {
 		return URLStats{}, err
 	}
@@ -170,29 +174,32 @@ func (db *DB) getURLLeader(ctx context.Context, code string) (URLStats, error) {
 }
 
 func (db *DB) URLExists(ctx context.Context, code string) (bool, error) {
-	start := time.Now()
-	defer func() {
-		dbQueryDuration.WithLabelValues("url_exists").Observe(time.Since(start).Seconds())
-		trace.LogDB(ctx, "url_exists", start)
-	}()
-
 	if !routerActive(db.router) {
-		return db.urlExistsLeader(ctx, code)
+		var exists bool
+		err := postgres.Observe(ctx, "url_exists", "postgres", func() error {
+			var err error
+			exists, err = db.urlExistsLeader(ctx, code)
+			return err
+		})
+		return exists, err
 	}
 
 	clientID := trace.ClientID(ctx)
 	var exists bool
-	_, err := db.router.QueryRead(ctx, clientID,
-		func(tokenExpr string) (string, []any) {
-			return urlExistsQuery(tokenExpr), []any{code}
-		},
-		func(row pgx.Row, replayToken *string) error {
-			if replayToken != nil {
-				return row.Scan(&exists, replayToken)
-			}
-			return row.Scan(&exists)
-		},
-	)
+	err := postgres.ObserveTarget(ctx, "url_exists", func() (string, error) {
+		_, target, err := db.router.QueryRead(ctx, clientID,
+			func(tokenExpr string) (string, []any) {
+				return urlExistsQuery(tokenExpr), []any{code}
+			},
+			func(row pgx.Row, replayToken *string) error {
+				if replayToken != nil {
+					return row.Scan(&exists, replayToken)
+				}
+				return row.Scan(&exists)
+			},
+		)
+		return target, err
+	})
 	return exists, err
 }
 

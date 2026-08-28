@@ -41,6 +41,18 @@ func TestNormalizeObserveTarget(t *testing.T) {
 	}
 }
 
+func TestObserveTarget_recordsDynamicTarget(t *testing.T) {
+	t.Parallel()
+	if err := ObserveTarget(context.Background(), "get_url", func() (string, error) {
+		return "postgres-replica-1", nil
+	}); err != nil {
+		t.Fatalf("ObserveTarget: %v", err)
+	}
+	if _, err := dbQueryDuration.GetMetricWithLabelValues("get_url", "postgres-replica-1"); err != nil {
+		t.Fatalf("expected histogram series for dynamic target: %v", err)
+	}
+}
+
 func TestObserve_recordsTargetLabel(t *testing.T) {
 	t.Parallel()
 	if err := Observe(context.Background(), "select_url", "postgres-replica-0", func() error {

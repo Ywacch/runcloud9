@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/ywacch/cloud9/pkg/templateapp/postgres"
 	"github.com/ywacch/cloud9/pkg/templateapp/readrouter"
 )
 
@@ -123,5 +126,109 @@ func TestReadRouterRYWRedirectsToLeaderAfterWrite(t *testing.T) {
 
 	if got := r.RouteRead("203.0.113.1", readrouter.PolicyRYW); got != readrouter.RouteLeader {
 		t.Fatalf("RouteRead after stale read = %v want leader", got)
+	}
+}
+
+func TestReadReplicaHostsFromEnv(t *testing.T) {
+	tests := []struct {
+		name      string
+		hostsEnv  string
+		fallback  string
+		wantHosts []string
+	}{
+		{
+			name:      "comma list",
+			hostsEnv:  "postgres-replica-0, postgres-replica-1",
+			wantHosts: []string{"postgres-replica-0", "postgres-replica-1"},
+		},
+		{
+			name:      "fallback host",
+			fallback:  "db-replica",
+			wantHosts: []string{"db-replica"},
+		},
+		{
+			name:      "empty list falls back",
+			hostsEnv:  " , ",
+			fallback:  "postgres-replica-0",
+			wantHosts: []string{"postgres-replica-0"},
+		},
+		{
+			name:      "unset",
+			wantHosts: nil,
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("READ_REPLICA_HOSTS", tc.hostsEnv)
+			cfg := Config{ReadReplicaHost: tc.fallback}
+			got := readReplicaHostsFromEnv(cfg)
+			if len(got) != len(tc.wantHosts) {
+				t.Fatalf("len=%d want %d: %v", len(got), len(tc.wantHosts), got)
+			}
+			for i := range got {
+				if got[i] != tc.wantHosts[i] {
+					t.Fatalf("host[%d]=%q want %q", i, got[i], tc.wantHosts[i])
+				}
+			}
+		})
+	}
+}
+
+func TestReadReplicaHosts_buildsMultiPoolRouter(t *testing.T) {
+	t.Setenv("READ_REPLICA_HOSTS", "postgres-replica-0,postgres-replica-1")
+	hosts := readReplicaHostsFromEnv(Config{})
+	replicas := make([]readrouter.ReplicaPool, len(hosts))
+	for i, host := range hosts {
+		replicas[i] = readrouter.ReplicaPool{Host: host}
+	}
+	r := readrouter.NewReadRouter(nil, replicas, readrouter.PostgresEngine{}, readrouter.PolicyReplica)
+	if r == nil {
+		t.Fatal("nil router")
+	}
+	if got := r.RouteRead("203.0.113.1", readrouter.PolicyReplica); got != readrouter.RouteReplica {
+		t.Fatalf("RouteRead() = %v want replica", got)
+	}
+}
+
+func TestObserveTarget_recordsQueryHistogramTarget(t *testing.T) {
+	t.Parallel()
+	if err := postgres.ObserveTarget(context.Background(), "get_url", func() (string, error) {
+		return "postgres-replica-0", nil
+	}); err != nil {
+		t.Fatalf("ObserveTarget: %v", err)
+	}
+	if err := postgres.Observe(context.Background(), "insert_url", "postgres", func() error {
+		return nil
+	}); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+
+	found := false
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != "db_query_duration_seconds" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			var op, target string
+			for _, lp := range m.GetLabel() {
+				switch lp.GetName() {
+				case "operation":
+					op = lp.GetValue()
+				case "target":
+					target = lp.GetValue()
+				}
+			}
+			if op == "get_url" && target == "postgres-replica-0" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected db_query_duration_seconds{operation=get_url,target=postgres-replica-0}")
 	}
 }

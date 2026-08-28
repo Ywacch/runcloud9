@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -22,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
+	"github.com/ywacch/cloud9/pkg/templateapp/postgres"
 	"github.com/ywacch/cloud9/pkg/templateapp/readrouter"
 )
 
@@ -115,6 +115,26 @@ func readConsistencyFromEnv(raw string) readrouter.RoutingPolicy {
 	default:
 		return readrouter.PolicyLeaderOnly
 	}
+}
+
+// readReplicaHostsFromEnv returns stable replica hostnames from READ_REPLICA_HOSTS,
+// falling back to READ_REPLICA_HOST when the list env is unset.
+func readReplicaHostsFromEnv(cfg Config) []string {
+	if raw := os.Getenv("READ_REPLICA_HOSTS"); raw != "" {
+		var hosts []string
+		for _, part := range strings.Split(raw, ",") {
+			if h := strings.TrimSpace(part); h != "" {
+				hosts = append(hosts, h)
+			}
+		}
+		if len(hosts) > 0 {
+			return hosts
+		}
+	}
+	if h := strings.TrimSpace(cfg.ReadReplicaHost); h != "" {
+		return []string{h}
+	}
+	return nil
 }
 
 func jsonError(w http.ResponseWriter, status int, msg string) {
@@ -615,11 +635,9 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse db pool config: %w", err)
 	}
-	maxConns, _ := strconv.Atoi(envOrDefault("DB_POOL_MAX_CONNS", "25"))
-	if maxConns < 1 {
-		maxConns = 25
-	}
-	poolCfg.MaxConns = int32(maxConns)
+	replicaHosts := readReplicaHostsFromEnv(cfg)
+	writeMax, replicaEachMax := postgres.SplitPoolMaxConns(len(replicaHosts))
+	poolCfg.MaxConns = writeMax
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
@@ -639,35 +657,38 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 		return nil, err
 	}
 
-	var readPool *pgxpool.Pool
+	var readPools []*pgxpool.Pool
 	var router readSplitRouter
-	if cfg.ReadReplicaHost != "" {
-		readConnURL := &url.URL{
-			Scheme: "postgres",
-			Host:   fmt.Sprintf("%s:%s", cfg.ReadReplicaHost, cfg.ReadReplicaPort),
-			Path:   "/" + cfg.DBName,
-			User:   url.UserPassword(cfg.DBUser, cfg.DBPassword),
+	if len(replicaHosts) > 0 {
+		replicaPools := make([]readrouter.ReplicaPool, 0, len(replicaHosts))
+		pgCfg := postgres.Config{
+			Port:     cfg.ReadReplicaPort,
+			Name:     cfg.DBName,
+			User:     cfg.DBUser,
+			Password: cfg.DBPassword,
 		}
-		readPoolCfg, err := pgxpool.ParseConfig(readConnURL.String())
-		if err != nil {
-			pool.Close()
-			return nil, fmt.Errorf("parse read replica pool config: %w", err)
+		for _, host := range replicaHosts {
+			pgCfg.Host = host
+			readPool, poolErr := postgres.NewPoolWithMaxConns(ctx, pgCfg, replicaEachMax)
+			if poolErr != nil {
+				pool.Close()
+				for _, rp := range readPools {
+					rp.Close()
+				}
+				return nil, fmt.Errorf("connect read replica %q: %w", host, poolErr)
+			}
+			readPools = append(readPools, readPool)
+			replicaPools = append(replicaPools, readrouter.ReplicaPool{Pool: readPool, Host: host})
 		}
-		readPoolCfg.MaxConns = poolCfg.MaxConns
-		readPool, err = pgxpool.NewWithConfig(ctx, readPoolCfg)
-		if err != nil {
-			pool.Close()
-			return nil, fmt.Errorf("connect read replica: %w", err)
-		}
-		router = readrouter.NewReadRouter(pool, readPool, readrouter.PostgresEngine{}, cfg.ReadConsistency)
+		router = readrouter.NewReadRouter(pool, replicaPools, readrouter.PostgresEngine{}, cfg.ReadConsistency)
 		slog.Info("read replica routing enabled",
-			"host", cfg.ReadReplicaHost,
+			"hosts", replicaHosts,
 			"policy", cfg.ReadConsistency,
 		)
 	}
 
 	s := &Server{
-		db:  newDB(pool, readPool, router),
+		db:  newDB(pool, readPools, router),
 		cfg: cfg,
 	}
 
