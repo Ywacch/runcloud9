@@ -33,15 +33,6 @@ var (
 		Help: "Total cache misses",
 	})
 
-	dbQueryDuration = promauto.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Name:    "db_query_duration_seconds",
-			Help:    "Database query latency in seconds",
-			Buckets: prometheus.DefBuckets,
-		},
-		[]string{"operation"},
-	)
-
 	checkoutTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "ecommerce_checkout_total",

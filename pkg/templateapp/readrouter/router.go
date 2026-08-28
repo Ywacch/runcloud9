@@ -112,6 +112,7 @@ type clientState struct {
 }
 
 type queryPool interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
@@ -295,4 +296,20 @@ func (r *ReadRouter) nextReplicaStart() int {
 		return 0
 	}
 	return int(r.rrIndex.Add(1)-1) % n
+}
+
+// ReadTarget picks leader or a replica pool for multi-row reads that do not use QueryRead.
+func (r *ReadRouter) ReadTarget(clientID string) (queryPool, string) {
+	if r == nil || r.writePool == nil {
+		return nil, defaultWriteTarget
+	}
+	route := r.RouteRead(clientID, r.policy)
+	if route == RouteReplica && len(r.readPools) > 0 {
+		idx := r.nextReplicaStart()
+		entry := r.readPools[idx]
+		dbReadTotal.WithLabelValues(RouteReplica.String()).Inc()
+		return entry.pool, entry.host
+	}
+	dbReadTotal.WithLabelValues(RouteLeader.String()).Inc()
+	return r.writePool, r.leaderTarget()
 }

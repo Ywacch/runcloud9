@@ -11,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/ywacch/cloud9/pkg/templateapp/postgres"
+	"github.com/ywacch/cloud9/pkg/templateapp/readrouter"
 	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 )
 
@@ -40,173 +42,277 @@ type FeedItem struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-type DB struct {
-	pool *pgxpool.Pool
+type readQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-func newDB(pool *pgxpool.Pool) *DB { return &DB{pool: pool} }
+type readSplitRouter interface {
+	QueryRead(
+		ctx context.Context,
+		clientID string,
+		build func(readTokenExpr string) (sql string, args []any),
+		scan func(row pgx.Row, replayToken *string) error,
+	) (readrouter.Route, string, error)
+	AfterWrite(clientID string, t readrouter.ConsistencyToken)
+}
 
-func (db *DB) InitSchema(ctx context.Context) error {
-	start := time.Now()
-	defer func() { dbQueryDuration.WithLabelValues("init_schema").Observe(time.Since(start).Seconds()) }()
-	_, err := db.pool.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS users (
-			id       SERIAL PRIMARY KEY,
-			username TEXT NOT NULL UNIQUE,
-			bio      TEXT DEFAULT ''
-		);
+type DB struct {
+	pool      *pgxpool.Pool
+	readPools []*pgxpool.Pool
+	router    readSplitRouter
+	engine    readrouter.Engine
+}
 
-		CREATE TABLE IF NOT EXISTS posts (
-			id         SERIAL PRIMARY KEY,
-			user_id    INT NOT NULL REFERENCES users(id),
-			content    TEXT NOT NULL,
-			created_at TIMESTAMPTZ DEFAULT NOW()
-		);
+func newDB(pool *pgxpool.Pool, readPools []*pgxpool.Pool, router readSplitRouter) *DB {
+	return &DB{
+		pool:      pool,
+		readPools: readPools,
+		router:    router,
+		engine:    readrouter.PostgresEngine{},
+	}
+}
 
-		CREATE TABLE IF NOT EXISTS follows (
-			follower_id  INT NOT NULL REFERENCES users(id),
-			following_id INT NOT NULL REFERENCES users(id),
-			PRIMARY KEY (follower_id, following_id)
-		);
+func (db *DB) Close() {
+	for _, p := range db.readPools {
+		if p != nil {
+			p.Close()
+		}
+	}
+}
 
-		CREATE INDEX IF NOT EXISTS idx_posts_user_id ON posts(user_id);
-		CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC);
-		CREATE INDEX IF NOT EXISTS idx_follows_follower ON follows(follower_id);
-		CREATE INDEX IF NOT EXISTS idx_follows_following ON follows(following_id);
-	`)
+func routerActive(r readSplitRouter) bool {
+	if r == nil {
+		return false
+	}
+	if ptr, ok := r.(*readrouter.ReadRouter); ok {
+		return ptr != nil
+	}
+	return true
+}
+
+func (db *DB) readQuerier(ctx context.Context) (readQuerier, string) {
+	if !routerActive(db.router) {
+		return db.pool, "postgres"
+	}
+	if r, ok := db.router.(*readrouter.ReadRouter); ok {
+		return r.ReadTarget(trace.ClientID(ctx))
+	}
+	return db.pool, "postgres"
+}
+
+func (db *DB) recordWriteToken(ctx context.Context, clientID string) error {
+	if !routerActive(db.router) || clientID == "" {
+		return nil
+	}
+	var raw string
+	if err := db.pool.QueryRow(ctx, "SELECT "+db.engine.WriteTokenExpr()).Scan(&raw); err != nil {
+		return err
+	}
+	tok, err := db.engine.ParseToken(raw)
 	if err != nil {
 		return err
 	}
-	// Requires Postgres started with shared_preload_libraries=pg_stat_statements (see deployer db spec).
-	if _, err := db.pool.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS pg_stat_statements`); err != nil {
-		return fmt.Errorf("create extension pg_stat_statements: %w", err)
-	}
+	db.router.AfterWrite(clientID, tok)
 	return nil
+}
+
+func getUserQuery(tokenExpr string) string {
+	if tokenExpr == "" {
+		return `SELECT id, username, bio FROM users WHERE id=$1`
+	}
+	return fmt.Sprintf(`SELECT id, username, bio, %s FROM users WHERE id=$1`, tokenExpr)
+}
+
+func (db *DB) InitSchema(ctx context.Context) error {
+	return postgres.Observe(ctx, "init_schema", "postgres", func() error {
+		_, err := db.pool.Exec(ctx, `
+			CREATE TABLE IF NOT EXISTS users (
+				id       SERIAL PRIMARY KEY,
+				username TEXT NOT NULL UNIQUE,
+				bio      TEXT DEFAULT ''
+			);
+
+			CREATE TABLE IF NOT EXISTS posts (
+				id         SERIAL PRIMARY KEY,
+				user_id    INT NOT NULL REFERENCES users(id),
+				content    TEXT NOT NULL,
+				created_at TIMESTAMPTZ DEFAULT NOW()
+			);
+
+			CREATE TABLE IF NOT EXISTS follows (
+				follower_id  INT NOT NULL REFERENCES users(id),
+				following_id INT NOT NULL REFERENCES users(id),
+				PRIMARY KEY (follower_id, following_id)
+			);
+
+			CREATE INDEX IF NOT EXISTS idx_posts_user_id ON posts(user_id);
+			CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC);
+			CREATE INDEX IF NOT EXISTS idx_follows_follower ON follows(follower_id);
+			CREATE INDEX IF NOT EXISTS idx_follows_following ON follows(following_id);
+		`)
+		if err != nil {
+			return err
+		}
+		if _, err := db.pool.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS pg_stat_statements`); err != nil {
+			return fmt.Errorf("create extension pg_stat_statements: %w", err)
+		}
+		return nil
+	})
 }
 
 func (db *DB) SeedIfEmpty(ctx context.Context) error {
-	start := time.Now()
-	defer func() { dbQueryDuration.WithLabelValues("seed_if_empty").Observe(time.Since(start).Seconds()) }()
+	return postgres.Observe(ctx, "seed_if_empty", "postgres", func() error {
+		var count int
+		if err := db.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
+			return err
+		}
+		if count > 0 {
+			return nil
+		}
 
-	var count int
-	if err := db.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil // seeder already populated the database
-	}
+		start := time.Now()
+		slog.Warn("seed dump not found — running fallback self-seed")
 
-	slog.Warn("seed dump not found — running fallback self-seed")
+		if _, err := db.pool.Exec(ctx, `
+			INSERT INTO users (username, bio)
+			SELECT 'user_' || i, 'Bio for user ' || i
+			FROM generate_series(1, 5000) AS i
+		`); err != nil {
+			return fmt.Errorf("seed users: %w", err)
+		}
 
-	if _, err := db.pool.Exec(ctx, `
-		INSERT INTO users (username, bio)
-		SELECT 'user_' || i, 'Bio for user ' || i
-		FROM generate_series(1, 5000) AS i
-	`); err != nil {
-		return fmt.Errorf("seed users: %w", err)
-	}
+		if _, err := db.pool.Exec(ctx, `
+			INSERT INTO follows (follower_id, following_id)
+			SELECT u.id, c.id
+			FROM generate_series(11, 5000) AS u(id),
+			     generate_series(1, 10) AS c(id)
+		`); err != nil {
+			return fmt.Errorf("seed celebrity follows: %w", err)
+		}
 
-	if _, err := db.pool.Exec(ctx, `
-		INSERT INTO follows (follower_id, following_id)
-		SELECT u.id, c.id
-		FROM generate_series(11, 5000) AS u(id),
-		     generate_series(1, 10) AS c(id)
-	`); err != nil {
-		return fmt.Errorf("seed celebrity follows: %w", err)
-	}
+		if _, err := db.pool.Exec(ctx, `
+			INSERT INTO follows (follower_id, following_id)
+			SELECT DISTINCT
+				(11 + (random() * 3989)::int),
+				(11 + (random() * 39)::int)
+			FROM generate_series(1, 100000)
+			ON CONFLICT DO NOTHING
+		`); err != nil {
+			return fmt.Errorf("seed influencer follows: %w", err)
+		}
 
-	if _, err := db.pool.Exec(ctx, `
-		INSERT INTO follows (follower_id, following_id)
-		SELECT DISTINCT
-			(11 + (random() * 3989)::int),
-			(11 + (random() * 39)::int)
-		FROM generate_series(1, 100000)
-		ON CONFLICT DO NOTHING
-	`); err != nil {
-		return fmt.Errorf("seed influencer follows: %w", err)
-	}
+		if _, err := db.pool.Exec(ctx, `
+			INSERT INTO follows (follower_id, following_id)
+			SELECT DISTINCT sub.follower, sub.following
+			FROM (
+				SELECT
+					(1 + (random() * 1999)::int) AS follower,
+					(51 + (random() * 449)::int) AS following
+				FROM generate_series(1, 80000)
+			) sub
+			WHERE sub.follower != sub.following
+			ON CONFLICT DO NOTHING
+		`); err != nil {
+			return fmt.Errorf("seed power user follows: %w", err)
+		}
 
-	if _, err := db.pool.Exec(ctx, `
-		INSERT INTO follows (follower_id, following_id)
-		SELECT DISTINCT sub.follower, sub.following
-		FROM (
+		if _, err := db.pool.Exec(ctx, `
+			INSERT INTO follows (follower_id, following_id)
+			SELECT DISTINCT sub.follower, sub.following
+			FROM (
+				SELECT
+					(1 + (random() * 4999)::int) AS follower,
+					(1 + (random() * 4999)::int) AS following
+				FROM generate_series(1, 35000)
+			) sub
+			WHERE sub.follower != sub.following
+			ON CONFLICT DO NOTHING
+		`); err != nil {
+			return fmt.Errorf("seed cross follows: %w", err)
+		}
+
+		if _, err := db.pool.Exec(ctx, `
+			INSERT INTO posts (user_id, content, created_at)
 			SELECT
-				(1 + (random() * 1999)::int) AS follower,
-				(51 + (random() * 449)::int) AS following
-			FROM generate_series(1, 80000)
-		) sub
-		WHERE sub.follower != sub.following
-		ON CONFLICT DO NOTHING
-	`); err != nil {
-		return fmt.Errorf("seed power user follows: %w", err)
-	}
+				CASE
+					WHEN random() < 0.15 THEN 1 + (random() * 9)::int
+					WHEN random() < 0.40 THEN 11 + (random() * 39)::int
+					WHEN random() < 0.65 THEN 51 + (random() * 449)::int
+					ELSE 501 + (random() * 4499)::int
+				END,
+				(ARRAY[
+					'Just deployed a new microservice architecture',
+					'Cache invalidation really is the hardest problem',
+					'Latency vs throughput — there is always a tradeoff',
+					'Fan-out on write is expensive but reads are dirt cheap',
+					'PostgreSQL can handle way more than people think',
+					'Monitoring everything in production today — observability matters',
+					'Redis saved us 200ms per request on the hot path',
+					'Finally grokked Raft consensus after reading the paper twice',
+					'Load testing revealed our real bottleneck was the connection pool',
+					'Horizontal scaling is not always the answer — profile first',
+					'Switched from polling to WebSockets and p99 dropped 10x',
+					'Database indexing made a bigger difference than adding replicas',
+					'Our queue depth metric predicted the outage 5 minutes early',
+					'Eventual consistency is fine until it is not',
+					'The CAP theorem is more nuanced than most blog posts suggest',
+					'Sharding by user_id solved our write contention immediately',
+					'Circuit breakers prevented a cascade failure today',
+					'Rate limiting at the edge saved our downstream services',
+					'Migrating from monolith to services — week 3 update',
+					'Benchmarked our API: 99th percentile is 145ms under 1k RPS'
+				])[1 + (random() * 19)::int],
+				NOW() - (random() * interval '30 days')
+			FROM generate_series(1, 100000)
+		`); err != nil {
+			return fmt.Errorf("seed posts: %w", err)
+		}
 
-	if _, err := db.pool.Exec(ctx, `
-		INSERT INTO follows (follower_id, following_id)
-		SELECT DISTINCT sub.follower, sub.following
-		FROM (
-			SELECT
-				(1 + (random() * 4999)::int) AS follower,
-				(1 + (random() * 4999)::int) AS following
-			FROM generate_series(1, 35000)
-		) sub
-		WHERE sub.follower != sub.following
-		ON CONFLICT DO NOTHING
-	`); err != nil {
-		return fmt.Errorf("seed cross follows: %w", err)
-	}
-
-	if _, err := db.pool.Exec(ctx, `
-		INSERT INTO posts (user_id, content, created_at)
-		SELECT
-			CASE
-				WHEN random() < 0.15 THEN 1 + (random() * 9)::int
-				WHEN random() < 0.40 THEN 11 + (random() * 39)::int
-				WHEN random() < 0.65 THEN 51 + (random() * 449)::int
-				ELSE 501 + (random() * 4499)::int
-			END,
-			(ARRAY[
-				'Just deployed a new microservice architecture',
-				'Cache invalidation really is the hardest problem',
-				'Latency vs throughput — there is always a tradeoff',
-				'Fan-out on write is expensive but reads are dirt cheap',
-				'PostgreSQL can handle way more than people think',
-				'Monitoring everything in production today — observability matters',
-				'Redis saved us 200ms per request on the hot path',
-				'Finally grokked Raft consensus after reading the paper twice',
-				'Load testing revealed our real bottleneck was the connection pool',
-				'Horizontal scaling is not always the answer — profile first',
-				'Switched from polling to WebSockets and p99 dropped 10x',
-				'Database indexing made a bigger difference than adding replicas',
-				'Our queue depth metric predicted the outage 5 minutes early',
-				'Eventual consistency is fine until it is not',
-				'The CAP theorem is more nuanced than most blog posts suggest',
-				'Sharding by user_id solved our write contention immediately',
-				'Circuit breakers prevented a cascade failure today',
-				'Rate limiting at the edge saved our downstream services',
-				'Migrating from monolith to services — week 3 update',
-				'Benchmarked our API: 99th percentile is 145ms under 1k RPS'
-			])[1 + (random() * 19)::int],
-			NOW() - (random() * interval '30 days')
-		FROM generate_series(1, 100000)
-	`); err != nil {
-		return fmt.Errorf("seed posts: %w", err)
-	}
-
-	slog.Info("seeded social graph core data",
-		"duration", time.Since(start).String(),
-	)
-	return nil
+		slog.Info("seeded social graph core data", "duration", time.Since(start).String())
+		return nil
+	})
 }
 
 func (db *DB) GetUser(ctx context.Context, id int) (User, error) {
-	start := time.Now()
-	defer func() {
-		dbQueryDuration.WithLabelValues("get_user").Observe(time.Since(start).Seconds())
-		trace.LogDB(ctx, "get_user", start)
-	}()
+	if !routerActive(db.router) {
+		var u User
+		err := postgres.Observe(ctx, "get_user", "postgres", func() error {
+			var err error
+			u, err = db.getUserLeader(ctx, id)
+			return err
+		})
+		return u, err
+	}
+
+	clientID := trace.ClientID(ctx)
 	var u User
-	err := db.pool.QueryRow(ctx, `SELECT id, username, bio FROM users WHERE id=$1`, id).Scan(&u.ID, &u.Username, &u.Bio)
+	err := postgres.ObserveTarget(ctx, "get_user", func() (string, error) {
+		_, target, err := db.router.QueryRead(ctx, clientID,
+			func(tokenExpr string) (string, []any) {
+				return getUserQuery(tokenExpr), []any{id}
+			},
+			func(row pgx.Row, replayToken *string) error {
+				if replayToken != nil {
+					return row.Scan(&u.ID, &u.Username, &u.Bio, replayToken)
+				}
+				return row.Scan(&u.ID, &u.Username, &u.Bio)
+			},
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return target, ErrNotFound
+		}
+		return target, err
+	})
+	if errors.Is(err, ErrNotFound) {
+		return User{}, ErrNotFound
+	}
+	return u, err
+}
+
+func (db *DB) getUserLeader(ctx context.Context, id int) (User, error) {
+	var u User
+	err := db.pool.QueryRow(ctx, getUserQuery(""), id).Scan(&u.ID, &u.Username, &u.Bio)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNotFound
 	}
@@ -214,128 +320,93 @@ func (db *DB) GetUser(ctx context.Context, id int) (User, error) {
 }
 
 func (db *DB) InsertPost(ctx context.Context, userID int, content string) (Post, error) {
-	start := time.Now()
-	defer func() {
-		dbQueryDuration.WithLabelValues("insert_post").Observe(time.Since(start).Seconds())
-		trace.LogDB(ctx, "insert_post", start)
-	}()
 	var p Post
-	err := db.pool.QueryRow(ctx,
-		`INSERT INTO posts (user_id, content) VALUES ($1, $2) RETURNING id, user_id, content, created_at`,
-		userID, content,
-	).Scan(&p.ID, &p.UserID, &p.Content, &p.CreatedAt)
+	err := postgres.Observe(ctx, "insert_post", "postgres", func() error {
+		err := db.pool.QueryRow(ctx,
+			`INSERT INTO posts (user_id, content) VALUES ($1, $2) RETURNING id, user_id, content, created_at`,
+			userID, content,
+		).Scan(&p.ID, &p.UserID, &p.Content, &p.CreatedAt)
+		if err != nil {
+			return err
+		}
+		return db.recordWriteToken(ctx, trace.ClientID(ctx))
+	})
 	return p, err
 }
 
 func (db *DB) GetFeedPull(ctx context.Context, userID, limit int) ([]FeedItem, error) {
-	start := time.Now()
-	defer func() {
-		dbQueryDuration.WithLabelValues("get_feed_pull").Observe(time.Since(start).Seconds())
-		trace.LogDB(ctx, "get_feed_pull", start)
-	}()
-	// follows has PRIMARY KEY (follower_id, following_id) — no DISTINCT needed.
-	rows, err := db.pool.Query(ctx, `
-		SELECT p.id, p.user_id, u.username, p.content, p.created_at
-		FROM posts p
-		JOIN follows f ON f.following_id = p.user_id
-		JOIN users u ON u.id = p.user_id
-		WHERE f.follower_id = $1
-		ORDER BY p.created_at DESC
-		LIMIT $2
-	`, userID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]FeedItem, 0, limit)
-	for rows.Next() {
-		var item FeedItem
-		if err := rows.Scan(&item.PostID, &item.AuthorID, &item.Username, &item.Content, &item.CreatedAt); err != nil {
-			return nil, err
+	var out []FeedItem
+	err := postgres.ObserveTarget(ctx, "get_feed_pull", func() (string, error) {
+		q, target := db.readQuerier(ctx)
+		rows, err := q.Query(ctx, `
+			SELECT p.id, p.user_id, u.username, p.content, p.created_at
+			FROM posts p
+			JOIN follows f ON f.following_id = p.user_id
+			JOIN users u ON u.id = p.user_id
+			WHERE f.follower_id = $1
+			ORDER BY p.created_at DESC
+			LIMIT $2
+		`, userID, limit)
+		if err != nil {
+			return target, err
 		}
-		out = append(out, item)
-	}
-	return out, rows.Err()
+		defer rows.Close()
+		out = out[:0]
+		for rows.Next() {
+			var item FeedItem
+			if err := rows.Scan(&item.PostID, &item.AuthorID, &item.Username, &item.Content, &item.CreatedAt); err != nil {
+				return target, err
+			}
+			out = append(out, item)
+		}
+		return target, rows.Err()
+	})
+	return out, err
 }
 
-// Follow inserts a follow edge (idempotent via ON CONFLICT DO NOTHING).
 func (db *DB) Follow(ctx context.Context, followerID, followingID int) error {
-	start := time.Now()
-	defer func() {
-		dbQueryDuration.WithLabelValues("follow").Observe(time.Since(start).Seconds())
-		trace.LogDB(ctx, "follow", start)
-	}()
-	_, err := db.pool.Exec(ctx,
-		`INSERT INTO follows (follower_id, following_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-		followerID, followingID,
-	)
-	return err
+	return postgres.Observe(ctx, "follow", "postgres", func() error {
+		_, err := db.pool.Exec(ctx,
+			`INSERT INTO follows (follower_id, following_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+			followerID, followingID,
+		)
+		if err != nil {
+			return err
+		}
+		return db.recordWriteToken(ctx, trace.ClientID(ctx))
+	})
 }
 
-// Unfollow removes a follow edge.
 func (db *DB) Unfollow(ctx context.Context, followerID, followingID int) error {
-	start := time.Now()
-	defer func() {
-		dbQueryDuration.WithLabelValues("unfollow").Observe(time.Since(start).Seconds())
-		trace.LogDB(ctx, "unfollow", start)
-	}()
-	_, err := db.pool.Exec(ctx,
-		`DELETE FROM follows WHERE follower_id = $1 AND following_id = $2`,
-		followerID, followingID,
-	)
-	return err
+	return postgres.Observe(ctx, "unfollow", "postgres", func() error {
+		_, err := db.pool.Exec(ctx,
+			`DELETE FROM follows WHERE follower_id = $1 AND following_id = $2`,
+			followerID, followingID,
+		)
+		return err
+	})
 }
 
-// CreateUser inserts a user with the given username.
 func (db *DB) CreateUser(ctx context.Context, username string) (User, error) {
-	start := time.Now()
-	defer func() {
-		dbQueryDuration.WithLabelValues("create_user").Observe(time.Since(start).Seconds())
-		trace.LogDB(ctx, "create_user", start)
-	}()
 	var u User
-	err := db.pool.QueryRow(ctx,
-		`INSERT INTO users (username) VALUES ($1) RETURNING id, username`,
-		username,
-	).Scan(&u.ID, &u.Username)
-	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return User{}, ErrUsernameTaken
+	err := postgres.Observe(ctx, "create_user", "postgres", func() error {
+		err := db.pool.QueryRow(ctx,
+			`INSERT INTO users (username) VALUES ($1) RETURNING id, username`,
+			username,
+		).Scan(&u.ID, &u.Username)
+		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+				return ErrUsernameTaken
+			}
+			return err
 		}
-		return User{}, err
+		return nil
+	})
+	if errors.Is(err, ErrUsernameTaken) {
+		return User{}, ErrUsernameTaken
 	}
-	return u, nil
-}
-
-// SearchUsersByUsername returns users whose username contains query (case-insensitive).
-func (db *DB) SearchUsersByUsername(ctx context.Context, query string, limit int) ([]User, error) {
-	start := time.Now()
-	defer func() {
-		dbQueryDuration.WithLabelValues("search_users").Observe(time.Since(start).Seconds())
-		trace.LogDB(ctx, "search_users", start)
-	}()
-	if limit <= 0 {
-		limit = 20
-	}
-	pattern := "%" + escapeLikePattern(query) + "%"
-	rows, err := db.pool.Query(ctx,
-		`SELECT id, username, bio FROM users WHERE username ILIKE $1 ESCAPE '\' ORDER BY username LIMIT $2`,
-		pattern, limit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]User, 0, limit)
-	for rows.Next() {
-		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.Bio); err != nil {
-			return nil, err
-		}
-		out = append(out, u)
-	}
-	return out, rows.Err()
+	return u, err
 }
 
 func escapeLikePattern(s string) string {
@@ -345,56 +416,113 @@ func escapeLikePattern(s string) string {
 	return s
 }
 
-// ListUsers returns up to limit users ordered by id.
-func (db *DB) ListUsers(ctx context.Context, limit int) ([]User, error) {
-	start := time.Now()
-	defer func() {
-		dbQueryDuration.WithLabelValues("list_users").Observe(time.Since(start).Seconds())
-		trace.LogDB(ctx, "list_users", start)
-	}()
+func (db *DB) SearchUsersByUsername(ctx context.Context, query string, limit int) ([]User, error) {
 	if limit <= 0 {
 		limit = 20
 	}
-	rows, err := db.pool.Query(ctx,
-		`SELECT id, username, bio FROM users ORDER BY id LIMIT $1`,
-		limit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]User, 0, limit)
-	for rows.Next() {
-		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.Bio); err != nil {
-			return nil, err
+	var out []User
+	err := postgres.ObserveTarget(ctx, "search_users", func() (string, error) {
+		q, target := db.readQuerier(ctx)
+		pattern := "%" + escapeLikePattern(query) + "%"
+		rows, err := q.Query(ctx,
+			`SELECT id, username, bio FROM users WHERE username ILIKE $1 ESCAPE '\' ORDER BY username LIMIT $2`,
+			pattern, limit,
+		)
+		if err != nil {
+			return target, err
 		}
-		out = append(out, u)
+		defer rows.Close()
+		out = out[:0]
+		for rows.Next() {
+			var u User
+			if err := rows.Scan(&u.ID, &u.Username, &u.Bio); err != nil {
+				return target, err
+			}
+			out = append(out, u)
+		}
+		return target, rows.Err()
+	})
+	return out, err
+}
+
+func (db *DB) ListUsers(ctx context.Context, limit int) ([]User, error) {
+	if limit <= 0 {
+		limit = 20
 	}
-	return out, rows.Err()
+	var out []User
+	err := postgres.ObserveTarget(ctx, "list_users", func() (string, error) {
+		q, target := db.readQuerier(ctx)
+		rows, err := q.Query(ctx,
+			`SELECT id, username, bio FROM users ORDER BY id LIMIT $1`,
+			limit,
+		)
+		if err != nil {
+			return target, err
+		}
+		defer rows.Close()
+		out = out[:0]
+		for rows.Next() {
+			var u User
+			if err := rows.Scan(&u.ID, &u.Username, &u.Bio); err != nil {
+				return target, err
+			}
+			out = append(out, u)
+		}
+		return target, rows.Err()
+	})
+	return out, err
 }
 
 func (db *DB) GetFollowers(ctx context.Context, userID int) ([]int, error) {
-	start := time.Now()
-	defer func() {
-		dbQueryDuration.WithLabelValues("get_followers").Observe(time.Since(start).Seconds())
-		trace.LogDB(ctx, "get_followers", start)
-	}()
-	rows, err := db.pool.Query(ctx,
-		`SELECT DISTINCT follower_id FROM follows WHERE following_id = $1`,
-		userID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
 	var ids []int
-	for rows.Next() {
-		var id int
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+	err := postgres.ObserveTarget(ctx, "get_followers", func() (string, error) {
+		q, target := db.readQuerier(ctx)
+		rows, err := q.Query(ctx,
+			`SELECT DISTINCT follower_id FROM follows WHERE following_id = $1`,
+			userID,
+		)
+		if err != nil {
+			return target, err
 		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
+		defer rows.Close()
+		ids = ids[:0]
+		for rows.Next() {
+			var id int
+			if err := rows.Scan(&id); err != nil {
+				return target, err
+			}
+			ids = append(ids, id)
+		}
+		return target, rows.Err()
+	})
+	return ids, err
+}
+
+func (db *DB) QueryUserPool(ctx context.Context, sql string) ([]int, error) {
+	var ids []int
+	err := postgres.ObserveTarget(ctx, "list_user_ids", func() (string, error) {
+		q, target := db.readQuerier(ctx)
+		rows, err := q.Query(ctx, sql)
+		if err != nil {
+			return target, err
+		}
+		defer rows.Close()
+		ids = ids[:0]
+		for rows.Next() {
+			var id int
+			if err := rows.Scan(&id); err != nil {
+				return target, err
+			}
+			ids = append(ids, id)
+		}
+		return target, rows.Err()
+	})
+	return ids, err
+}
+
+func (db *DB) Ping(ctx context.Context) error {
+	return postgres.Observe(ctx, "ping", "postgres", func() error {
+		var n int
+		return db.pool.QueryRow(ctx, "SELECT 1").Scan(&n)
+	})
 }

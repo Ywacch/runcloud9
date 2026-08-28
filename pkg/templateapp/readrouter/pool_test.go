@@ -24,6 +24,10 @@ func (s stubPool) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	return s.row
 }
 
+func (s stubPool) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	return nil, s.row.err
+}
+
 func TestQueryRead_replicaRoundRobinRotatesTargets(t *testing.T) {
 	t.Parallel()
 
