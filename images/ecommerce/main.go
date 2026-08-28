@@ -20,14 +20,19 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"github.com/ywacch/cloud9/pkg/templateapp/consistency"
+	"github.com/ywacch/cloud9/pkg/templateapp/postgres"
+	"github.com/ywacch/cloud9/pkg/templateapp/readrouter"
 )
 
 type Config struct {
-	DBHost     string
-	DBPort     string
-	DBName     string
-	DBUser     string
-	DBPassword string
+	DBHost          string
+	DBPort          string
+	DBName          string
+	DBUser          string
+	DBPassword      string
+	ReadReplicaHost string
+	ReadReplicaPort string
+	ReadConsistency readrouter.RoutingPolicy
 
 	CacheHost     string
 	CachePort     string
@@ -99,11 +104,14 @@ func loadConfig() Config {
 	}
 
 	return Config{
-		DBHost:     dbHost,
-		DBPort:     envOrDefault("DB_PORT", "5432"),
-		DBName:     envOrDefault("DB_NAME", "syscrack"),
-		DBUser:     envOrDefault("DB_USER", "syscrack"),
-		DBPassword: envOrDefault("DB_PASSWORD", "syscrack"),
+		DBHost:          dbHost,
+		DBPort:          envOrDefault("DB_PORT", "5432"),
+		DBName:          envOrDefault("DB_NAME", "syscrack"),
+		DBUser:          envOrDefault("DB_USER", "syscrack"),
+		DBPassword:      envOrDefault("DB_PASSWORD", "syscrack"),
+		ReadReplicaHost: os.Getenv("READ_REPLICA_HOST"),
+		ReadReplicaPort: envOrDefault("READ_REPLICA_PORT", "5432"),
+		ReadConsistency: readrouter.PolicyFromEnv(os.Getenv("READ_CONSISTENCY")),
 
 		CacheHost:     os.Getenv("CACHE_HOST"),
 		CachePort:     envOrDefault("CACHE_PORT", "6379"),
@@ -487,20 +495,12 @@ func (s *Server) handleProductPool(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(value))
 		return
 	}
-	rows, err := s.db.pool.Query(r.Context(), `SELECT id FROM products ORDER BY id LIMIT 50`)
+	rows, err := s.db.ListProductIDs(r.Context(), 50)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to fetch product ids")
 		return
 	}
-	defer rows.Close()
-	var ids []int
-	for rows.Next() {
-		var id int
-		if err := rows.Scan(&id); err == nil {
-			ids = append(ids, id)
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"productIds": ids})
+	writeJSON(w, http.StatusOK, map[string]any{"productIds": rows})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -610,12 +610,50 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 		Path:   "/" + cfg.DBName,
 		User:   url.UserPassword(cfg.DBUser, cfg.DBPassword),
 	}
-	pool, err := pgxpool.New(ctx, connURL.String())
+	poolCfg, err := pgxpool.ParseConfig(connURL.String())
+	if err != nil {
+		return nil, fmt.Errorf("parse db pool config: %w", err)
+	}
+	replicaHosts := postgres.ReadReplicaHostsFromEnv(cfg.ReadReplicaHost)
+	writeMax, replicaEachMax := postgres.SplitPoolMaxConns(len(replicaHosts))
+	poolCfg.MaxConns = writeMax
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return nil, err
 	}
 
-	s := &Server{db: newDB(pool), cfg: cfg}
+	var readPools []*pgxpool.Pool
+	var router readSplitRouter
+	if len(replicaHosts) > 0 {
+		replicaPools := make([]readrouter.ReplicaPool, 0, len(replicaHosts))
+		pgCfg := postgres.Config{
+			Port:     cfg.ReadReplicaPort,
+			Name:     cfg.DBName,
+			User:     cfg.DBUser,
+			Password: cfg.DBPassword,
+		}
+		for _, host := range replicaHosts {
+			pgCfg.Host = postgres.ReplicaConnectHost(host)
+			readPool, poolErr := postgres.NewPoolWithMaxConns(ctx, pgCfg, replicaEachMax)
+			if poolErr != nil {
+				pool.Close()
+				for _, rp := range readPools {
+					rp.Close()
+				}
+				return nil, fmt.Errorf("connect read replica %q: %w", host, poolErr)
+			}
+			readPools = append(readPools, readPool)
+			replicaPools = append(replicaPools, readrouter.ReplicaPool{Pool: readPool, Host: host})
+		}
+		router = readrouter.NewReadRouter(pool, replicaPools, readrouter.PostgresEngine{}, cfg.ReadConsistency)
+		slog.Info("read replica routing enabled",
+			"hosts", replicaHosts,
+			"policy", cfg.ReadConsistency,
+		)
+	}
+
+	s := &Server{db: newDB(pool, readPools, router), cfg: cfg}
 	if err := s.db.InitSchema(ctx); err != nil {
 		pool.Close()
 		return nil, err
@@ -675,6 +713,7 @@ func main() {
 		defer s.verifier.Stop()
 	}
 	defer s.db.pool.Close()
+	defer s.db.Close()
 	if s.mq != nil {
 		defer s.mq.Close()
 	}

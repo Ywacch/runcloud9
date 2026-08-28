@@ -18,18 +18,23 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
+	"github.com/ywacch/cloud9/pkg/templateapp/postgres"
+	"github.com/ywacch/cloud9/pkg/templateapp/readrouter"
 	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 )
 
 type Config struct {
-	DBHost     string
-	DBPort     string
-	DBName     string
-	DBUser     string
-	DBPassword string
-	RedisHost  string
-	RedisPort  string
-	Strategy   string
+	DBHost          string
+	DBPort          string
+	DBName          string
+	DBUser          string
+	DBPassword      string
+	ReadReplicaHost string
+	ReadReplicaPort string
+	ReadConsistency readrouter.RoutingPolicy
+	RedisHost       string
+	RedisPort       string
+	Strategy        string
 
 	CacheTTL            time.Duration
 	WriteBehindInterval time.Duration
@@ -70,6 +75,9 @@ func loadConfig() Config {
 		DBName:              envOrDefault("DB_NAME", "syscrack"),
 		DBUser:              envOrDefault("DB_USER", "syscrack"),
 		DBPassword:          envOrDefault("DB_PASSWORD", "syscrack"),
+		ReadReplicaHost:     os.Getenv("READ_REPLICA_HOST"),
+		ReadReplicaPort:     envOrDefault("READ_REPLICA_PORT", "5432"),
+		ReadConsistency:     readrouter.PolicyFromEnv(os.Getenv("READ_CONSISTENCY")),
 		RedisHost:           redisHost,
 		RedisPort:           envOrDefault("REDIS_PORT", "6379"),
 		Strategy:            strategy,
@@ -159,7 +167,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 
 	// Cache miss: template-driven DB read-through (queries.yaml mounted at deploy time).
 	dbStart := time.Now()
-	payload, dbErr := proxyReadThrough(ctx, s.db.pool, s.rules, code)
+	payload, dbErr := s.db.ReadThrough(ctx, code, s.rules)
 	trace.LogProxy(ctx, "db_read_through", code, dbStart)
 	if errors.Is(dbErr, errNoMatchingProxyRule) {
 		jsonError(w, http.StatusNotFound, "no matching cache key rule")
@@ -343,21 +351,10 @@ func (s *Server) handleCodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	const limit = 200
-	rows, err := s.db.pool.Query(r.Context(),
-		`SELECT code FROM urls ORDER BY code LIMIT $1`, limit)
+	codes, err := s.db.ListCodes(r.Context(), limit)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to fetch codes")
 		return
-	}
-	defer rows.Close()
-
-	var codes []string
-	for rows.Next() {
-		var code string
-		if err := rows.Scan(&code); err != nil {
-			continue
-		}
-		codes = append(codes, code)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"codes": codes})
 }
@@ -377,8 +374,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var n int
-	if err := s.db.pool.QueryRow(ctx, "SELECT 1").Scan(&n); err != nil {
+	if err := s.db.Ping(ctx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"status": "error",
 			"db":     "unreachable",
@@ -440,23 +436,62 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	// Postgres.
-	connString := fmt.Sprintf(
-		"postgres://%s:%s@%s:%s/%s",
-		cfg.DBUser,
-		cfg.DBPassword,
-		cfg.DBHost,
-		cfg.DBPort,
-		cfg.DBName,
-	)
-	pool, err := pgxpool.New(ctx, connString)
+	connURL := &url.URL{
+		Scheme: "postgres",
+		Host:   fmt.Sprintf("%s:%s", cfg.DBHost, cfg.DBPort),
+		Path:   "/" + cfg.DBName,
+		User:   url.UserPassword(cfg.DBUser, cfg.DBPassword),
+	}
+	poolCfg, err := pgxpool.ParseConfig(connURL.String())
+	if err != nil {
+		slog.Error("parse db pool config failed", "error", err)
+		os.Exit(1)
+	}
+	replicaHosts := postgres.ReadReplicaHostsFromEnv(cfg.ReadReplicaHost)
+	writeMax, replicaEachMax := postgres.SplitPoolMaxConns(len(replicaHosts))
+	poolCfg.MaxConns = writeMax
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		slog.Error("pgxpool connect failed", "error", err)
 		os.Exit(1)
 	}
 	defer pool.Close()
 
-	db := newDB(pool)
+	var readPools []*pgxpool.Pool
+	var router readSplitRouter
+	if len(replicaHosts) > 0 {
+		replicaPools := make([]readrouter.ReplicaPool, 0, len(replicaHosts))
+		pgCfg := postgres.Config{
+			Port:     cfg.ReadReplicaPort,
+			Name:     cfg.DBName,
+			User:     cfg.DBUser,
+			Password: cfg.DBPassword,
+		}
+		for _, host := range replicaHosts {
+			pgCfg.Host = postgres.ReplicaConnectHost(host)
+			readPool, poolErr := postgres.NewPoolWithMaxConns(ctx, pgCfg, replicaEachMax)
+			if poolErr != nil {
+				pool.Close()
+				for _, rp := range readPools {
+					rp.Close()
+				}
+				slog.Error("connect read replica failed", "host", host, "error", poolErr)
+				os.Exit(1)
+			}
+			readPools = append(readPools, readPool)
+			replicaPools = append(replicaPools, readrouter.ReplicaPool{Pool: readPool, Host: host})
+		}
+		router = readrouter.NewReadRouter(pool, replicaPools, readrouter.PostgresEngine{}, cfg.ReadConsistency)
+		slog.Info("read replica routing enabled",
+			"hosts", replicaHosts,
+			"policy", cfg.ReadConsistency,
+		)
+	}
+
+	db := newDB(pool, readPools, router)
+	defer db.Close()
+
 	// Create schema.
 	if _, err := pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS urls (

@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"gopkg.in/yaml.v3"
 )
 
@@ -99,7 +98,7 @@ func captureArgs(matches []string, params []proxyParamSpec) ([]any, error) {
 	return args, nil
 }
 
-func proxyReadThrough(ctx context.Context, pool *pgxpool.Pool, rules []compiledProxyRule, cacheKey string) (string, error) {
+func proxyReadThrough(ctx context.Context, q readQuerier, rules []compiledProxyRule, cacheKey string) (string, error) {
 	for _, rule := range rules {
 		matches := rule.re.FindStringSubmatch(cacheKey)
 		if matches == nil {
@@ -109,7 +108,7 @@ func proxyReadThrough(ctx context.Context, pool *pgxpool.Pool, rules []compiledP
 		if err != nil {
 			return "", fmt.Errorf("%w: %v", errBadCapture, err)
 		}
-		rows, err := pool.Query(ctx, rule.sql, args...)
+		rows, err := q.Query(ctx, rule.sql, args...)
 		if err != nil {
 			return "", err
 		}
