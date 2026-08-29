@@ -10,7 +10,7 @@ func TestPgRestoreCommand_argvForm(t *testing.T) {
 	creds := DBCredentials{User: "syscrack", Password: "secret", Database: "syscrack"}
 	cmd := pgRestoreCommand(creds)
 	joined := strings.Join(cmd, " ")
-	for _, want := range []string{"pg_restore", "-U syscrack", "-d syscrack", "--clean", "--if-exists", "/tmp/seed.dump", "PGPASSWORD=secret"} {
+	for _, want := range []string{"pg_restore", "-U syscrack", "-d syscrack", "--clean", "--if-exists", "/tmp/seed.dump", "PGPASSWORD=secret", "PGOPTIONS=-c synchronous_commit=off"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("pgRestoreCommand missing %q: %v", want, cmd)
 		}

@@ -1897,7 +1897,19 @@ func (f *fakeDeploymentStore) GetDeployment(_ context.Context, namespace string)
 	if !ok {
 		return store.DeploymentRow{}, fmt.Errorf("not found")
 	}
+	row.MetricsSummary = cloneStringAnyMap(row.MetricsSummary)
 	return row, nil
+}
+
+func cloneStringAnyMap(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func (f *fakeDeploymentStore) SetMetricsSummary(_ context.Context, namespace string, summary map[string]any) error {
