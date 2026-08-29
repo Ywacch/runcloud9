@@ -224,8 +224,10 @@ func TestOrchestrate_AppLayerStartsBeforeRebaselineCompletes(t *testing.T) {
 	var rebaselineStartedOnce sync.Once
 	oldRebaseline := afterSeedRebaseline
 	afterSeedRebaseline = func(_ *metrics.MetricsCollector, _ string) {
-		rebaselineStartedOnce.Do(func() { close(rebaselineStarted) })
-		<-rebaselineHold
+		go func() {
+			rebaselineStartedOnce.Do(func() { close(rebaselineStarted) })
+			<-rebaselineHold
+		}()
 	}
 	t.Cleanup(func() { afterSeedRebaseline = oldRebaseline })
 
