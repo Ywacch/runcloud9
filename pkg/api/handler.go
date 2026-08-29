@@ -480,6 +480,14 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 
 // orchestrate deploys nodes in dependency layers; nodes within a layer run in parallel.
 // On any failure, it attempts to teardown already-deployed nodes (rollback).
+// afterSeedRebaseline snapshots postgres session totals after seed. Tests replace it.
+var afterSeedRebaseline = func(c *metrics.MetricsCollector, namespace string) {
+	if c == nil {
+		return
+	}
+	go c.WaitAndRebaselinePostgresSession(context.Background(), namespace)
+}
+
 func (h *Handler) orchestrate(
 	ctx context.Context,
 	design deployer.DeploymentDesign,
@@ -522,9 +530,14 @@ func (h *Handler) orchestrate(
 	}
 	emitProvision("deploying", componentStatus)
 
+	asyncRebaseline := false
 	if h.seeder != nil && h.metricsCollector != nil && designHasDBNode(design) {
 		h.metricsCollector.HoldPostgresSession(namespace)
-		defer h.metricsCollector.OpenPostgresSession(namespace)
+		defer func() {
+			if !asyncRebaseline {
+				h.metricsCollector.OpenPostgresSession(namespace)
+			}
+		}()
 	}
 
 	type dumpResult struct {
@@ -617,9 +630,12 @@ func (h *Handler) orchestrate(
 						provisionMu.Lock()
 						seedingStatus = "done"
 						seeded = true
+						comps = cloneComponentStatus(componentStatus)
 						provisionMu.Unlock()
+						emitProvision("deploying", comps)
 						if h.metricsCollector != nil {
-							h.metricsCollector.WaitAndRebaselinePostgresSession(ctx, namespace)
+							asyncRebaseline = true
+							afterSeedRebaseline(h.metricsCollector, namespace)
 						}
 						return nil
 					}
