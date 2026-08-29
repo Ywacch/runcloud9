@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/deployer"
+	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/store"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/kubernetes/fake"
@@ -208,6 +209,93 @@ func TestOrchestrate_SeedingStartsAfterDBBeforeLaterLayers(t *testing.T) {
 	}
 	if got, _ := row.MetricsSummary["seeding_status"].(string); got != "done" {
 		t.Fatalf("seeding_status after orchestrate: want done, got %q", got)
+	}
+}
+
+func TestOrchestrate_AppLayerStartsBeforeRebaselineCompletes(t *testing.T) {
+	s := newFakeDeploymentStore()
+	ns := "ns-rebaseline-async"
+	_, _ = s.CreateDeployment(context.Background(), store.CreateDeploymentParams{
+		Namespace: ns, Template: "url-shortener", Archetype: "default", Design: map[string]any{}, ExpiresAt: time.Now().Add(time.Minute),
+	})
+
+	rebaselineHold := make(chan struct{})
+	rebaselineStarted := make(chan struct{})
+	var rebaselineStartedOnce sync.Once
+	oldRebaseline := afterSeedRebaseline
+	afterSeedRebaseline = func(_ *metrics.MetricsCollector, _ string) {
+		rebaselineStartedOnce.Do(func() { close(rebaselineStarted) })
+		<-rebaselineHold
+	}
+	t.Cleanup(func() { afterSeedRebaseline = oldRebaseline })
+
+	appBlock := make(chan struct{})
+	appStarted := make(chan struct{})
+	var appStartedOnce sync.Once
+	deployers := map[string]deployer.ComponentDeployer{
+		"db": &fakeComponentDeployer{},
+		"app-server": &fakeComponentDeployer{
+			deployFn: func(ctx context.Context, cfg deployer.DeployConfig) error {
+				appStartedOnce.Do(func() { close(appStarted) })
+				select {
+				case <-appBlock:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			},
+		},
+	}
+	seed := &fakeSeeder{
+		prePath:     "dump.tmp",
+		seedStarted: make(chan struct{}),
+	}
+
+	h := NewHandler(deployers, s, nil, nil, nil, nil, nil, nil, nil)
+	h.seeder = seed
+	h.metricsCollector = metrics.NewMetricsCollector("", nil, nil, nil, nil)
+
+	design := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "default",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "db-1", Type: "db", Name: "DB"},
+			{ID: "app-1", Type: "app-server", Name: "App"},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app-1", TargetID: "db-1"},
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.orchestrate(context.Background(), design, ns, "explorer")
+		done <- err
+	}()
+
+	select {
+	case <-rebaselineStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected async rebaseline to start after seed")
+	}
+	select {
+	case <-appStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected app layer to start before rebaseline completes")
+	}
+
+	row, err := s.GetDeployment(context.Background(), ns)
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	if got, _ := row.MetricsSummary["seeding_status"].(string); got != "done" {
+		t.Fatalf("seeding_status while rebaseline blocked: want done, got %q", got)
+	}
+
+	close(rebaselineHold)
+	close(appBlock)
+	if err := <-done; err != nil {
+		t.Fatalf("orchestrate returned error: %v", err)
 	}
 }
 
