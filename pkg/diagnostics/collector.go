@@ -269,7 +269,7 @@ func (c *Collector) collectLogs(ctx context.Context, namespace string) (map[stri
 
 	collected := 0
 	for _, pod := range podList.Items {
-		for _, container := range pod.Spec.Containers {
+		for _, container := range podLogContainers(pod) {
 			if collected >= maxContainersForLogs {
 				warnings = append(warnings, "container logs truncated to first 8 containers")
 				break
@@ -314,6 +314,13 @@ func (c *Collector) collectLogs(ctx context.Context, namespace string) (map[stri
 	}
 	sort.Strings(apiLogs)
 	return logs, apiLogs, warnings
+}
+
+func podLogContainers(pod corev1.Pod) []corev1.Container {
+	out := make([]corev1.Container, 0, len(pod.Spec.InitContainers)+len(pod.Spec.Containers))
+	out = append(out, pod.Spec.InitContainers...)
+	out = append(out, pod.Spec.Containers...)
+	return out
 }
 
 func (c *Collector) readPodLogs(ctx context.Context, namespace, podName, containerName string, tailLines int64) ([]string, error) {

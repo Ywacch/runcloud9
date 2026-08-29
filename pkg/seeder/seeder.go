@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -103,6 +104,9 @@ func (s *Seeder) SeedWithDump(ctx context.Context, namespace, template, dumpFile
 	if err := s.runPgRestore(ctx, namespace, podName, cfg.Container); err != nil {
 		return fmt.Errorf("seeder: pg_restore: %w", err)
 	}
+	if err := s.runCheckpoint(ctx, namespace, podName, cfg.Container); err != nil {
+		log.Printf("seeder: CHECKPOINT after restore namespace=%s pod=%s: %v (pg_basebackup --checkpoint=fast still applies)", namespace, podName, err)
+	}
 
 	return nil
 }
@@ -180,14 +184,23 @@ func (s *Seeder) copyFileToPod(ctx context.Context, namespace, podName, containe
 }
 
 func (s *Seeder) runPgRestore(ctx context.Context, namespace, podName, container string) error {
-	execCfg, err := kubeExecConfig()
-	if err != nil {
-		return fmt.Errorf("kube exec config: %w", err)
-	}
-
 	creds := defaultDBCredentials()
-	// Use argv form (env + pg_restore) to avoid shell quoting issues with passwords.
-	cmd := []string{
+	if err := s.execArgv(ctx, namespace, podName, container, pgRestoreCommand(creds)); err != nil {
+		return fmt.Errorf("pg_restore failed: %w", err)
+	}
+	return nil
+}
+
+func (s *Seeder) runCheckpoint(ctx context.Context, namespace, podName, container string) error {
+	creds := defaultDBCredentials()
+	if err := s.execArgv(ctx, namespace, podName, container, checkpointCommand(creds)); err != nil {
+		return fmt.Errorf("CHECKPOINT failed: %w", err)
+	}
+	return nil
+}
+
+func pgRestoreCommand(creds DBCredentials) []string {
+	return []string{
 		"env",
 		fmt.Sprintf("PGPASSWORD=%s", creds.Password),
 		"pg_restore",
@@ -196,6 +209,25 @@ func (s *Seeder) runPgRestore(ctx context.Context, namespace, podName, container
 		"--clean",
 		"--if-exists",
 		"/tmp/seed.dump",
+	}
+}
+
+func checkpointCommand(creds DBCredentials) []string {
+	return []string{
+		"env",
+		fmt.Sprintf("PGPASSWORD=%s", creds.Password),
+		"psql",
+		"-U", creds.User,
+		"-d", creds.Database,
+		"-v", "ON_ERROR_STOP=1",
+		"-c", "CHECKPOINT",
+	}
+}
+
+func (s *Seeder) execArgv(ctx context.Context, namespace, podName, container string, cmd []string) error {
+	execCfg, err := kubeExecConfig()
+	if err != nil {
+		return fmt.Errorf("kube exec config: %w", err)
 	}
 
 	req := s.clientset.CoreV1().RESTClient().
@@ -226,9 +258,8 @@ func (s *Seeder) runPgRestore(ctx context.Context, namespace, podName, container
 		Stdout: &stdout,
 		Stderr: &stderr,
 	}); err != nil {
-		return fmt.Errorf("pg_restore failed: %w: %s", err, stderr.String())
+		return fmt.Errorf("%w: %s", err, stderr.String())
 	}
-
 	return nil
 }
 

@@ -168,6 +168,23 @@ func TestFilterClusterPressureEvents_RespectsWindowAndPatterns(t *testing.T) {
 	}
 }
 
+func TestPodLogContainers_initBeforeApp(t *testing.T) {
+	t.Parallel()
+	pod := corev1.Pod{
+		Spec: corev1.PodSpec{
+			InitContainers: []corev1.Container{{Name: "basebackup"}},
+			Containers:     []corev1.Container{{Name: "postgres-replica"}, {Name: "postgres-exporter"}},
+		},
+	}
+	got := podLogContainers(pod)
+	if len(got) != 3 {
+		t.Fatalf("len=%d want 3", len(got))
+	}
+	if got[0].Name != "basebackup" {
+		t.Fatalf("first container=%q want basebackup", got[0].Name)
+	}
+}
+
 func hasCode(sigs []FailureSignature, code string) bool {
 	for _, s := range sigs {
 		if s.Code == code {

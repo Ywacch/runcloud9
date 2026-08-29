@@ -20,6 +20,9 @@ const (
 	DBReplicaServiceName         = "db-replica"
 	dbReplicaDataVolumeName      = "pgdata"
 	dbReplicaEphemeralSize       = "500Mi"
+	// --checkpoint=fast: after pg_restore the primary is dirty; default spread
+	// checkpoint left replica inits on "waiting for checkpoint" until the 5m deploy deadline.
+	dbReplicaBasebackupScript = `until pg_isready -h db -U syscrack; do sleep 1; done; pg_basebackup -h db -U syscrack -D $PGDATA -Fp -Xs -R -P --checkpoint=fast; echo "primary_conninfo = 'host=db port=5432 user=syscrack application_name=${HOSTNAME} sslmode=disable'" >> "$PGDATA/postgresql.auto.conf"`
 )
 
 // postgresPrimaryCommand returns the postgres primary command, including sync flags when configured.
@@ -137,7 +140,7 @@ func dbReplicaPodTemplateSpec(
 		Image: dbSpec.Image,
 		// Append primary_conninfo after pg_basebackup -R so application_name matches pod HOSTNAME
 		// (used by primary-side replay_lag metrics and db instance layers).
-		Command: []string{"sh", "-c", `until pg_isready -h db -U syscrack; do sleep 1; done; pg_basebackup -h db -U syscrack -D $PGDATA -Fp -Xs -R -P; echo "primary_conninfo = 'host=db port=5432 user=syscrack application_name=${HOSTNAME} sslmode=disable'" >> "$PGDATA/postgresql.auto.conf"`},
+		Command: []string{"sh", "-c", dbReplicaBasebackupScript},
 		Env: []corev1.EnvVar{
 			{Name: "PGDATA", Value: "/var/lib/postgresql/data"},
 		},
