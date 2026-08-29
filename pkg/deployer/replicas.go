@@ -136,6 +136,25 @@ func parseReplicationMode(config map[string]any) (string, error) {
 	}
 }
 
+// seedReplicaReadyBeforeRestore returns how many read-replica pods must be Ready
+// before pg_restore may run: 0 = seed immediately after primary Ready (async),
+// 1 = semi-sync (ANY 1), replicaCount = sync (all standbys).
+func seedReplicaReadyBeforeRestore(mode string, replicaCount int32) int32 {
+	if replicaCount <= 0 {
+		return 0
+	}
+	switch mode {
+	case "async":
+		return 0
+	case "semi-sync":
+		return 1
+	case "sync":
+		return replicaCount
+	default:
+		return replicaCount
+	}
+}
+
 // dbEngineSupportsStreamingReplicas reports whether the db engine can use physical streaming replicas.
 func dbEngineSupportsStreamingReplicas(engine string) bool {
 	switch strings.ToLower(strings.TrimSpace(engine)) {

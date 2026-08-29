@@ -539,11 +539,7 @@ func (h *Handler) orchestrate(
 		}()
 	}
 
-	type seedResult struct {
-		seeded bool
-		err    error
-	}
-	var seedDone <-chan seedResult
+	var seeded bool
 	startedSeed := false
 
 	for _, layer := range layers {
@@ -574,12 +570,72 @@ func (h *Handler) orchestrate(
 						emitProvision("deploying", comps)
 					},
 				}
+				if h.seeder != nil && node.Type == "db" {
+					cfg.AfterPrimaryReady = func(ctx context.Context) error {
+						provisionMu.Lock()
+						if startedSeed {
+							provisionMu.Unlock()
+							return nil
+						}
+						startedSeed = true
+						seedingStatus = "seeding"
+						comps := cloneComponentStatus(componentStatus)
+						provisionMu.Unlock()
+						emitProvision("deploying", comps)
+
+						res := <-dumpReady
+						if res.err != nil {
+							log.Printf("seeding failed for namespace=%s (continuing deployment): seed pre-download failed: %v", namespace, res.err)
+							provisionMu.Lock()
+							seedingStatus = "failed"
+							provisionMu.Unlock()
+							if h.metricsCollector != nil {
+								h.metricsCollector.OpenPostgresSession(namespace)
+							}
+							return nil
+						}
+						if res.path == "" {
+							log.Printf("seeding failed for namespace=%s (continuing deployment): seed dump not available", namespace)
+							provisionMu.Lock()
+							seedingStatus = "failed"
+							provisionMu.Unlock()
+							if h.metricsCollector != nil {
+								h.metricsCollector.OpenPostgresSession(namespace)
+							}
+							return nil
+						}
+						if err := h.seeder.SeedWithDump(ctx, namespace, design.Template, res.path); err != nil {
+							log.Printf("seeding failed for namespace=%s (continuing deployment): %v", namespace, err)
+							provisionMu.Lock()
+							seedingStatus = "failed"
+							provisionMu.Unlock()
+							if h.metricsCollector != nil {
+								h.metricsCollector.OpenPostgresSession(namespace)
+							}
+							return nil
+						}
+						provisionMu.Lock()
+						seedingStatus = "done"
+						seeded = true
+						provisionMu.Unlock()
+						if h.metricsCollector != nil {
+							h.metricsCollector.WaitAndRebaselinePostgresSession(ctx, namespace)
+						}
+						return nil
+					}
+				}
 				if err := d.Deploy(ctx, cfg); err != nil {
 					provisionMu.Lock()
 					deployFailDetail = deployer.ProvisionDetailFromDeployError(err)
 					provisionMu.Unlock()
 					errs[idx] = fmt.Errorf("deploy node %s: %w", node.Name, err)
+					return
 				}
+				provisionMu.Lock()
+				componentStatus[node.ID] = "ready"
+				comps := cloneComponentStatus(componentStatus)
+				provisionMu.Unlock()
+				emitProvision("deploying", comps)
 			}(i, layer[i])
 		}
 		wg.Wait()
@@ -601,59 +657,15 @@ func (h *Handler) orchestrate(
 			}
 		}
 		deployed = append(deployed, layer...)
-		for _, node := range layer {
-			componentStatus[node.ID] = "ready"
+		for i, node := range layer {
+			if errs[i] == nil {
+				componentStatus[node.ID] = "ready"
+			}
 		}
 		emitProvision("deploying", componentStatus)
-
-		if !startedSeed && h.seeder != nil && layerContainsType(layer, "db") {
-			startedSeed = true
-			provisionMu.Lock()
-			seedingStatus = "seeding"
-			provisionMu.Unlock()
-			emitProvision("deploying", componentStatus)
-			ch := make(chan seedResult, 1)
-			seedDone = ch
-			go func() {
-				res := <-dumpReady
-				if res.err != nil {
-					ch <- seedResult{seeded: false, err: fmt.Errorf("seed pre-download failed: %w", res.err)}
-					return
-				}
-				if res.path == "" {
-					ch <- seedResult{seeded: false, err: fmt.Errorf("seed dump not available")}
-					return
-				}
-				if err := h.seeder.SeedWithDump(ctx, namespace, design.Template, res.path); err != nil {
-					ch <- seedResult{seeded: false, err: err}
-					return
-				}
-				ch <- seedResult{seeded: true, err: nil}
-			}()
-		}
 	}
 
-	seeded := false
-	if seedDone != nil {
-		res := <-seedDone
-		if res.err != nil {
-			log.Printf("seeding failed for namespace=%s (continuing deployment): %v", namespace, res.err)
-			seedingStatus = "failed"
-			if h.metricsCollector != nil {
-				h.metricsCollector.OpenPostgresSession(namespace)
-			}
-		} else {
-			seeded = res.seeded
-			seedingStatus = "done"
-			if h.metricsCollector != nil {
-				if seeded {
-					h.metricsCollector.WaitAndRebaselinePostgresSession(ctx, namespace)
-				} else {
-					h.metricsCollector.OpenPostgresSession(namespace)
-				}
-			}
-		}
-	} else {
+	if !startedSeed {
 		seedingStatus = statusOrSkipped(h.seeder, "skipped")
 	}
 
@@ -769,15 +781,6 @@ func replicaStatusToSummary(replicaStatus map[string][]deployer.PodWaitProgress)
 		out[nodeID] = rows
 	}
 	return out
-}
-
-func layerContainsType(layer []deployer.DeploymentNode, nodeType string) bool {
-	for _, n := range layer {
-		if n.Type == nodeType {
-			return true
-		}
-	}
-	return false
 }
 
 func designHasDBNode(design deployer.DeploymentDesign) bool {

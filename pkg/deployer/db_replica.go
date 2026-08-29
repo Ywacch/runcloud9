@@ -260,22 +260,22 @@ func dbReplicaServiceSpec(cfg DeployConfig) *corev1.Service {
 	}
 }
 
-func (k *K8sDeployer) deployDBReadReplicas(ctx context.Context, cfg DeployConfig, readReplicas int32) error {
+func (k *K8sDeployer) createDBReadReplicaObjects(ctx context.Context, cfg DeployConfig, readReplicas int32) (int32, error) {
 	if readReplicas <= 0 {
-		return nil
+		return 0, nil
 	}
 
 	total := 1 + int(readReplicas)
 	sizes := instanceSizesFromConfig(cfg.Node.Config, total)
 	if len(sizes) < total {
-		return fmt.Errorf("deployDBReadReplicas: expected %d instance sizes, got %d", total, len(sizes))
+		return 0, fmt.Errorf("deployDBReadReplicas: expected %d instance sizes, got %d", total, len(sizes))
 	}
 	standbySizes := sizes[1:]
 	groups := sizeGroups(standbySizes)
 
 	headless := dbReplicaHeadlessServiceSpec(cfg)
 	if _, err := k.clientset.CoreV1().Services(cfg.Namespace).Create(ctx, headless, metav1.CreateOptions{}); err != nil {
-		return fmt.Errorf("create postgres-replica headless service: %w", err)
+		return 0, fmt.Errorf("create postgres-replica headless service: %w", err)
 	}
 
 	var desiredReady int32
@@ -284,14 +284,25 @@ func (k *K8sDeployer) deployDBReadReplicas(ctx context.Context, cfg DeployConfig
 		resources := dbResourcesForSize(group.Size)
 		sts := dbReplicaStatefulSetSpecNamed(cfg, stsName, resources, group.Count, group.Size)
 		if _, err := k.clientset.AppsV1().StatefulSets(cfg.Namespace).Create(ctx, sts, metav1.CreateOptions{}); err != nil {
-			return fmt.Errorf("create postgres-replica statefulset %s: %w", stsName, err)
+			return 0, fmt.Errorf("create postgres-replica statefulset %s: %w", stsName, err)
 		}
 		desiredReady += group.Count
 	}
 
 	svc := dbReplicaServiceSpec(cfg)
 	if _, err := k.clientset.CoreV1().Services(cfg.Namespace).Create(ctx, svc, metav1.CreateOptions{}); err != nil {
-		return fmt.Errorf("create db-replica service: %w", err)
+		return 0, fmt.Errorf("create db-replica service: %w", err)
+	}
+	return desiredReady, nil
+}
+
+func (k *K8sDeployer) deployDBReadReplicas(ctx context.Context, cfg DeployConfig, readReplicas int32) error {
+	desiredReady, err := k.createDBReadReplicaObjects(ctx, cfg, readReplicas)
+	if err != nil {
+		return err
+	}
+	if desiredReady <= 0 {
+		return nil
 	}
 
 	prefix := []PodWaitProgress{{Ordinal: 1, Ready: true, WaitCode: WaitCodeReady}}

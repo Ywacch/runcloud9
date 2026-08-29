@@ -1,6 +1,9 @@
 package deployer
 
-import "context"
+import (
+	"context"
+	"log"
+)
 
 type DeploymentDesign struct {
 	Version        string           `json:"version"`
@@ -33,6 +36,10 @@ type DeployConfig struct {
 	Design    DeploymentDesign // full design for context (e.g. connections)
 	// OnWaitProgress is invoked while waiting for pods to become Ready (nil = no-op).
 	OnWaitProgress func(nodeID string, pods []PodWaitProgress)
+	// AfterPrimaryReady runs when the primary can accept seed writes for this
+	// replication mode (see seedReplicaReadyBeforeRestore). Nil = no-op.
+	// Seed errors must not fail Deploy (handler returns nil from the hook).
+	AfterPrimaryReady func(ctx context.Context) error
 }
 
 type ComponentDeployer interface {
@@ -52,4 +59,15 @@ type DeploymentResult struct {
 	Status       string `json:"status"` // "running" | "failed"
 	Error        string `json:"error,omitempty"`
 	Seeded       bool   `json:"seeded"`
+}
+
+// invokeAfterPrimaryReady calls cfg.AfterPrimaryReady when set. Errors are logged
+// but never fail Deploy; the handler hook swallows seed failures.
+func invokeAfterPrimaryReady(ctx context.Context, cfg DeployConfig) {
+	if cfg.AfterPrimaryReady == nil {
+		return
+	}
+	if err := cfg.AfterPrimaryReady(ctx); err != nil {
+		log.Printf("AfterPrimaryReady: %v", err)
+	}
 }

@@ -20,7 +20,12 @@ type fakeComponentDeployer struct {
 
 func (f *fakeComponentDeployer) Deploy(ctx context.Context, cfg deployer.DeployConfig) error {
 	if f.deployFn != nil {
-		return f.deployFn(ctx, cfg)
+		if err := f.deployFn(ctx, cfg); err != nil {
+			return err
+		}
+	}
+	if cfg.AfterPrimaryReady != nil {
+		return cfg.AfterPrimaryReady(ctx)
 	}
 	return nil
 }
@@ -33,6 +38,8 @@ type fakeSeeder struct {
 	seedErr      error
 	seedStarted  chan struct{}
 	seedStartedM sync.Once
+	// seedHold, when non-nil, keeps SeedWithDump in flight until closed.
+	seedHold <-chan struct{}
 }
 
 func (f *fakeSeeder) SeedDatabase(context.Context, string, string) error { return errors.New("unused") }
@@ -41,9 +48,83 @@ func (f *fakeSeeder) PreDownloadDump(context.Context, string) (string, error) {
 	return f.prePath, f.preErr
 }
 
-func (f *fakeSeeder) SeedWithDump(context.Context, string, string, string) error {
+func (f *fakeSeeder) SeedWithDump(ctx context.Context, _, _, _ string) error {
 	f.seedStartedM.Do(func() { close(f.seedStarted) })
+	if f.seedHold != nil {
+		select {
+		case <-f.seedHold:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	return f.seedErr
+}
+
+func TestOrchestrate_SeedingStartsDuringBlockedCacheInSameLayer(t *testing.T) {
+	s := newFakeDeploymentStore()
+	ns := "ns-seed-cache-layer"
+	_, _ = s.CreateDeployment(context.Background(), store.CreateDeploymentParams{
+		Namespace: ns, Template: "url-shortener", Archetype: "default", Design: map[string]any{}, ExpiresAt: time.Now().Add(time.Minute),
+	})
+
+	cacheBlock := make(chan struct{})
+	deployers := map[string]deployer.ComponentDeployer{
+		"db": &fakeComponentDeployer{},
+		"cache": &fakeComponentDeployer{
+			deployFn: func(ctx context.Context, cfg deployer.DeployConfig) error {
+				select {
+				case <-cacheBlock:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			},
+		},
+	}
+	seedHold := make(chan struct{})
+	seed := &fakeSeeder{
+		prePath:     "dump.tmp",
+		seedStarted: make(chan struct{}),
+		seedHold:    seedHold,
+	}
+
+	h := NewHandler(deployers, s, nil, nil, nil, nil, nil, nil, nil)
+	h.seeder = seed
+
+	design := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "default",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "db-1", Type: "db", Name: "DB"},
+			{ID: "cache-1", Type: "cache", Name: "Cache"},
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.orchestrate(context.Background(), design, ns, "explorer")
+		done <- err
+	}()
+
+	select {
+	case <-seed.seedStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected seeding to start while cache deploy is blocked in the same layer")
+	}
+
+	row, err := s.GetDeployment(context.Background(), ns)
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	if got, _ := row.MetricsSummary["seeding_status"].(string); got != "seeding" {
+		t.Fatalf("seeding_status during blocked cache: want seeding, got %q", got)
+	}
+
+	close(seedHold)
+	close(cacheBlock)
+	if err := <-done; err != nil {
+		t.Fatalf("orchestrate returned error: %v", err)
+	}
 }
 
 func TestOrchestrate_SeedingStartsAfterDBBeforeLaterLayers(t *testing.T) {
@@ -54,10 +135,13 @@ func TestOrchestrate_SeedingStartsAfterDBBeforeLaterLayers(t *testing.T) {
 	})
 
 	appBlock := make(chan struct{})
+	appStarted := make(chan struct{})
+	var appStartedOnce sync.Once
 	deployers := map[string]deployer.ComponentDeployer{
 		"db": &fakeComponentDeployer{},
 		"app-server": &fakeComponentDeployer{
 			deployFn: func(ctx context.Context, cfg deployer.DeployConfig) error {
+				appStartedOnce.Do(func() { close(appStarted) })
 				select {
 				case <-appBlock:
 					return nil
@@ -95,17 +179,22 @@ func TestOrchestrate_SeedingStartsAfterDBBeforeLaterLayers(t *testing.T) {
 
 	select {
 	case <-seed.seedStarted:
-		// Expected: seeding starts while app layer is blocked.
+		// Seed runs inside db Deploy, before later layers start.
 	case <-time.After(2 * time.Second):
-		t.Fatal("expected seeding to start before app layer unblocked")
+		t.Fatal("expected seeding to start before app layer")
+	}
+	select {
+	case <-appStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected app layer to start after seed")
 	}
 
 	row, err := s.GetDeployment(context.Background(), ns)
 	if err != nil {
 		t.Fatalf("get deployment: %v", err)
 	}
-	if got, _ := row.MetricsSummary["seeding_status"].(string); got != "seeding" {
-		t.Fatalf("seeding_status during blocked app layer: want seeding, got %q", got)
+	if got, _ := row.MetricsSummary["seeding_status"].(string); got != "done" {
+		t.Fatalf("seeding_status after seed and during blocked app layer: want done, got %q", got)
 	}
 
 	close(appBlock)
