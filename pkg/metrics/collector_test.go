@@ -468,6 +468,12 @@ func TestCollect_WorkerReplicaMetrics(t *testing.T) {
 	if worker.RequestRate != 18 {
 		t.Fatalf("worker RequestRate: want 18, got %v", worker.RequestRate)
 	}
+	if worker.TotalRequests != 980 {
+		t.Fatalf("worker TotalRequests: want 980, got %v", worker.TotalRequests)
+	}
+	if worker.TotalErrors9m != 3 {
+		t.Fatalf("worker TotalErrors9m: want 3, got %v", worker.TotalErrors9m)
+	}
 	if len(worker.Replicas) != 2 {
 		t.Fatalf("worker replicas: want 2, got %d", len(worker.Replicas))
 	}
@@ -1260,5 +1266,65 @@ func TestCollect_SessionAccumulatorSurvivesPodKill(t *testing.T) {
 	}
 	if got := dm3.Components["app-server"].TotalRequests; got != 14 {
 		t.Fatalf("collect 3 TotalRequests: want 14, got %v", got)
+	}
+}
+
+func TestCollect_WorkerSessionAccumulatorSurvivesPodKill(t *testing.T) {
+	t.Parallel()
+
+	scrape := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "sum by (pod)") &&
+			strings.Contains(q, "_worker_processed_total") &&
+			!strings.Contains(q, "rate("):
+			scrape++
+			var pods map[string]string
+			switch scrape {
+			case 1:
+				pods = map[string]string{"worker-a": "100"}
+			case 2:
+				pods = map[string]string{"worker-b": "0"}
+			default:
+				pods = map[string]string{"worker-b": "25"}
+			}
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", pods))
+		case strings.Contains(q, "sum by (pod)") &&
+			strings.Contains(q, "_worker_errors_total") &&
+			!strings.Contains(q, "rate("):
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	dm1, err := c.Collect(ctx, "ns-worker-kill", "", TopologyFlags{HasWorker: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dm1.Components["worker"].TotalRequests; got != 100 {
+		t.Fatalf("collect 1 TotalRequests: want 100, got %v", got)
+	}
+
+	dm2, err := c.Collect(ctx, "ns-worker-kill", "", TopologyFlags{HasWorker: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dm2.Components["worker"].TotalRequests; got != 100 {
+		t.Fatalf("collect 2 TotalRequests: want 100 (pod A gone), got %v", got)
+	}
+
+	dm3, err := c.Collect(ctx, "ns-worker-kill", "", TopologyFlags{HasWorker: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dm3.Components["worker"].TotalRequests; got != 125 {
+		t.Fatalf("collect 3 TotalRequests: want 125, got %v", got)
 	}
 }
