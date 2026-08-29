@@ -1008,6 +1008,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		cmWorker.WorkerSaturation = sat
 	}
 	wRpsByPod, wP50ByPod, wP95ByPod, wP99ByPod, wP50SessionByPod, wP95SessionByPod, wP99SessionByPod, wCPUByPod, wErrByPod, wTotalProcessedByPod, wTotalErrorsByPod, wMemByPod := c.workerReplicaSeries(ctx, ns)
+	cmWorker.TotalRequests = c.sessionAcc.Observe(ns, seriesWorkerProcessed, wTotalProcessedByPod)
+	cmWorker.TotalErrors9m = c.sessionAcc.Observe(ns, seriesWorkerErrors, wTotalErrorsByPod)
 	workerPodNames, workerReadyByPod, _ := c.listWorkerPods(ctx, ns)
 	workerReplicaRows := mergePodMetricMaps(
 		workerPodNames, workerReadyByPod,

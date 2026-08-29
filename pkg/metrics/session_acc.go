@@ -7,16 +7,18 @@ import (
 )
 
 const (
-	seriesHTTP        = "http"
-	seriesHTTP5xx     = "http5xx"
-	seriesSQL         = "sql"
-	seriesCacheHits   = "cache_hits"
-	seriesCacheMisses = "cache_misses"
-	seriesRedisRead   = "redis_read"
-	seriesRedisWrite  = "redis_write"
-	seriesPgRead      = "pg_read"
-	seriesPgWrite     = "pg_write"
-	seriesPgXact      = "pg_xact"
+	seriesHTTP            = "http"
+	seriesHTTP5xx         = "http5xx"
+	seriesWorkerProcessed = "worker_processed"
+	seriesWorkerErrors    = "worker_errors"
+	seriesSQL             = "sql"
+	seriesCacheHits       = "cache_hits"
+	seriesCacheMisses     = "cache_misses"
+	seriesRedisRead       = "redis_read"
+	seriesRedisWrite      = "redis_write"
+	seriesPgRead          = "pg_read"
+	seriesPgWrite         = "pg_write"
+	seriesPgXact          = "pg_xact"
 )
 
 // sessionP99MinWindow is the minimum PromQL range for session p99 histogram rates.
