@@ -260,7 +260,7 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 		return fmt.Errorf("create lb service: %w", err)
 	}
 
-	return k.waitForReady(ctx, cfg.Namespace, "lb", replicas)
+	return k.waitForReady(ctx, cfg, "lb", replicas, waitProgressOpts{})
 }
 
 func (k *K8sDeployer) reloadLBDeployment(ctx context.Context, namespace string) error {
@@ -279,7 +279,7 @@ func (k *K8sDeployer) reloadLBDeployment(ctx context.Context, namespace string) 
 	if dep.Spec.Replicas != nil {
 		replicas = *dep.Spec.Replicas
 	}
-	return k.waitForReady(ctx, namespace, "lb", replicas)
+	return k.waitForReady(ctx, DeployConfig{Namespace: namespace}, "lb", replicas, waitProgressOpts{})
 }
 
 // nginxConfig builds a minimal nginx.conf with an upstream and reverse proxy to app backends.

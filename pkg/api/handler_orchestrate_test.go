@@ -100,9 +100,25 @@ func TestOrchestrate_SeedingStartsAfterDBBeforeLaterLayers(t *testing.T) {
 		t.Fatal("expected seeding to start before app layer unblocked")
 	}
 
+	row, err := s.GetDeployment(context.Background(), ns)
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	if got, _ := row.MetricsSummary["seeding_status"].(string); got != "seeding" {
+		t.Fatalf("seeding_status during blocked app layer: want seeding, got %q", got)
+	}
+
 	close(appBlock)
 	if err := <-done; err != nil {
 		t.Fatalf("orchestrate returned error: %v", err)
+	}
+
+	row, err = s.GetDeployment(context.Background(), ns)
+	if err != nil {
+		t.Fatalf("get deployment after orchestrate: %v", err)
+	}
+	if got, _ := row.MetricsSummary["seeding_status"].(string); got != "done" {
+		t.Fatalf("seeding_status after orchestrate: want done, got %q", got)
 	}
 }
 

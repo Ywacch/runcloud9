@@ -504,7 +504,23 @@ func (h *Handler) orchestrate(
 	for _, n := range design.Nodes {
 		componentStatus[n.ID] = "pending"
 	}
-	h.emitProvisionStatus(namespace, "deploying", componentStatus, "pending", loadgenStatusPending(h.clientset))
+	seedingStatus := statusOrSkipped(h.seeder, "pending")
+	loadgenStatus := loadgenStatusPending(h.clientset)
+	var provisionMu sync.Mutex
+	replicaStatus := make(map[string][]deployer.PodWaitProgress)
+	deployFailDetail := ""
+
+	emitProvision := func(phase string, components map[string]string) {
+		provisionMu.Lock()
+		seeding := seedingStatus
+		loadgen := loadgenStatus
+		replicas := cloneReplicaStatus(replicaStatus)
+		failDetail := deployFailDetail
+		provisionMu.Unlock()
+		detail := deployer.ComputeProvisionDetailCode(seeding, replicas, phase, failDetail)
+		h.emitProvisionStatus(namespace, phase, components, seeding, loadgen, replicas, detail)
+	}
+	emitProvision("deploying", componentStatus)
 
 	if h.seeder != nil && h.metricsCollector != nil && designHasDBNode(design) {
 		h.metricsCollector.HoldPostgresSession(namespace)
@@ -534,7 +550,7 @@ func (h *Handler) orchestrate(
 		for _, node := range layer {
 			componentStatus[node.ID] = "deploying"
 		}
-		h.emitProvisionStatus(namespace, "deploying", componentStatus, statusOrSkipped(h.seeder, "pending"), loadgenStatusPending(h.clientset))
+		emitProvision("deploying", componentStatus)
 
 		errs := make([]error, len(layer))
 		var wg sync.WaitGroup
@@ -550,8 +566,18 @@ func (h *Handler) orchestrate(
 					Namespace: namespace,
 					Node:      node,
 					Design:    design,
+					OnWaitProgress: func(nodeID string, pods []deployer.PodWaitProgress) {
+						provisionMu.Lock()
+						replicaStatus[nodeID] = pods
+						comps := cloneComponentStatus(componentStatus)
+						provisionMu.Unlock()
+						emitProvision("deploying", comps)
+					},
 				}
 				if err := d.Deploy(ctx, cfg); err != nil {
+					provisionMu.Lock()
+					deployFailDetail = deployer.ProvisionDetailFromDeployError(err)
+					provisionMu.Unlock()
 					errs[idx] = fmt.Errorf("deploy node %s: %w", node.Name, err)
 				}
 			}(i, layer[i])
@@ -565,7 +591,10 @@ func (h *Handler) orchestrate(
 						componentStatus[layer[i].ID] = "failed"
 					}
 				}
-				h.emitProvisionStatus(namespace, "failed", componentStatus, statusOrSkipped(h.seeder, "failed"), loadgenStatusPending(h.clientset))
+				provisionMu.Lock()
+				seedingStatus = statusOrSkipped(h.seeder, "failed")
+				provisionMu.Unlock()
+				emitProvision("failed", componentStatus)
 				log.Printf("deploy failed, rolling back %d nodes", len(deployed))
 				h.rollback(context.Background(), deployed, namespace)
 				return nil, e
@@ -575,11 +604,14 @@ func (h *Handler) orchestrate(
 		for _, node := range layer {
 			componentStatus[node.ID] = "ready"
 		}
-		h.emitProvisionStatus(namespace, "deploying", componentStatus, statusOrSkipped(h.seeder, "pending"), loadgenStatusPending(h.clientset))
+		emitProvision("deploying", componentStatus)
 
 		if !startedSeed && h.seeder != nil && layerContainsType(layer, "db") {
 			startedSeed = true
-			h.emitProvisionStatus(namespace, "deploying", componentStatus, "seeding", loadgenStatusPending(h.clientset))
+			provisionMu.Lock()
+			seedingStatus = "seeding"
+			provisionMu.Unlock()
+			emitProvision("deploying", componentStatus)
 			ch := make(chan seedResult, 1)
 			seedDone = ch
 			go func() {
@@ -602,7 +634,6 @@ func (h *Handler) orchestrate(
 	}
 
 	seeded := false
-	seedingStatus := statusOrSkipped(h.seeder, "skipped")
 	if seedDone != nil {
 		res := <-seedDone
 		if res.err != nil {
@@ -622,6 +653,8 @@ func (h *Handler) orchestrate(
 				}
 			}
 		}
+	} else {
+		seedingStatus = statusOrSkipped(h.seeder, "skipped")
 	}
 
 	if h.clientset != nil {
@@ -630,7 +663,6 @@ func (h *Handler) orchestrate(
 		}
 	}
 
-	loadgenStatus := loadgenStatusPending(h.clientset)
 	if h.clientset != nil {
 		loadgenStatus = "ready"
 		if err := deployer.DeployLoadgen(ctx, h.clientset, namespace, resourceQuotaTier); err != nil {
@@ -639,7 +671,7 @@ func (h *Handler) orchestrate(
 		}
 	}
 
-	h.emitProvisionStatus(namespace, "running", componentStatus, seedingStatus, loadgenStatus)
+	emitProvision("running", componentStatus)
 
 	return &deployer.DeploymentResult{
 		DeploymentID: namespace,
@@ -663,20 +695,30 @@ func (h *Handler) rollback(ctx context.Context, nodes []deployer.DeploymentNode,
 	}
 }
 
-func (h *Handler) emitProvisionStatus(namespace, phase string, components map[string]string, seeding, loadgen string) {
+func (h *Handler) emitProvisionStatus(
+	namespace, phase string,
+	components map[string]string,
+	seeding, loadgen string,
+	replicaStatus map[string][]deployer.PodWaitProgress,
+	provisionDetailCode string,
+) {
 	if h.store == nil {
 		return
 	}
 	summary := map[string]any{
-		"provision_phase": phase,
-		"seeding_status":  seeding,
-		"loadgen_status":  loadgen,
+		"provision_phase":       phase,
+		"seeding_status":        seeding,
+		"loadgen_status":        loadgen,
+		"provision_detail_code": provisionDetailCode,
 	}
 	c := make(map[string]string, len(components))
 	for k, v := range components {
 		c[k] = v
 	}
 	summary["component_status"] = c
+	if len(replicaStatus) > 0 {
+		summary["replica_status"] = replicaStatusToSummary(replicaStatus)
+	}
 
 	if row, err := h.store.GetDeployment(context.Background(), namespace); err == nil && row.MetricsSummary != nil {
 		merged := make(map[string]any, len(row.MetricsSummary)+len(summary))
@@ -690,6 +732,43 @@ func (h *Handler) emitProvisionStatus(namespace, phase string, components map[st
 		return
 	}
 	_ = h.store.UpdateMetricsSummary(context.Background(), namespace, summary)
+}
+
+func cloneComponentStatus(components map[string]string) map[string]string {
+	out := make(map[string]string, len(components))
+	for k, v := range components {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneReplicaStatus(in map[string][]deployer.PodWaitProgress) map[string][]deployer.PodWaitProgress {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string][]deployer.PodWaitProgress, len(in))
+	for nodeID, pods := range in {
+		copied := make([]deployer.PodWaitProgress, len(pods))
+		copy(copied, pods)
+		out[nodeID] = copied
+	}
+	return out
+}
+
+func replicaStatusToSummary(replicaStatus map[string][]deployer.PodWaitProgress) map[string]any {
+	out := make(map[string]any, len(replicaStatus))
+	for nodeID, pods := range replicaStatus {
+		rows := make([]map[string]any, len(pods))
+		for i, p := range pods {
+			rows[i] = map[string]any{
+				"ordinal":   p.Ordinal,
+				"ready":     p.Ready,
+				"wait_code": p.WaitCode,
+			}
+		}
+		out[nodeID] = rows
+	}
+	return out
 }
 
 func layerContainsType(layer []deployer.DeploymentNode, nodeType string) bool {
