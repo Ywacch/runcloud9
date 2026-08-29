@@ -44,6 +44,7 @@ type Handler struct {
 	loadgen          loadgen.LoadGenerator
 	eventBus         *metrics.EventBus
 	provisionMu      sync.Mutex
+	emitProvisionMu  sync.Mutex
 	provisionCancel  map[string]context.CancelFunc
 	door             *provisionDoor
 	admitMu          sync.Mutex
@@ -733,6 +734,10 @@ func (h *Handler) emitProvisionStatus(
 	if h.store == nil {
 		return
 	}
+	// Layer Deploy goroutines emit concurrently; serialize Get+merge+Update so
+	// we never range a shared MetricsSummary map while another write patches it.
+	h.emitProvisionMu.Lock()
+	defer h.emitProvisionMu.Unlock()
 	summary := map[string]any{
 		"provision_phase":       phase,
 		"seeding_status":        seeding,
