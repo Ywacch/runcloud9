@@ -232,6 +232,7 @@ func pgRestoreCommand(creds DBCredentials) []string {
 	return []string{
 		"env",
 		fmt.Sprintf("PGPASSWORD=%s", creds.Password),
+		"PGOPTIONS=-c synchronous_commit=off",
 		"pg_restore",
 		"-U", creds.User,
 		"-d", creds.Database,
