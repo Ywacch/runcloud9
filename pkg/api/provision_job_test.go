@@ -15,7 +15,7 @@ func TestProvisionOrchestrationTimeout(t *testing.T) {
 	}{
 		{name: "local default", deployerEnv: "", want: 2 * time.Minute},
 		{name: "local explicit", deployerEnv: "local", want: 2 * time.Minute},
-		{name: "k8s", deployerEnv: "k8s", want: 5 * time.Minute},
+		{name: "k8s", deployerEnv: "k8s", want: 8 * time.Minute},
 	}
 
 	for _, tt := range tests {

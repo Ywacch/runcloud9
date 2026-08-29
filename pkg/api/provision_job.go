@@ -17,7 +17,9 @@ import (
 // slot is held. Queue wait for MAX_CONCURRENT_PROVISIONS is not included.
 func provisionOrchestrationTimeout(deployerEnv string) time.Duration {
 	if deployerEnv == "k8s" {
-		return 5 * time.Minute
+		// Seed + CHECKPOINT + pg_basebackup of a seeded primary (url-shortener ~1M rows)
+		// exceeded 5m while replica inits waited on a spread checkpoint.
+		return 8 * time.Minute
 	}
 	return 2 * time.Minute
 }

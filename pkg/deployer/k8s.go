@@ -25,7 +25,7 @@ import (
 
 // Provisioning waits: fail fast on clearly unrecoverable container config, debounce CrashLoopBackOff
 // so transient blips do not abort before Kubernetes has retried, but broken apps do not burn the
-// full orchestration context (~5m on k8s). Image pull backoffs are left to the parent context.
+// full orchestration context (~8m on k8s). Image pull backoffs are left to the parent context.
 const (
 	waitReadyCrashLoopDebounce          = 45 * time.Second
 	waitReadyRestartFailThreshold int32 = 3
