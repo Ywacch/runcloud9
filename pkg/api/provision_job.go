@@ -52,6 +52,8 @@ func (h *Handler) runBackgroundProvision(
 				map[string]string{},
 				"pending",
 				loadgenStatusPending(h.clientset),
+				nil,
+				"layer_deploying",
 			)
 		},
 	)

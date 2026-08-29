@@ -213,7 +213,8 @@ func TestWaitForReady_AlreadyReady(t *testing.T) {
 	d := NewK8sDeployer(fakeClient, "db")
 	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := d.waitForReady(waitCtx, ns, "app-server", 1); err != nil {
+	cfg := DeployConfig{Namespace: ns, Node: DeploymentNode{ID: "app-1"}}
+	if err := d.waitForReady(waitCtx, cfg, "app-server", 1, waitProgressOpts{}); err != nil {
 		t.Fatalf("waitForReady(1): %v", err)
 	}
 }
@@ -233,10 +234,11 @@ func TestWaitForReady_BecomesReadyOnLaterPoll(t *testing.T) {
 	d := NewK8sDeployer(fakeClient, "db")
 	waitCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	cfg := DeployConfig{Namespace: ns, Node: DeploymentNode{ID: "app-1"}}
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- d.waitForReady(waitCtx, ns, "app-server", 1)
+		errCh <- d.waitForReady(waitCtx, cfg, "app-server", 1, waitProgressOpts{})
 	}()
 
 	time.Sleep(200 * time.Millisecond)
@@ -269,12 +271,71 @@ func TestWaitForReady_Timeout(t *testing.T) {
 	d := NewK8sDeployer(fakeClient, "db")
 	waitCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	err := d.waitForReady(waitCtx, ns, "app-server", 1)
+	cfg := DeployConfig{Namespace: ns, Node: DeploymentNode{ID: "app-1"}}
+	err := d.waitForReady(waitCtx, cfg, "app-server", 1, waitProgressOpts{})
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected DeadlineExceeded, got %v", err)
+	}
+}
+
+func TestWaitForReady_ProgressMixedReady(t *testing.T) {
+	ns := "cloud9-test-progress"
+	labels := map[string]string{"app": "app-server", "deployment": ns}
+	fakeClient := fake.NewSimpleClientset()
+	ctx := context.Background()
+
+	readyPod, err := fakeClient.CoreV1().Pods(ns).Create(ctx, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-server-0", Namespace: ns, Labels: labels},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("create ready pod: %v", err)
+	}
+	readyPod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+	if _, err := fakeClient.CoreV1().Pods(ns).UpdateStatus(ctx, readyPod, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("update ready pod status: %v", err)
+	}
+
+	pullingPod, err := fakeClient.CoreV1().Pods(ns).Create(ctx, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-server-1", Namespace: ns, Labels: labels},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("create pulling pod: %v", err)
+	}
+	pullingPod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name:  "app",
+		State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff"}},
+	}}
+	if _, err := fakeClient.CoreV1().Pods(ns).UpdateStatus(ctx, pullingPod, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("update pulling pod status: %v", err)
+	}
+
+	var last []PodWaitProgress
+	cfg := DeployConfig{
+		Namespace: ns,
+		Node:      DeploymentNode{ID: "app-1"},
+		OnWaitProgress: func(_ string, pods []PodWaitProgress) {
+			copied := make([]PodWaitProgress, len(pods))
+			copy(copied, pods)
+			last = copied
+		},
+	}
+
+	d := NewK8sDeployer(fakeClient, "db")
+	waitCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_ = d.waitForReady(waitCtx, cfg, "app-server", 2, waitProgressOpts{})
+
+	if len(last) != 2 {
+		t.Fatalf("progress pods: got %d want 2", len(last))
+	}
+	if !last[0].Ready || last[0].WaitCode != WaitCodeReady {
+		t.Fatalf("first pod: got ready=%v wait_code=%q want ready=true wait_code=ready", last[0].Ready, last[0].WaitCode)
+	}
+	if last[1].Ready || last[1].WaitCode != WaitCodePullingImage {
+		t.Fatalf("second pod: got ready=%v wait_code=%q want ready=false wait_code=pulling_image", last[1].Ready, last[1].WaitCode)
 	}
 }
 

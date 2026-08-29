@@ -31,6 +31,8 @@ type DeployConfig struct {
 	Namespace string
 	Node      DeploymentNode
 	Design    DeploymentDesign // full design for context (e.g. connections)
+	// OnWaitProgress is invoked while waiting for pods to become Ready (nil = no-op).
+	OnWaitProgress func(nodeID string, pods []PodWaitProgress)
 }
 
 type ComponentDeployer interface {

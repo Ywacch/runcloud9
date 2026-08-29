@@ -202,17 +202,30 @@ func podConditionReady(pod *corev1.Pod) bool {
 // UNDERSTAND: a List-then-Watch without resourceVersion races when pods become Ready
 // between the two calls; concurrent provisions hit that often. Re-listing each tick
 // cannot miss a Ready transition that already happened.
-func (k *K8sDeployer) waitForReady(ctx context.Context, namespace string, appLabel string, desiredReplicas int32) error {
+// waitProgressOpts configures optional replica progress reporting during waitForReady.
+type waitProgressOpts struct {
+	prefix []PodWaitProgress
+}
+
+func (k *K8sDeployer) waitForReady(ctx context.Context, cfg DeployConfig, appLabel string, desiredReplicas int32, opts waitProgressOpts) error {
 	if desiredReplicas <= 0 {
 		desiredReplicas = 1
 	}
 
-	labelSelector := "deployment=" + namespace + ",app=" + appLabel
+	labelSelector := "deployment=" + cfg.Namespace + ",app=" + appLabel
 	crashLoopSince := make(map[types.UID]time.Time)
 	readyCount := 0
+	var lastListed []corev1.Pod
+
+	emitProgress := func() {
+		if cfg.OnWaitProgress == nil {
+			return
+		}
+		cfg.OnWaitProgress(cfg.Node.ID, buildPodWaitProgressList(lastListed, desiredReplicas, opts.prefix))
+	}
 
 	check := func() error {
-		list, err := k.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+		list, err := k.clientset.CoreV1().Pods(cfg.Namespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
 		if err != nil {
 			return fmt.Errorf("list pods for %s: %w", appLabel, err)
 		}
@@ -237,6 +250,8 @@ func (k *K8sDeployer) waitForReady(ctx context.Context, namespace string, appLab
 			}
 		}
 		readyCount = len(readyPods)
+		lastListed = list.Items
+		emitProgress()
 		return nil
 	}
 
@@ -337,7 +352,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 		}
 
 		// Ensure the Redis backend is ready before the proxy starts.
-		if err := k.waitForReady(ctx, cfg.Namespace, "redis-internal", 1); err != nil {
+		if err := k.waitForReady(ctx, cfg, "redis-internal", 1, waitProgressOpts{}); err != nil {
 			return err
 		}
 
@@ -429,7 +444,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 			return fmt.Errorf("create cache proxy service: %w", err)
 		}
 
-		return k.waitForReady(ctx, cfg.Namespace, "cache-proxy", replicas)
+		return k.waitForReady(ctx, cfg, "cache-proxy", replicas, waitProgressOpts{})
 	}
 
 	// Cache-aside: single Redis pod/service + redis_exporter sidecar for Prometheus.
@@ -501,7 +516,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 		return fmt.Errorf("create service: %w", err)
 	}
 
-	return k.waitForReady(ctx, cfg.Namespace, "redis", replicas)
+	return k.waitForReady(ctx, cfg, "redis", replicas, waitProgressOpts{})
 }
 
 func (k *K8sDeployer) deployAppServer(ctx context.Context, cfg DeployConfig, _ corev1.ResourceRequirements, replicas int32) error {
@@ -569,7 +584,7 @@ func (k *K8sDeployer) deployAppServer(ctx context.Context, cfg DeployConfig, _ c
 		return fmt.Errorf("create service: %w", err)
 	}
 
-	return k.waitForReady(ctx, cfg.Namespace, "app-server", int32(len(sizes)))
+	return k.waitForReady(ctx, cfg, "app-server", int32(len(sizes)), waitProgressOpts{})
 }
 
 func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, _ corev1.ResourceRequirements, replicas int32) error {
@@ -631,7 +646,7 @@ func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, _ core
 		}
 	}
 
-	return k.waitForReady(ctx, cfg.Namespace, "worker", int32(len(sizes)))
+	return k.waitForReady(ctx, cfg, "worker", int32(len(sizes)), waitProgressOpts{})
 }
 
 func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, resources corev1.ResourceRequirements, replicas int32) error {
@@ -802,7 +817,7 @@ func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, 
 		}
 	}
 
-	return k.waitForReady(ctx, cfg.Namespace, spec.AppLabel, replicas)
+	return k.waitForReady(ctx, cfg, spec.AppLabel, replicas, waitProgressOpts{})
 }
 
 func (k *K8sDeployer) Teardown(ctx context.Context, namespace string) error {

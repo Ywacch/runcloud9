@@ -294,7 +294,8 @@ func (k *K8sDeployer) deployDBReadReplicas(ctx context.Context, cfg DeployConfig
 		return fmt.Errorf("create db-replica service: %w", err)
 	}
 
-	return k.waitForReady(ctx, cfg.Namespace, dbReplicaAppLabel, desiredReady)
+	prefix := []PodWaitProgress{{Ordinal: 1, Ready: true, WaitCode: WaitCodeReady}}
+	return k.waitForReady(ctx, cfg, dbReplicaAppLabel, desiredReady, waitProgressOpts{prefix: prefix})
 }
 
 // dbReplicaHostsFromConfig builds READ_REPLICA_HOSTS for a db node config.
