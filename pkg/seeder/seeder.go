@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	cloudstorage "cloud.google.com/go/storage"
 	"github.com/ywacch/cloud9/pkg/templates"
@@ -97,16 +98,44 @@ func (s *Seeder) SeedWithDump(ctx context.Context, namespace, template, dumpFile
 	}
 	podName := pods.Items[0].Name
 
-	if err := s.copyFileToPod(ctx, namespace, podName, cfg.Container, dumpFile); err != nil {
-		return fmt.Errorf("seeder: copy dump to pod: %w", err)
+	dumpBytes := int64(-1)
+	if st, err := os.Stat(dumpFile); err == nil {
+		dumpBytes = st.Size()
 	}
 
+	var copyMs, restoreMs, checkpointMs int64
+	seedStart := time.Now()
+	logTimings := func() {
+		log.Printf(
+			"seeder: timings namespace=%s template=%s dump_bytes=%d copy_ms=%d restore_ms=%d checkpoint_ms=%d total_ms=%d",
+			namespace, template, dumpBytes, copyMs, restoreMs, checkpointMs, time.Since(seedStart).Milliseconds(),
+		)
+	}
+
+	copyStart := time.Now()
+	if err := s.copyFileToPod(ctx, namespace, podName, cfg.Container, dumpFile); err != nil {
+		copyMs = time.Since(copyStart).Milliseconds()
+		logTimings()
+		return fmt.Errorf("seeder: copy dump to pod: %w", err)
+	}
+	copyMs = time.Since(copyStart).Milliseconds()
+
+	restoreStart := time.Now()
 	if err := s.runPgRestore(ctx, namespace, podName, cfg.Container); err != nil {
+		restoreMs = time.Since(restoreStart).Milliseconds()
+		logTimings()
 		return fmt.Errorf("seeder: pg_restore: %w", err)
 	}
+	restoreMs = time.Since(restoreStart).Milliseconds()
+
+	checkpointStart := time.Now()
 	if err := s.runCheckpoint(ctx, namespace, podName, cfg.Container); err != nil {
+		checkpointMs = time.Since(checkpointStart).Milliseconds()
 		log.Printf("seeder: CHECKPOINT after restore namespace=%s pod=%s: %v (pg_basebackup --checkpoint=fast still applies)", namespace, podName, err)
+	} else {
+		checkpointMs = time.Since(checkpointStart).Milliseconds()
 	}
+	logTimings()
 
 	return nil
 }
