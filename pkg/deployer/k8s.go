@@ -111,14 +111,35 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 	switch cfg.Node.Type {
 	case "db":
 		rr := dbReadReplicaCount(cfg)
+		mode, err := parseReplicationMode(cfg.Node.Config)
+		if err != nil {
+			return err
+		}
 		total := 1 + int(rr)
 		sizes := instanceSizesFromConfig(cfg.Node.Config, total)
 		primaryResources := dbResourcesForSize(sizes[0])
 		if err := k.deployFromRegistry(ctx, cfg, primaryResources, replicas); err != nil {
 			return err
 		}
-		if rr > 0 {
-			return k.deployDBReadReplicas(ctx, cfg, rr)
+		minReady := seedReplicaReadyBeforeRestore(mode, rr)
+		if minReady == 0 {
+			invokeAfterPrimaryReady(ctx, cfg)
+			if rr > 0 {
+				return k.deployDBReadReplicas(ctx, cfg, rr)
+			}
+			return nil
+		}
+		desiredReady, err := k.createDBReadReplicaObjects(ctx, cfg, rr)
+		if err != nil {
+			return err
+		}
+		prefix := []PodWaitProgress{{Ordinal: 1, Ready: true, WaitCode: WaitCodeReady}}
+		if err := k.waitForReady(ctx, cfg, dbReplicaAppLabel, minReady, waitProgressOpts{prefix: prefix}); err != nil {
+			return err
+		}
+		invokeAfterPrimaryReady(ctx, cfg)
+		if minReady < desiredReady {
+			return k.waitForReady(ctx, cfg, dbReplicaAppLabel, desiredReady, waitProgressOpts{prefix: prefix})
 		}
 		return nil
 	case "mq":

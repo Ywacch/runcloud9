@@ -2,6 +2,32 @@ package deployer
 
 import "testing"
 
+func TestSeedReplicaReadyBeforeRestore(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		mode         string
+		replicaCount int32
+		wantMinReady int32
+	}{
+		{name: "async zero replicas", mode: "async", replicaCount: 0, wantMinReady: 0},
+		{name: "async with replicas", mode: "async", replicaCount: 2, wantMinReady: 0},
+		{name: "semi-sync one standby", mode: "semi-sync", replicaCount: 3, wantMinReady: 1},
+		{name: "sync all standbys", mode: "sync", replicaCount: 2, wantMinReady: 2},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := seedReplicaReadyBeforeRestore(tc.mode, tc.replicaCount); got != tc.wantMinReady {
+				t.Fatalf("seedReplicaReadyBeforeRestore(%q, %d) = %d, want %d", tc.mode, tc.replicaCount, got, tc.wantMinReady)
+			}
+		})
+	}
+}
+
 func TestParseReplicaCount(t *testing.T) {
 	t.Parallel()
 

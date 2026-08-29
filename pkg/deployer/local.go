@@ -24,6 +24,9 @@ func (d *LocalDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 
 	log.Printf("[LocalDeployer] Deploy: node=%s type=%s namespace=%s",
 		cfg.Node.Name, cfg.Node.Type, cfg.Namespace)
+	if cfg.Node.Type == "db" {
+		invokeAfterPrimaryReady(ctx, cfg)
+	}
 	return nil
 }
 
