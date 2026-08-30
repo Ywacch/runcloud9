@@ -11,6 +11,7 @@ import (
 	"github.com/getsentry/sentry-go"
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/diagnostics"
+	"github.com/ywacch/cloud9/pkg/store"
 )
 
 // provisionOrchestrationTimeout is how long Deploy/seed may run once a doorway
@@ -24,6 +25,19 @@ func provisionOrchestrationTimeout(deployerEnv string) time.Duration {
 	return 2 * time.Minute
 }
 
+// provisionIsPaid reports whether a user gets paid-tier doorway and queue priority.
+func provisionIsPaid(user store.UserRecord) bool {
+	return user.IsInternal || store.ResolveEffectiveTier(user) == store.TierEngineer
+}
+
+// provisionStagger returns the pre-door sleep for background provision.
+func provisionStagger(paid bool) time.Duration {
+	if paid {
+		return 0
+	}
+	return time.Duration(rand.Intn(2000)) * time.Millisecond
+}
+
 // runBackgroundProvision finishes create-deployment after the HTTP response:
 // stagger → wait for doorway → orchestration deadline → orchestrate → status.
 func (h *Handler) runBackgroundProvision(
@@ -31,10 +45,13 @@ func (h *Handler) runBackgroundProvision(
 	namespace, userID, quotaTier string,
 	sessionMins int,
 ) {
-	// Stagger starts to avoid K8s API burst throttling. Deployment is already
-	// persisted, so the client already has provisioning feedback.
-	stagger := time.Duration(rand.Intn(2000)) * time.Millisecond
-	time.Sleep(stagger)
+	var paid bool
+	if userID != "" && h.store != nil {
+		if userRecord, err := h.store.GetUser(context.Background(), userID); err == nil {
+			paid = provisionIsPaid(userRecord)
+		}
+	}
+	time.Sleep(provisionStagger(paid))
 
 	lifeCtx, lifeCancel := context.WithCancel(context.Background())
 	defer lifeCancel()
@@ -47,6 +64,7 @@ func (h *Handler) runBackgroundProvision(
 		h.door,
 		namespace,
 		provisionOrchestrationTimeout(os.Getenv("DEPLOYER")),
+		paid,
 		func() {
 			h.emitProvisionStatus(
 				namespace,
@@ -61,9 +79,9 @@ func (h *Handler) runBackgroundProvision(
 	)
 	if h.door != nil {
 		if err != nil {
-			log.Printf("provision door acquire failed namespace=%s waited=%s: %v", namespace, time.Since(start), err)
+			log.Printf("provision door acquire failed namespace=%s paid=%t waited=%s: %v", namespace, paid, time.Since(start), err)
 		} else {
-			log.Printf("provision door acquired namespace=%s waited=%s", namespace, time.Since(start))
+			log.Printf("provision door acquired namespace=%s paid=%t waited=%s", namespace, paid, time.Since(start))
 		}
 	}
 	if err != nil {

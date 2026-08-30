@@ -1,0 +1,63 @@
+# Worst-case Engineer-weight campaign for launch door/room knobs.
+# Do not use homogeneous-url-shortener.yaml (small-only, 5→30) for this.
+#
+# url-shortener-large ≈ Engineer envelope (LB + 3 large apps + large db).
+# Seed on large db is ~22s; url-shortener-small (Explorer default) is ~90s
+# of CPU-bound pg_restore. Door width must consider both: a large-only
+# burst can look too wide for real small-db traffic.
+#
+# Run room waves first (paced so the door does not fail occupancy).
+# Then door bursts. Stop (Ctrl+C) at the first wave that is not 100%.
+# Add room-8 / door-8 / door-10 only after these rungs are clean.
+name: engineer-launch
+tier: internal
+cooldown_seconds: 180
+waves:
+  # Room: paced max-weight occupancy
+  - name: room-2
+    mode: paced
+    pace_ms: 8000
+    groups:
+      - count: 2
+        design: url-shortener-large
+  - name: room-3
+    mode: paced
+    pace_ms: 8000
+    groups:
+      - count: 3
+        design: url-shortener-large
+  - name: room-5
+    mode: paced
+    pace_ms: 8000
+    groups:
+      - count: 5
+        design: url-shortener-large
+
+  # Door: burst max-weight (orchestration concurrency)
+  - name: door-3
+    mode: burst
+    groups:
+      - count: 3
+        design: url-shortener-large
+  - name: door-5
+    mode: burst
+    groups:
+      - count: 5
+        design: url-shortener-large
+
+  # Door: Explorer-shaped small db (1M-row restore ~90s). Set MAX_CONCURRENT_PROVISIONS
+  # from the worse of door-5 vs this wave.
+  - name: door-small-5
+    mode: burst
+    groups:
+      - count: 5
+        design: url-shortener-small
+
+  # Mixed packing: typical social-feed + one max-weight
+  - name: mixed
+    mode: burst
+    groups:
+      - count: 3
+        design: social-feed-small
+      - count: 1
+        design: url-shortener-large

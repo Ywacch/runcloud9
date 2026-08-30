@@ -130,6 +130,7 @@ go run ./cmd/capacity-probe \
 
 Other fixtures:
 
+- `testdata/waves/engineer-launch.yaml` — launch probe: paced large room, burst large door, burst small-db door, mixed
 - `testdata/waves/mixed-sizes.yaml` — lean vs fat deployments
 - `testdata/waves/paced-vs-burst.yaml` — same count, burst vs paced admission
 
