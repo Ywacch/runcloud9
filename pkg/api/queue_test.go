@@ -107,6 +107,61 @@ func TestDrainDeployQueue_PromotesWhenFits(t *testing.T) {
 	}
 }
 
+func TestDrainDeployQueue_PaidPromotedBeforeFittingExplorer(t *testing.T) {
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "1000m")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "3000Mi")
+
+	s := newFakeDeploymentStore()
+	future := time.Now().Add(24 * time.Hour)
+	s.users = map[string]store.UserRecord{
+		"explorer": {},
+		"engineer": {IsPremium: true, PremiumExpiresAt: &future},
+	}
+	s.forcedOccupancy = &store.AdmissionOccupancy{CPUMillicores: 200, MemoryMi: 500}
+
+	mk := func(ns, userID string, cpu, mem int64, created time.Time) {
+		s.byNS[ns] = store.DeploymentRow{
+			ID: ns, UserID: userID, Namespace: ns, Template: "url-shortener",
+			Status: "queued", CreatedAt: created, ExpiresAt: time.Now().Add(time.Hour),
+			Design: map[string]any{
+				"template":  "url-shortener",
+				"archetype": "standard",
+				"nodes": []any{
+					map[string]any{"id": "app", "type": "app-server", "name": "app", "config": map[string]any{}},
+					map[string]any{"id": "db", "type": "db", "name": "db", "config": map[string]any{}},
+				},
+				"connections": []any{map[string]any{"sourceId": "app", "targetId": "db"}},
+			},
+		}
+		s.active = append(s.active, store.ActiveDeploymentRow{
+			ID: ns, Namespace: ns, Template: "url-shortener", Status: "queued",
+			CreatedAt: created, ExpiresAt: time.Now().Add(time.Hour),
+		})
+		s.admittedByNS[ns] = store.AdmissionOccupancy{CPUMillicores: cpu, MemoryMi: mem}
+	}
+	// Explorer head blocks room; paid tail fits; light explorer also fits but should wait for paid pass.
+	mk("heavy-explorer", "explorer", 900, 2000, time.Now().Add(-3*time.Minute))
+	mk("paid-fits", "engineer", 100, 100, time.Now().Add(-2*time.Minute))
+	mk("light-explorer", "explorer", 100, 100, time.Now().Add(-time.Minute))
+
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
+	h.roomBudget = &admission.Config{CPUMillicores: 1000, MemoryMi: 3000}
+	h.drainDeployQueue(context.Background())
+
+	heavy, _ := s.GetDeployment(context.Background(), "heavy-explorer")
+	paid, _ := s.GetDeployment(context.Background(), "paid-fits")
+	light, _ := s.GetDeployment(context.Background(), "light-explorer")
+	if heavy.Status != "queued" {
+		t.Fatalf("heavy status = %q, want queued", heavy.Status)
+	}
+	if paid.Status != "provisioning" {
+		t.Fatalf("paid status = %q, want provisioning", paid.Status)
+	}
+	if light.Status != "provisioning" {
+		t.Fatalf("light status = %q, want provisioning", light.Status)
+	}
+}
+
 func TestDrainDeployQueue_FirstFitPromotesLightBehindHeavy(t *testing.T) {
 	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "1000m")
 	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "3000Mi")

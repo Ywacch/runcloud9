@@ -150,49 +150,99 @@ func (h *Handler) drainDeployQueue(ctx context.Context) {
 		return
 	}
 
-	var occ admission.Occupancy
-	if h.roomBudget != nil {
-		occRow, err := h.store.SumActiveAdmissionWeights(ctx)
-		if err != nil {
-			log.Printf("deploy queue: sum occupancy: %v", err)
-			return
-		}
-		occ = admission.Occupancy{
-			CPUMillicores: occRow.CPUMillicores,
-			MemoryMi:      occRow.MemoryMi,
-		}
-	}
-
 	for _, row := range queued {
 		if !row.ExpiresAt.IsZero() && time.Now().After(row.ExpiresAt) {
 			h.terminateQueuedLocked(ctx, row.Namespace, "queue_ttl", true)
 			continue
 		}
 
-		if h.roomBudget == nil {
-			if !h.promoteQueuedLocked(ctx, row) {
-				return
+		if h.roomBudget != nil {
+			weight := admission.Weight{
+				CPUMillicores: derefInt64(row.AdmittedCPUm),
+				MemoryMi:      derefInt64(row.AdmittedMemMi),
 			}
+			if admission.ExceedsRoom(h.roomBudget, weight) {
+				h.terminateQueuedLocked(ctx, row.Namespace, "design_exceeds_cluster_capacity", false)
+			}
+		}
+	}
+
+	if h.roomBudget == nil {
+		h.promoteQueuedPass(ctx, queued, nil, true)
+		h.promoteQueuedPass(ctx, queued, nil, false)
+		return
+	}
+
+	var occ admission.Occupancy
+	occRow, err := h.store.SumActiveAdmissionWeights(ctx)
+	if err != nil {
+		log.Printf("deploy queue: sum occupancy: %v", err)
+		return
+	}
+	occ = admission.Occupancy{
+		CPUMillicores: occRow.CPUMillicores,
+		MemoryMi:      occRow.MemoryMi,
+	}
+	occ = h.promoteQueuedPass(ctx, queued, &occ, true)
+	h.promoteQueuedPass(ctx, queued, &occ, false)
+}
+
+func (h *Handler) queueRowIsPaid(ctx context.Context, row store.QueuedDeploymentRow) bool {
+	if row.UserID == "" {
+		return false
+	}
+	user, err := h.store.GetUser(ctx, row.UserID)
+	if err != nil {
+		return false
+	}
+	return provisionIsPaid(user)
+}
+
+// promoteQueuedPass promotes queued rows for one lane (paid or explorer) with first-fit packing.
+func (h *Handler) promoteQueuedPass(
+	ctx context.Context,
+	queued []store.QueuedDeploymentRow,
+	occ *admission.Occupancy,
+	paidLane bool,
+) admission.Occupancy {
+	var out admission.Occupancy
+	if occ != nil {
+		out = *occ
+	}
+	promoted := make(map[string]struct{})
+
+	for _, row := range queued {
+		isPaid := h.queueRowIsPaid(ctx, row)
+		if isPaid != paidLane {
+			continue
+		}
+		if _, done := promoted[row.Namespace]; done {
 			continue
 		}
 
-		weight := admission.Weight{
-			CPUMillicores: derefInt64(row.AdmittedCPUm),
-			MemoryMi:      derefInt64(row.AdmittedMemMi),
-		}
-		if admission.ExceedsRoom(h.roomBudget, weight) {
-			h.terminateQueuedLocked(ctx, row.Namespace, "design_exceeds_cluster_capacity", false)
+		if h.roomBudget != nil {
+			weight := admission.Weight{
+				CPUMillicores: derefInt64(row.AdmittedCPUm),
+				MemoryMi:      derefInt64(row.AdmittedMemMi),
+			}
+			if !admission.Fits(h.roomBudget, out, weight) {
+				continue
+			}
+			if !h.promoteQueuedLocked(ctx, row) {
+				return out
+			}
+			out.CPUMillicores += weight.CPUMillicores
+			out.MemoryMi += weight.MemoryMi
+			promoted[row.Namespace] = struct{}{}
 			continue
 		}
-		if !admission.Fits(h.roomBudget, occ, weight) {
-			continue
-		}
+
 		if !h.promoteQueuedLocked(ctx, row) {
-			return
+			return out
 		}
-		occ.CPUMillicores += weight.CPUMillicores
-		occ.MemoryMi += weight.MemoryMi
+		promoted[row.Namespace] = struct{}{}
 	}
+	return out
 }
 
 func (h *Handler) terminateQueuedLocked(ctx context.Context, namespace, reason string, queueExpired bool) {

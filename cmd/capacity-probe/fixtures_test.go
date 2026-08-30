@@ -11,6 +11,7 @@ func TestCheckedInWaveFixtures(t *testing.T) {
 		"homogeneous-url-shortener.yaml",
 		"mixed-sizes.yaml",
 		"paced-vs-burst.yaml",
+		"engineer-launch.yaml",
 	}
 	for _, name := range fixtures {
 		name := name
