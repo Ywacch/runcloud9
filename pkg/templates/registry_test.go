@@ -264,8 +264,98 @@ func TestRegistryJSON_IncludesSimulatableDeployable(t *testing.T) {
 	if !strings.Contains(s, `"presetLite"`) {
 		t.Fatal("presetLite should be included in API JSON")
 	}
+	if !strings.Contains(s, `"variations"`) {
+		t.Fatal("variations should be included in API JSON")
+	}
 	if strings.Contains(s, `"proxyQueries"`) || strings.Contains(s, "proxy_queries") {
 		t.Fatal("ProxyQueries must be json:\"-\" omitted from Registry JSON")
+	}
+}
+
+func TestTemplateVariations(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		id      string
+		wantLen int
+		wantIDs []string
+	}{
+		{
+			id:      "url-shortener",
+			wantLen: 3,
+			wantIDs: []string{"app-db", "app-db-cache", "app-db-cache-proxy"},
+		},
+		{
+			id:      "ecommerce",
+			wantLen: 3,
+			wantIDs: []string{"app-db", "app-db-cache", "app-db-cache-mq-worker"},
+		},
+		{
+			id:      "social-feed",
+			wantLen: 2,
+			wantIDs: []string{"timeline-sync", "timeline-async"},
+		},
+		{
+			id:      "social-feed-pull",
+			wantLen: 1,
+			wantIDs: []string{"app-db"},
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.id, func(t *testing.T) {
+			t.Parallel()
+			tmpl := GetTemplate(tc.id)
+			if tmpl == nil {
+				t.Fatal("template not found")
+			}
+			if len(tmpl.Variations) != tc.wantLen {
+				t.Fatalf("variations len: got %d want %d", len(tmpl.Variations), tc.wantLen)
+			}
+			for i, wantID := range tc.wantIDs {
+				got := tmpl.Variations[i]
+				if got.ID != wantID {
+					t.Fatalf("variation[%d] id: got %q want %q", i, got.ID, wantID)
+				}
+				if got.Label == "" || got.Description == "" {
+					t.Fatalf("variation %q missing label/description: %+v", got.ID, got)
+				}
+				if len(got.Nodes) == 0 || len(got.Edges) == 0 {
+					t.Fatalf("variation %q missing nodes/edges", got.ID)
+				}
+			}
+		})
+	}
+
+	us := GetTemplate("url-shortener")
+	if us == nil {
+		t.Fatal("url-shortener missing")
+	}
+	var proxy *TemplateVariation
+	for i := range us.Variations {
+		if us.Variations[i].ID == "app-db-cache-proxy" {
+			proxy = &us.Variations[i]
+			break
+		}
+	}
+	if proxy == nil {
+		t.Fatal("app-db-cache-proxy variation missing")
+	}
+	hasAppDB := false
+	for _, e := range proxy.Edges {
+		if e.SourceID == "app-1" && e.TargetID == "db-1" {
+			hasAppDB = true
+		}
+	}
+	if hasAppDB {
+		t.Fatal("proxy variation must not include app->db edge")
+	}
+	for _, n := range proxy.Nodes {
+		if n.ID == "cache-1" {
+			if got := n.Config["strategy"]; got != "write-through" {
+				t.Fatalf("proxy cache strategy: got %v want write-through", got)
+			}
+		}
 	}
 }
 

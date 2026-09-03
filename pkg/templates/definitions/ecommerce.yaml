@@ -178,6 +178,127 @@ presetLite:
       sourceId: app-1
       targetId: db-1
       protocol: tcp
+variations:
+  - id: app-db
+    label: App and database
+    description: Direct Postgres catalog and checkout. No cache or async worker.
+    nodes:
+      - id: app-1
+        type: compute
+        position: [-1, 0.3, 0]
+        label: App Server
+        config:
+          replicas: 1
+          instanceSize: small
+      - id: db-1
+        type: database
+        position: [3, 0.3, 0]
+        label: PostgreSQL
+        config:
+          engine: postgresql
+          storageGB: 10
+          maxConnections: 100
+    edges:
+      - id: e-app-db
+        sourceId: app-1
+        targetId: db-1
+        protocol: tcp
+  - id: app-db-cache
+    label: App, cache, and database
+    description: Sync catalog with cache-aside Redis. Checkout writes hit Postgres directly.
+    nodes:
+      - id: app-1
+        type: compute
+        position: [-1, 0.3, 0]
+        label: App Server
+        config:
+          replicas: 1
+          instanceSize: small
+      - id: cache-1
+        type: cache
+        position: [2, 0.3, 1.4]
+        label: Redis
+        config:
+          strategy: cache-aside
+          evictionPolicy: allkeys-lru
+      - id: db-1
+        type: database
+        position: [5, 0.3, 1.4]
+        label: PostgreSQL
+        config:
+          engine: postgresql
+          storageGB: 10
+          maxConnections: 100
+    edges:
+      - id: e-app-cache
+        sourceId: app-1
+        targetId: cache-1
+        protocol: tcp
+      - id: e-app-db
+        sourceId: app-1
+        targetId: db-1
+        protocol: tcp
+  - id: app-db-cache-mq-worker
+    label: App, cache, MQ, worker, and database
+    description: Async checkout with RabbitMQ worker and cache-aside catalog reads.
+    nodes:
+      - id: app-1
+        type: compute
+        position: [-1, 0.3, 0]
+        label: App Server
+        config:
+          replicas: 1
+          instanceSize: small
+      - id: mq-1
+        type: message_queue
+        position: [2, 0.3, -1.4]
+        label: Message Queue
+        config:
+          engine: rabbitmq
+          durable: true
+      - id: worker-1
+        type: worker
+        position: [5, 0.3, -1.4]
+        label: Worker
+        config:
+          replicas: 1
+          instanceSize: small
+      - id: cache-1
+        type: cache
+        position: [2, 0.3, 1.4]
+        label: Redis
+        config:
+          strategy: cache-aside
+          evictionPolicy: allkeys-lru
+      - id: db-1
+        type: database
+        position: [5, 0.3, 1.4]
+        label: PostgreSQL
+        config:
+          engine: postgresql
+          storageGB: 10
+          maxConnections: 100
+    edges:
+      - id: e-app-mq
+        sourceId: app-1
+        targetId: mq-1
+        protocol: http
+      - id: e-worker-mq
+        sourceId: worker-1
+        targetId: mq-1
+        protocol: tcp
+      - id: e-worker-db
+        sourceId: worker-1
+        targetId: db-1
+        protocol: tcp
+      - id: e-app-cache
+        sourceId: app-1
+        targetId: cache-1
+        protocol: tcp
+      - id: e-app-db
+        sourceId: app-1
+        targetId: db-1
+        protocol: tcp
 
 # Products table: id, name, price, stock (see images/ecommerce/db.go).
 proxyQueries:

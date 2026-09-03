@@ -197,6 +197,31 @@ preset:
       sourceId: app-1
       targetId: db-1
       protocol: tcp
+variations:
+  - id: app-db
+    label: Pull feed (DB JOINs)
+    description: Fan-out on read. Every feed request joins posts, follows, and users in Postgres.
+    nodes:
+      - id: app-1
+        type: compute
+        position: [0, 0.3, 0]
+        label: Feed Service
+        config:
+          replicas: 1
+          instanceSize: small
+      - id: db-1
+        type: database
+        position: [3, 0.3, 0]
+        label: PostgreSQL
+        config:
+          engine: postgresql
+          storageGB: 10
+          maxConnections: 100
+    edges:
+      - id: e-app-db
+        sourceId: app-1
+        targetId: db-1
+        protocol: tcp
 
 introspection:
   db:

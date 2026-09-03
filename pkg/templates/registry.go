@@ -27,24 +27,25 @@ type SeedConfig struct {
 
 // TemplateSpec is the single source of truth for a template's metadata.
 type TemplateSpec struct {
-	ID              string          `json:"id"`
-	Name            string          `json:"name"`
-	Description     string          `json:"description"`
-	Components      int             `json:"components"`
-	Bottleneck      string          `json:"bottleneck"`
-	DescriptionLite string          `json:"descriptionLite,omitempty"`
-	ComponentsLite  int             `json:"componentsLite,omitempty"`
-	BottleneckLite  string          `json:"bottleneckLite,omitempty"`
-	Available       bool            `json:"available"`
-	Premium         bool            `json:"premium"`
-	Tags            []string        `json:"tags"`
-	Topology        []TopologyHint  `json:"topology"`
-	Preset          *TemplatePreset `json:"preset,omitempty"`
-	PresetLite      *TemplatePreset `json:"presetLite,omitempty"`
-	AppServerImage  string          `json:"-"`
-	WorkerImage     string          `json:"-"`
-	Simulatable     bool            `json:"simulatable"`
-	Deployable      bool            `json:"deployable"`
+	ID              string              `json:"id"`
+	Name            string              `json:"name"`
+	Description     string              `json:"description"`
+	Components      int                 `json:"components"`
+	Bottleneck      string              `json:"bottleneck"`
+	DescriptionLite string              `json:"descriptionLite,omitempty"`
+	ComponentsLite  int                 `json:"componentsLite,omitempty"`
+	BottleneckLite  string              `json:"bottleneckLite,omitempty"`
+	Available       bool                `json:"available"`
+	Premium         bool                `json:"premium"`
+	Tags            []string            `json:"tags"`
+	Topology        []TopologyHint      `json:"topology"`
+	Preset          *TemplatePreset     `json:"preset,omitempty"`
+	PresetLite      *TemplatePreset     `json:"presetLite,omitempty"`
+	Variations      []TemplateVariation `json:"variations,omitempty"`
+	AppServerImage  string              `json:"-"`
+	WorkerImage     string              `json:"-"`
+	Simulatable     bool                `json:"simulatable"`
+	Deployable      bool                `json:"deployable"`
 	// SupportsWorker is true when the template ships a real worker image (workerImageKey set).
 	SupportsWorker      bool             `json:"supportsWorker"`
 	SeedConfig          *SeedConfig      `json:"-"`
@@ -88,6 +89,15 @@ type TemplatePreset struct {
 	Edges []PresetEdge `json:"edges"`
 }
 
+// TemplateVariation is a named topology graph within a template family.
+type TemplateVariation struct {
+	ID          string       `json:"id"`
+	Label       string       `json:"label"`
+	Description string       `json:"description"`
+	Nodes       []PresetNode `json:"nodes"`
+	Edges       []PresetEdge `json:"edges"`
+}
+
 // TopologyHint is a simplified node for the frontend's mini preview.
 type TopologyHint struct {
 	Type     string     `json:"type"`
@@ -129,8 +139,9 @@ type templateDef struct {
 		Type     string     `yaml:"type"`
 		Position [2]float64 `yaml:"position"`
 	} `yaml:"topology"`
-	Preset     *presetYAML `yaml:"preset"`
-	PresetLite *presetYAML `yaml:"presetLite"`
+	Preset     *presetYAML     `yaml:"preset"`
+	PresetLite *presetYAML     `yaml:"presetLite"`
+	Variations []variationYAML `yaml:"variations"`
 	Seed       *struct {
 		DBType    string `yaml:"dbType"`
 		DumpPath  string `yaml:"dumpPath"`
@@ -149,20 +160,32 @@ type templateDef struct {
 	InvariantCheckers    []InvariantRule        `yaml:"invariantCheckers"`
 }
 
+type presetNodeYAML struct {
+	ID       string         `yaml:"id" json:"id"`
+	Type     string         `yaml:"type" json:"type"`
+	Position [3]float64     `yaml:"position" json:"position"`
+	Label    string         `yaml:"label" json:"label"`
+	Config   map[string]any `yaml:"config" json:"config"`
+}
+
+type presetEdgeYAML struct {
+	ID       string `yaml:"id" json:"id"`
+	SourceID string `yaml:"sourceId" json:"sourceId"`
+	TargetID string `yaml:"targetId" json:"targetId"`
+	Protocol string `yaml:"protocol" json:"protocol"`
+}
+
+type variationYAML struct {
+	ID          string           `yaml:"id"`
+	Label       string           `yaml:"label"`
+	Description string           `yaml:"description"`
+	Nodes       []presetNodeYAML `yaml:"nodes" json:"nodes"`
+	Edges       []presetEdgeYAML `yaml:"edges" json:"edges"`
+}
+
 type presetYAML struct {
-	Nodes []struct {
-		ID       string         `yaml:"id" json:"id"`
-		Type     string         `yaml:"type" json:"type"`
-		Position [3]float64     `yaml:"position" json:"position"`
-		Label    string         `yaml:"label" json:"label"`
-		Config   map[string]any `yaml:"config" json:"config"`
-	} `yaml:"nodes" json:"nodes"`
-	Edges []struct {
-		ID       string `yaml:"id" json:"id"`
-		SourceID string `yaml:"sourceId" json:"sourceId"`
-		TargetID string `yaml:"targetId" json:"targetId"`
-		Protocol string `yaml:"protocol" json:"protocol"`
-	} `yaml:"edges" json:"edges"`
+	Nodes []presetNodeYAML `yaml:"nodes" json:"nodes"`
+	Edges []presetEdgeYAML `yaml:"edges" json:"edges"`
 }
 
 // embeddedFree is the in-repo YAML definitions (always available).
@@ -326,7 +349,28 @@ func defToSpec(def *templateDef) TemplateSpec {
 	if def.PresetLite != nil {
 		spec.PresetLite = presetFromYAML(def.PresetLite)
 	}
+	if len(def.Variations) > 0 {
+		spec.Variations = variationsFromYAML(def.Variations)
+	}
 	return spec
+}
+
+func variationsFromYAML(src []variationYAML) []TemplateVariation {
+	out := make([]TemplateVariation, 0, len(src))
+	for _, v := range src {
+		preset := presetFromYAML(&presetYAML{Nodes: v.Nodes, Edges: v.Edges})
+		if preset == nil {
+			continue
+		}
+		out = append(out, TemplateVariation{
+			ID:          v.ID,
+			Label:       v.Label,
+			Description: v.Description,
+			Nodes:       preset.Nodes,
+			Edges:       preset.Edges,
+		})
+	}
+	return out
 }
 
 func presetFromYAML(src *presetYAML) *TemplatePreset {
