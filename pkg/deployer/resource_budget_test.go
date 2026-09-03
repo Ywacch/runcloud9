@@ -1,7 +1,6 @@
 package deployer
 
 import (
-	"errors"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -15,11 +14,11 @@ func TestTierResourceCaps(t *testing.T) {
 		wantCPU string
 		wantMem string
 	}{
-		{tier: "explorer", wantCPU: "625m", wantMem: "1280Mi"},
+		{tier: "explorer", wantCPU: "1075m", wantMem: "2048Mi"},
 		{tier: "engineer", wantCPU: "3375m", wantMem: "6912Mi"},
 		{tier: "internal", wantCPU: "4250m", wantMem: "8320Mi"},
 		{tier: "architect", wantCPU: "4", wantMem: "8Gi"},
-		{tier: "", wantCPU: "625m", wantMem: "1280Mi"},
+		{tier: "", wantCPU: "1075m", wantMem: "2048Mi"},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -194,16 +193,46 @@ func TestValidateResourceBudget_litePassesExplorer(t *testing.T) {
 	}
 }
 
-func TestValidateResourceBudget_urlShortenerDefaultsFailsExplorer(t *testing.T) {
+func TestValidateResourceBudget_urlShortenerDefaultsPassesExplorer(t *testing.T) {
 	t.Parallel()
 
 	err := ValidateResourceBudget(urlShortenerDefaultDesign(), "explorer")
-	var budgetErr *ResourceBudgetError
-	if !errors.As(err, &budgetErr) {
-		t.Fatalf("expected ResourceBudgetError, got %v", err)
+	if err != nil {
+		t.Fatalf("expected default design to fit explorer cap: %v", err)
 	}
-	if budgetErr.Tier != "explorer" {
-		t.Fatalf("tier: got %q want explorer", budgetErr.Tier)
+}
+
+func TestValidateResourceBudget_socialFeedAsync(t *testing.T) {
+	t.Parallel()
+
+	design := socialFeedAsyncDesign()
+	got := SumDesignResources(design, "explorer")
+	assertQuantityEqual(t, got.CPU, "950m", "async all-small cpu")
+	if err := ValidateResourceBudget(design, "explorer"); err != nil {
+		t.Fatalf("expected async all-small to fit explorer cap: %v", err)
+	}
+
+	oneMedium := socialFeedAsyncDesign()
+	oneMedium.Nodes[0].Config["instanceSize"] = "medium"
+	if err := ValidateResourceBudget(oneMedium, "explorer"); err != nil {
+		t.Fatalf("expected async + one medium to fit explorer cap: %v", err)
+	}
+
+	twoMedium := socialFeedAsyncDesign()
+	twoMedium.Nodes[0].Config["instanceSize"] = "medium"
+	twoMedium.Nodes[2].Config["instanceSize"] = "medium"
+	if err := ValidateResourceBudget(twoMedium, "explorer"); err == nil {
+		t.Fatal("expected async + two mediums to exceed explorer cap")
+	}
+}
+
+func TestValidateResourceBudget_urlShortenerAppDBExtraReplicaPassesExplorer(t *testing.T) {
+	t.Parallel()
+
+	design := urlShortenerAppDBDesign()
+	design.Nodes[0].Config["replicas"] = 2
+	if err := ValidateResourceBudget(design, "explorer"); err != nil {
+		t.Fatalf("expected skinny design + extra replica to fit: %v", err)
 	}
 }
 
@@ -456,6 +485,67 @@ func socialFeedPullLiteDesign() DeploymentDesign {
 				Config: map[string]interface{}{
 					"replicas":     1,
 					"instanceSize": "small",
+				},
+			},
+			{ID: "db-1", Type: "db", Name: "PostgreSQL"},
+		},
+	}
+	NormalizeDesign(&d)
+	return d
+}
+
+func urlShortenerAppDBDesign() DeploymentDesign {
+	d := DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "url-shortener",
+		Nodes: []DeploymentNode{
+			{
+				ID:   "app-1",
+				Type: "app-server",
+				Name: "App Server",
+				Config: map[string]interface{}{
+					"replicas":     1,
+					"instanceSize": "small",
+				},
+			},
+			{ID: "db-1", Type: "db", Name: "PostgreSQL"},
+		},
+	}
+	NormalizeDesign(&d)
+	return d
+}
+
+func socialFeedAsyncDesign() DeploymentDesign {
+	d := DeploymentDesign{
+		Template:  "social-feed",
+		Archetype: "social-feed",
+		Nodes: []DeploymentNode{
+			{
+				ID:   "app-1",
+				Type: "app-server",
+				Name: "App server",
+				Config: map[string]interface{}{
+					"replicas":     1,
+					"instanceSize": "small",
+				},
+			},
+			{ID: "mq-1", Type: "mq", Name: "Message Queue"},
+			{
+				ID:   "worker-1",
+				Type: "worker",
+				Name: "Fan-out Worker",
+				Config: map[string]interface{}{
+					"replicas":     1,
+					"instanceSize": "small",
+				},
+			},
+			{
+				ID:   "cache-1",
+				Type: "cache",
+				Name: "Redis",
+				Config: map[string]interface{}{
+					"strategy":      "timeline-store",
+					"cacheStrategy": "timeline-store",
 				},
 			},
 			{ID: "db-1", Type: "db", Name: "PostgreSQL"},

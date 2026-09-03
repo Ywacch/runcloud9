@@ -174,14 +174,25 @@ func TestHandleCreateDeployment_ResourceBudgetExceeded(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
+	// Async social all-small is 950m; two mediums (app + worker) is 1200m, over 1075m.
 	body := deployer.DeploymentDesign{
-		Template:  "url-shortener",
-		Archetype: "url-shortener",
+		Template:  "social-feed",
+		Archetype: "social-feed",
 		Nodes: []deployer.DeploymentNode{
 			{
 				ID:   "app-1",
 				Type: "app-server",
-				Name: "App Server",
+				Name: "App server",
+				Config: map[string]interface{}{
+					"replicas":     1,
+					"instanceSize": "medium",
+				},
+			},
+			{ID: "mq-1", Type: "mq", Name: "Message Queue"},
+			{
+				ID:   "worker-1",
+				Type: "worker",
+				Name: "Fan-out Worker",
 				Config: map[string]interface{}{
 					"replicas":     1,
 					"instanceSize": "medium",
@@ -192,12 +203,17 @@ func TestHandleCreateDeployment_ResourceBudgetExceeded(t *testing.T) {
 				Type: "cache",
 				Name: "Redis",
 				Config: map[string]interface{}{
-					"strategy": "cache-aside",
+					"strategy":      "timeline-store",
+					"cacheStrategy": "timeline-store",
 				},
 			},
 			{ID: "db-1", Type: "db", Name: "PostgreSQL"},
 		},
 		Connections: []deployer.DeploymentConn{
+			{SourceID: "app-1", TargetID: "mq-1"},
+			{SourceID: "worker-1", TargetID: "mq-1"},
+			{SourceID: "worker-1", TargetID: "db-1"},
+			{SourceID: "worker-1", TargetID: "cache-1"},
 			{SourceID: "app-1", TargetID: "cache-1"},
 			{SourceID: "app-1", TargetID: "db-1"},
 		},
@@ -219,36 +235,34 @@ func TestHandleCreateDeployment_ResourceBudgetExceeded(t *testing.T) {
 	if out.Tier != "explorer" {
 		t.Fatalf("tier: got %q want explorer", out.Tier)
 	}
-	if out.Requested["cpu"] != "750m" {
-		t.Fatalf("requested cpu: got %q want 750m", out.Requested["cpu"])
+	if out.Requested["cpu"] != "1200m" {
+		t.Fatalf("requested cpu: got %q want 1200m", out.Requested["cpu"])
 	}
 	if len(out.Breakdown) == 0 {
 		t.Fatal("expected breakdown entries")
 	}
 }
 
-func TestHandleCreateDeployment_TierTopologyForbidden(t *testing.T) {
+func TestHandleCreateDeployment_InstanceSizeForbidden(t *testing.T) {
 	t.Parallel()
 	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
 	body := deployer.DeploymentDesign{
-		Template:  "ecommerce",
-		Archetype: "ecommerce",
+		Template:  "url-shortener",
+		Archetype: "url-shortener",
 		Nodes: []deployer.DeploymentNode{
-			{ID: "lb-1", Type: "lb", Name: "Load Balancer"},
 			{
 				ID:     "app-1",
 				Type:   "app-server",
 				Name:   "App Server",
-				Config: map[string]interface{}{"replicas": 1, "instanceSize": "small"},
+				Config: map[string]interface{}{"replicas": 1, "instanceSize": "large"},
 			},
 			{ID: "cache-1", Type: "cache", Name: "Redis", Config: map[string]interface{}{"strategy": "cache-aside"}},
 			{ID: "db-1", Type: "db", Name: "PostgreSQL"},
 		},
 		Connections: []deployer.DeploymentConn{
-			{SourceID: "lb-1", TargetID: "app-1"},
 			{SourceID: "app-1", TargetID: "cache-1"},
 			{SourceID: "app-1", TargetID: "db-1"},
 		},
@@ -262,6 +276,15 @@ func TestHandleCreateDeployment_TierTopologyForbidden(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status: want 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var er struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &er); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(er.Error, "instance size large exceeds your plan limit of medium") {
+		t.Fatalf("error: got %q", er.Error)
 	}
 }
 
