@@ -62,18 +62,22 @@ func TestGetTierLimits(t *testing.T) {
 		wantAllowLB         bool
 		wantAllowMQWorker   bool
 		wantAllowProxyCache bool
+		wantMaxInstanceSize string
 	}{
 		{
-			tier: TierFree, wantConcurrent: 1, wantSessionCap: 9, wantMonthlySessions: 5, wantAllTemplates: false,
-			wantMaxAppReplicas: 1, wantAllowLB: false, wantAllowMQWorker: false, wantAllowProxyCache: false,
+			tier: TierFree, wantConcurrent: 1, wantSessionCap: 9, wantMonthlySessions: 3, wantAllTemplates: false,
+			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
+			wantMaxInstanceSize: InstanceSizeMedium,
 		},
 		{
 			tier: TierEngineer, wantConcurrent: 1, wantSessionCap: 15, wantMonthlySessions: 20, wantAllTemplates: true,
 			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
+			wantMaxInstanceSize: InstanceSizeLarge,
 		},
 		{
 			tier: TierInternal, wantConcurrent: 40, wantSessionCap: 30, wantMonthlySessions: 0, wantAllTemplates: true,
 			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
+			wantMaxInstanceSize: InstanceSizeLarge,
 		},
 	}
 	for _, tt := range tests {
@@ -104,6 +108,9 @@ func TestGetTierLimits(t *testing.T) {
 			}
 			if got.AllowProxyCache != tt.wantAllowProxyCache {
 				t.Fatalf("AllowProxyCache = %v, want %v", got.AllowProxyCache, tt.wantAllowProxyCache)
+			}
+			if got.MaxInstanceSize != tt.wantMaxInstanceSize {
+				t.Fatalf("MaxInstanceSize = %q, want %q", got.MaxInstanceSize, tt.wantMaxInstanceSize)
 			}
 			topo := got.TopologyLimits()
 			if topo.AllowProxyCache != tt.wantAllowProxyCache {

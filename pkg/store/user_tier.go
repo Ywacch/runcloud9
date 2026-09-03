@@ -12,6 +12,10 @@ const (
 	TierFree     = "free"
 	TierEngineer = "engineer"
 	TierInternal = "internal"
+
+	// Instance size ceilings per tier (deployer normalizes alpha → small).
+	InstanceSizeMedium = "medium"
+	InstanceSizeLarge  = "large"
 )
 
 // ErrUserNotFound is returned when no public.users row exists for the ID.
@@ -37,6 +41,7 @@ type TierLimits struct {
 	AllowLoadBalancer    bool
 	AllowMQWorker        bool
 	AllowProxyCache      bool
+	MaxInstanceSize      string // small/medium/large ceiling for canvas sizing knobs
 }
 
 // StartOfUTCMonth returns 00:00:00 UTC on the first day of t's calendar month.
@@ -72,6 +77,7 @@ func GetTierLimits(tier string) TierLimits {
 			AllowLoadBalancer:    true,
 			AllowMQWorker:        true,
 			AllowProxyCache:      true,
+			MaxInstanceSize:      InstanceSizeLarge,
 		}
 	case TierEngineer:
 		return TierLimits{
@@ -84,18 +90,20 @@ func GetTierLimits(tier string) TierLimits {
 			AllowLoadBalancer:    true,
 			AllowMQWorker:        true,
 			AllowProxyCache:      true,
+			MaxInstanceSize:      InstanceSizeLarge,
 		}
 	default:
 		return TierLimits{
 			MaxConcurrent:        1,
 			SessionDefaultMins:   9,
 			SessionCapMins:       9,
-			MaxSessionsPerMonth:  5,
+			MaxSessionsPerMonth:  3,
 			AllTemplates:         false,
-			MaxAppServerReplicas: 1,
-			AllowLoadBalancer:    false,
-			AllowMQWorker:        false,
-			AllowProxyCache:      false,
+			MaxAppServerReplicas: 3,
+			AllowLoadBalancer:    true,
+			AllowMQWorker:        true,
+			AllowProxyCache:      true,
+			MaxInstanceSize:      InstanceSizeMedium,
 		}
 	}
 }

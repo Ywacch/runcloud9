@@ -42,6 +42,7 @@ func TestHandleGetCurrentUser(t *testing.T) {
 		wantStatus int
 		wantLB     bool
 		wantMaxRep int32
+		wantMaxSz  string
 	}{
 		{
 			name:       "free tier dev default",
@@ -49,8 +50,9 @@ func TestHandleGetCurrentUser(t *testing.T) {
 			wantTier:   store.TierFree,
 			wantQuota:  "explorer",
 			wantStatus: http.StatusOK,
-			wantLB:     false,
-			wantMaxRep: 1,
+			wantLB:     true,
+			wantMaxRep: 3,
+			wantMaxSz:  store.InstanceSizeMedium,
 		},
 		{
 			name: "engineer tier",
@@ -63,6 +65,7 @@ func TestHandleGetCurrentUser(t *testing.T) {
 			wantStatus: http.StatusOK,
 			wantLB:     true,
 			wantMaxRep: 3,
+			wantMaxSz:  store.InstanceSizeLarge,
 		},
 		{
 			name: "internal tier",
@@ -74,6 +77,7 @@ func TestHandleGetCurrentUser(t *testing.T) {
 			wantStatus: http.StatusOK,
 			wantLB:     true,
 			wantMaxRep: 3,
+			wantMaxSz:  store.InstanceSizeLarge,
 		},
 		{
 			name:       "missing user production",
@@ -127,16 +131,19 @@ func TestHandleGetCurrentUser(t *testing.T) {
 			if out.Limits.MaxAppServerReplicas != tt.wantMaxRep {
 				t.Fatalf("maxAppServerReplicas: got %d want %d", out.Limits.MaxAppServerReplicas, tt.wantMaxRep)
 			}
+			if out.Limits.MaxInstanceSize != tt.wantMaxSz {
+				t.Fatalf("maxInstanceSize: got %q want %q", out.Limits.MaxInstanceSize, tt.wantMaxSz)
+			}
 			switch tt.wantTier {
 			case store.TierFree:
-				if out.Limits.MaxSessionsPerMonth == nil || *out.Limits.MaxSessionsPerMonth != 5 {
-					t.Fatalf("maxSessionsPerMonth: got %v want 5", out.Limits.MaxSessionsPerMonth)
+				if out.Limits.MaxSessionsPerMonth == nil || *out.Limits.MaxSessionsPerMonth != 3 {
+					t.Fatalf("maxSessionsPerMonth: got %v want 3", out.Limits.MaxSessionsPerMonth)
 				}
 				if out.SessionsUsedThisMonth != 2 {
 					t.Fatalf("sessionsUsedThisMonth: got %d want 2", out.SessionsUsedThisMonth)
 				}
-				if out.SessionsRemainingThisMonth == nil || *out.SessionsRemainingThisMonth != 3 {
-					t.Fatalf("sessionsRemainingThisMonth: got %v want 3", out.SessionsRemainingThisMonth)
+				if out.SessionsRemainingThisMonth == nil || *out.SessionsRemainingThisMonth != 1 {
+					t.Fatalf("sessionsRemainingThisMonth: got %v want 1", out.SessionsRemainingThisMonth)
 				}
 			case store.TierEngineer:
 				if out.Limits.MaxSessionsPerMonth == nil || *out.Limits.MaxSessionsPerMonth != 20 {

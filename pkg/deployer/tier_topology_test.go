@@ -8,7 +8,13 @@ import (
 func TestValidateTierTopology(t *testing.T) {
 	t.Parallel()
 
-	free := TierTopologyLimits{
+	launchFree := TierTopologyLimits{
+		MaxAppServerReplicas: 3,
+		AllowLoadBalancer:    true,
+		AllowMQWorker:        true,
+		AllowProxyCache:      true,
+	}
+	legacyExplorer := TierTopologyLimits{
 		MaxAppServerReplicas: 1,
 		AllowLoadBalancer:    false,
 		AllowMQWorker:        false,
@@ -28,13 +34,27 @@ func TestValidateTierTopology(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name:   "lite design passes free tier",
-			limits: free,
+			name:   "lite design passes launch free tier",
+			limits: launchFree,
 			design: urlShortenerLiteDesign(),
 		},
 		{
-			name:    "load balancer blocked on free tier",
-			limits:  free,
+			name:   "async ecommerce passes launch free tier",
+			limits: launchFree,
+			design: ecommerceAsyncOnlyDesign(),
+		},
+		{
+			name:   "proxy cache passes launch free tier",
+			limits: launchFree,
+			design: func() DeploymentDesign {
+				d := urlShortenerLiteDesign()
+				d.Nodes[1].Config["strategy"] = "write-through"
+				return d
+			}(),
+		},
+		{
+			name:    "load balancer blocked on legacy explorer",
+			limits:  legacyExplorer,
 			design:  urlShortenerDefaultDesign(),
 			wantErr: "load balancers require",
 		},
@@ -44,14 +64,14 @@ func TestValidateTierTopology(t *testing.T) {
 			design: ecommerceFullDesign(),
 		},
 		{
-			name:    "mq blocked on free tier",
-			limits:  free,
+			name:    "mq blocked on legacy explorer",
+			limits:  legacyExplorer,
 			design:  ecommerceAsyncOnlyDesign(),
 			wantErr: "message queues and workers",
 		},
 		{
-			name:   "proxy cache blocked on free tier",
-			limits: free,
+			name:   "proxy cache blocked on legacy explorer",
+			limits: legacyExplorer,
 			design: func() DeploymentDesign {
 				d := urlShortenerLiteDesign()
 				d.Nodes[1].Config["strategy"] = "write-through"
@@ -69,14 +89,23 @@ func TestValidateTierTopology(t *testing.T) {
 			}(),
 		},
 		{
-			name:   "scaled replicas blocked on free tier",
-			limits: free,
+			name:   "scaled replicas blocked on legacy explorer",
+			limits: legacyExplorer,
 			design: func() DeploymentDesign {
 				d := urlShortenerLiteDesign()
 				d.Nodes[0].Config["replicas"] = 2
 				return d
 			}(),
 			wantErr: "replicas 2 exceed your plan limit",
+		},
+		{
+			name:   "two app replicas pass launch free tier",
+			limits: launchFree,
+			design: func() DeploymentDesign {
+				d := urlShortenerLiteDesign()
+				d.Nodes[0].Config["replicas"] = 2
+				return d
+			}(),
 		},
 	}
 	for _, tt := range tests {

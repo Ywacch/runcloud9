@@ -10,15 +10,16 @@ import (
 
 // currentUserLimitsResponse is the deployment policy caps returned by GET /me.
 type currentUserLimitsResponse struct {
-	MaxConcurrent        int   `json:"maxConcurrent"`
-	SessionDefaultMins   int   `json:"sessionDefaultMins"`
-	SessionCapMins       int   `json:"sessionCapMins"`
-	MaxSessionsPerMonth  *int  `json:"maxSessionsPerMonth"`
-	AllTemplates         bool  `json:"allTemplates"`
-	MaxAppServerReplicas int32 `json:"maxAppServerReplicas"`
-	AllowLoadBalancer    bool  `json:"allowLoadBalancer"`
-	AllowMQWorker        bool  `json:"allowMQWorker"`
-	AllowProxyCache      bool  `json:"allowProxyCache"`
+	MaxConcurrent        int    `json:"maxConcurrent"`
+	SessionDefaultMins   int    `json:"sessionDefaultMins"`
+	SessionCapMins       int    `json:"sessionCapMins"`
+	MaxSessionsPerMonth  *int   `json:"maxSessionsPerMonth"`
+	AllTemplates         bool   `json:"allTemplates"`
+	MaxAppServerReplicas int32  `json:"maxAppServerReplicas"`
+	AllowLoadBalancer    bool   `json:"allowLoadBalancer"`
+	AllowMQWorker        bool   `json:"allowMQWorker"`
+	AllowProxyCache      bool   `json:"allowProxyCache"`
+	MaxInstanceSize      string `json:"maxInstanceSize"`
 }
 
 // currentUserResponse is the authenticated caller profile returned by GET /me.
@@ -67,6 +68,7 @@ func currentUserLimitsFromStore(limits store.TierLimits) currentUserLimitsRespon
 		AllowLoadBalancer:    limits.AllowLoadBalancer,
 		AllowMQWorker:        limits.AllowMQWorker,
 		AllowProxyCache:      limits.AllowProxyCache,
+		MaxInstanceSize:      limits.MaxInstanceSize,
 	}
 	if limits.MaxSessionsPerMonth > 0 {
 		max := limits.MaxSessionsPerMonth
