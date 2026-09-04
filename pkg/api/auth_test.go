@@ -368,3 +368,128 @@ func TestValidJWTAlgs_ByMode(t *testing.T) {
 		})
 	}
 }
+
+func TestJwtEmailVerified(t *testing.T) {
+	tests := []struct {
+		name   string
+		claims jwt.MapClaims
+		want   bool
+	}{
+		{
+			name: "email and google providers with email provider singular",
+			claims: jwt.MapClaims{
+				"app_metadata": map[string]interface{}{
+					"provider":  "email",
+					"providers": []interface{}{"email", "google"},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "google providers only",
+			claims: jwt.MapClaims{
+				"app_metadata": map[string]interface{}{
+					"provider":  "google",
+					"providers": []interface{}{"google"},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "github provider",
+			claims: jwt.MapClaims{
+				"app_metadata": map[string]interface{}{
+					"providers": []interface{}{"github"},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "password user email_verified true",
+			claims: jwt.MapClaims{
+				"app_metadata": map[string]interface{}{
+					"provider":  "email",
+					"providers": []interface{}{"email"},
+				},
+				"user_metadata": map[string]interface{}{
+					"email_verified": true,
+				},
+			},
+			want: true,
+		},
+		{
+			name: "email_verified string true",
+			claims: jwt.MapClaims{
+				"user_metadata": map[string]interface{}{
+					"email_verified": "true",
+				},
+			},
+			want: true,
+		},
+		{
+			name: "unconfirmed email only",
+			claims: jwt.MapClaims{
+				"app_metadata": map[string]interface{}{
+					"provider":  "email",
+					"providers": []interface{}{"email"},
+				},
+			},
+			want: false,
+		},
+		{
+			name:   "empty metadata",
+			claims: jwt.MapClaims{},
+			want:   false,
+		},
+		{
+			name: "singular google provider without providers array",
+			claims: jwt.MapClaims{
+				"app_metadata": map[string]interface{}{
+					"provider": "google",
+				},
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := jwtEmailVerified(tt.claims); got != tt.want {
+				t.Fatalf("jwtEmailVerified: got %v want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRequireAuth_SetsEmailVerifiedOnContext(t *testing.T) {
+	t.Setenv("SUPABASE_JWT_SECRET", "test-secret")
+	t.Setenv("SUPABASE_URL", "https://example.supabase.co")
+	t.Setenv("ENV", "production")
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": "user-123",
+		"exp": time.Now().Add(time.Hour).Unix(),
+		"app_metadata": map[string]interface{}{
+			"providers": []interface{}{"google"},
+		},
+	})
+	signed, err := token.SignedString([]byte("test-secret"))
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !emailVerifiedFromContext(r.Context()) {
+			t.Fatal("expected emailVerified true on context")
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/deployments", nil)
+	req.Header.Set("Authorization", "Bearer "+signed)
+	rec := httptest.NewRecorder()
+	requireAuth(next).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}

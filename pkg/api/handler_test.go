@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/loadgen"
 	"github.com/ywacch/cloud9/pkg/metrics"
@@ -737,6 +738,64 @@ func TestHandleCreateDeployment_MonthlySessionLimit(t *testing.T) {
 	}
 	if er.Error != monthlySessionLimitMessage {
 		t.Fatalf("error = %q, want %q", er.Error, monthlySessionLimitMessage)
+	}
+}
+
+func TestHandleCreateDeployment_EmailUnconfirmed(t *testing.T) {
+	t.Setenv("ENV", "production")
+	t.Setenv("SUPABASE_JWT_SECRET", "test-secret")
+	t.Setenv("SUPABASE_URL", "https://example.supabase.co")
+
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": "user-unconfirmed",
+		"exp": time.Now().Add(time.Hour).Unix(),
+		"app_metadata": map[string]interface{}{
+			"provider":  "email",
+			"providers": []interface{}{"email"},
+		},
+	})
+	signed, err := token.SignedString([]byte("test-secret"))
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+
+	body := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "standard",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app", Type: "app-server", Name: "app", Config: map[string]interface{}{}},
+			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app", TargetID: "db"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+signed)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("want 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var er struct {
+		Error  string `json:"error"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &er); err != nil {
+		t.Fatal(err)
+	}
+	if er.Reason != "email_unconfirmed" {
+		t.Fatalf("reason = %q, want email_unconfirmed body=%s", er.Reason, rec.Body.String())
+	}
+	if er.Error != "confirm your email before deploying" {
+		t.Fatalf("error = %q", er.Error)
 	}
 }
 
