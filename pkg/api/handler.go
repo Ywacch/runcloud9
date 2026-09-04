@@ -390,6 +390,11 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if userID != "dev-user" && !emailVerifiedFromContext(r.Context()) {
+		writeErrorWithReason(w, http.StatusForbidden, "confirm your email before deploying", "email_unconfirmed")
+		return
+	}
+
 	userRecord, err := h.loadUserRecord(r.Context(), userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load user")
@@ -1256,6 +1261,15 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+func writeErrorWithReason(w http.ResponseWriter, status int, msg, reason string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error":  msg,
+		"reason": reason,
+	})
 }
 
 func writeResourceBudgetError(w http.ResponseWriter, err *deployer.ResourceBudgetError) {

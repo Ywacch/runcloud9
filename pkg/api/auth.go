@@ -21,6 +21,7 @@ import (
 type ctxKey string
 
 const userIDKey ctxKey = "userID"
+const emailVerifiedKey ctxKey = "emailVerified"
 
 const (
 	jwksCacheTTL     = 10 * time.Minute
@@ -136,6 +137,7 @@ func requireAuth(next http.Handler) http.Handler {
 		}
 
 		r = r.WithContext(context.WithValue(r.Context(), userIDKey, userID))
+		r = r.WithContext(context.WithValue(r.Context(), emailVerifiedKey, jwtEmailVerified(claims)))
 		next.ServeHTTP(w, r)
 	})
 }
@@ -298,6 +300,69 @@ func parseP256PublicKey(k jwkEntry) (*ecdsa.PublicKey, error) {
 func userIDFromContext(ctx context.Context) string {
 	id, _ := ctx.Value(userIDKey).(string)
 	return id
+}
+
+func emailVerifiedFromContext(ctx context.Context) bool {
+	verified, _ := ctx.Value(emailVerifiedKey).(bool)
+	return verified
+}
+
+// jwtEmailVerified reports whether the Supabase access token indicates a verified
+// email or OAuth sign-in. Uses app_metadata.providers (plural), not provider.
+func jwtEmailVerified(claims jwt.MapClaims) bool {
+	if jwtUserMetadataEmailVerified(claims) {
+		return true
+	}
+	return jwtProvidersContainsOAuth(claims)
+}
+
+func jwtUserMetadataEmailVerified(claims jwt.MapClaims) bool {
+	userMeta, ok := nestedClaimMap(claims, "user_metadata")
+	if !ok {
+		return false
+	}
+	return claimIsTrue(userMeta["email_verified"])
+}
+
+func jwtProvidersContainsOAuth(claims jwt.MapClaims) bool {
+	appMeta, ok := nestedClaimMap(claims, "app_metadata")
+	if !ok {
+		return false
+	}
+	providers, ok := appMeta["providers"].([]interface{})
+	if !ok {
+		return false
+	}
+	for _, p := range providers {
+		s, ok := p.(string)
+		if !ok {
+			continue
+		}
+		if s == "google" || s == "github" {
+			return true
+		}
+	}
+	return false
+}
+
+func nestedClaimMap(claims jwt.MapClaims, key string) (map[string]interface{}, bool) {
+	raw, ok := claims[key]
+	if !ok || raw == nil {
+		return nil, false
+	}
+	m, ok := raw.(map[string]interface{})
+	return m, ok
+}
+
+func claimIsTrue(v interface{}) bool {
+	switch val := v.(type) {
+	case bool:
+		return val
+	case string:
+		return strings.EqualFold(strings.TrimSpace(val), "true")
+	default:
+		return false
+	}
 }
 
 // requireOwnership ensures the authenticated caller owns the target deployment.
