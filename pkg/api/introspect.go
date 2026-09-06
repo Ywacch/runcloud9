@@ -342,10 +342,14 @@ func (h *Handler) handleRedisIntrospect(ctx context.Context, w http.ResponseWrit
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
-		writeIntrospectJSON(w, map[string]any{
+		payload := map[string]any{
 			"keys":   keys,
 			"cursor": next,
-		})
+		}
+		if keyCount, err := cache.CountStudentKeys(ctx); err == nil {
+			payload["keyCount"] = keyCount
+		}
+		writeIntrospectJSON(w, payload)
 	case "key":
 		kv, err := cache.GetKeyValue(ctx, key)
 		if err != nil {
