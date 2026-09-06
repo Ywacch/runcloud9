@@ -36,6 +36,35 @@ func (d *RedisDriver) Close() error {
 	return d.client.Close()
 }
 
+// CountStudentKeys returns the number of student-facing keys in Redis.
+// Platform probe keys (_c9_*) are excluded from the total.
+func (d *RedisDriver) CountStudentKeys(ctx context.Context) (int64, error) {
+	dbSize, err := d.client.DBSize(ctx).Result()
+	if err != nil {
+		return 0, fmt.Errorf("redis dbsize: %w", err)
+	}
+
+	var probeCount int64
+	var cursor uint64
+	for {
+		keys, next, err := d.client.Scan(ctx, cursor, platformTablePrefix+"*", 100).Result()
+		if err != nil {
+			return 0, fmt.Errorf("redis scan: %w", err)
+		}
+		probeCount += int64(len(keys))
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+
+	count := dbSize - probeCount
+	if count < 0 {
+		count = 0
+	}
+	return count, nil
+}
+
 func (d *RedisDriver) ScanKeys(ctx context.Context, pattern string, cursor uint64, count int) ([]KeyInfo, uint64, error) {
 	if count < 1 {
 		count = 50
