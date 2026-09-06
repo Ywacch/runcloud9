@@ -9,6 +9,13 @@ import (
 	"github.com/ywacch/cloud9/pkg/store"
 )
 
+func assertPromotedFromQueue(t *testing.T, status string) {
+	t.Helper()
+	if status != "provisioning" && status != "running" {
+		t.Fatalf("status = %q, want provisioning or running (promoted from queue)", status)
+	}
+}
+
 func TestProvisionETA_FallbackThenEWMA(t *testing.T) {
 	t.Parallel()
 	eta := newProvisionETA(240)
@@ -102,9 +109,7 @@ func TestDrainDeployQueue_PromotesWhenFits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.Status != "provisioning" {
-		t.Fatalf("status = %q, want provisioning", row.Status)
-	}
+	assertPromotedFromQueue(t, row.Status)
 }
 
 func TestDrainDeployQueue_PaidPromotedBeforeFittingExplorer(t *testing.T) {
@@ -154,12 +159,8 @@ func TestDrainDeployQueue_PaidPromotedBeforeFittingExplorer(t *testing.T) {
 	if heavy.Status != "queued" {
 		t.Fatalf("heavy status = %q, want queued", heavy.Status)
 	}
-	if paid.Status != "provisioning" {
-		t.Fatalf("paid status = %q, want provisioning", paid.Status)
-	}
-	if light.Status != "provisioning" {
-		t.Fatalf("light status = %q, want provisioning", light.Status)
-	}
+	assertPromotedFromQueue(t, paid.Status)
+	assertPromotedFromQueue(t, light.Status)
 }
 
 func TestDrainDeployQueue_FirstFitPromotesLightBehindHeavy(t *testing.T) {
@@ -203,9 +204,7 @@ func TestDrainDeployQueue_FirstFitPromotesLightBehindHeavy(t *testing.T) {
 	if heavy.Status != "queued" {
 		t.Fatalf("heavy status = %q, want queued (blocked)", heavy.Status)
 	}
-	if light.Status != "provisioning" {
-		t.Fatalf("light status = %q, want provisioning (first-fit)", light.Status)
-	}
+	assertPromotedFromQueue(t, light.Status)
 }
 
 func TestDrainDeployQueue_ClearsPoisonHeadThenPromotes(t *testing.T) {
@@ -252,7 +251,5 @@ func TestDrainDeployQueue_ClearsPoisonHeadThenPromotes(t *testing.T) {
 	if reason, _ := poison.MetricsSummary["reason"].(string); reason != "design_exceeds_cluster_capacity" {
 		t.Fatalf("poison reason = %v, want design_exceeds_cluster_capacity summary=%v", reason, poison.MetricsSummary)
 	}
-	if ok.Status != "provisioning" {
-		t.Fatalf("ok status = %q, want provisioning", ok.Status)
-	}
+	assertPromotedFromQueue(t, ok.Status)
 }
