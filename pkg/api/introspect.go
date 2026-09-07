@@ -246,7 +246,7 @@ func validateIntrospectAction(action string, spec introspect.ComponentSpec, para
 		if !introspect.QueueAllowed(param, spec.Queues) {
 			return fmt.Errorf("queue %q is not allowed", param)
 		}
-	case "queues", "capabilities":
+	case "queues", "capabilities", "stats":
 		// ok
 	default:
 		// Unknown actions are rejected later by the engine handler.
@@ -357,6 +357,13 @@ func (h *Handler) handleRedisIntrospect(ctx context.Context, w http.ResponseWrit
 			return
 		}
 		writeIntrospectJSON(w, kv)
+	case "stats":
+		keyCount, err := cache.CountStudentKeys(ctx)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeIntrospectJSON(w, map[string]any{"keyCount": keyCount})
 	default:
 		writeError(w, http.StatusNotFound, "unknown redis action")
 	}
