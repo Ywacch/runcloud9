@@ -3,8 +3,10 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -68,28 +70,63 @@ func (c *MetricsCollector) appServerReplicaSeries(ctx context.Context, ns string
 	return
 }
 
-func (c *MetricsCollector) listAppServerPods(ctx context.Context, ns string) (names []string, ready map[string]bool, counts BackendReplicas) {
+// isLiveInventoryPod reports whether a pod should appear in replica inventory.
+// Succeeded/Failed pods (kubectl Completed/Error) and pods with a deletion
+// timestamp stay listed by the API after a replacement is created; they are
+// not current replicas.
+func isLiveInventoryPod(pod corev1.Pod) bool {
+	if pod.DeletionTimestamp != nil {
+		return false
+	}
+	switch pod.Status.Phase {
+	case corev1.PodSucceeded, corev1.PodFailed:
+		return false
+	default:
+		return true
+	}
+}
+
+// deploymentNameMatchesApp reports whether a Deployment is one of the
+// app-server or worker rollouts (including mixed-size names like app-server-small).
+func deploymentNameMatchesApp(name, app string) bool {
+	return name == app || strings.HasPrefix(name, app+"-")
+}
+
+func sumNamedDeploymentReplicas(deps []appsv1.Deployment, app string) int32 {
+	var n int32
+	for _, dep := range deps {
+		if !deploymentNameMatchesApp(dep.Name, app) {
+			continue
+		}
+		if dep.Spec.Replicas != nil {
+			n += *dep.Spec.Replicas
+		}
+	}
+	return n
+}
+
+func (c *MetricsCollector) listLabeledLivePods(ctx context.Context, ns, app string) (names []string, ready map[string]bool, counts BackendReplicas) {
 	ready = make(map[string]bool)
 	if c == nil || c.clientset == nil {
 		return nil, ready, counts
 	}
-	depList, err := c.clientset.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: "app=app-server",
-	})
+	// Deployer puts app= labels on the pod template only, not Deployment
+	// metadata. Sum spec.replicas by Deployment name so desired stays correct.
+	depList, err := c.clientset.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{})
 	if err == nil {
-		for _, dep := range depList.Items {
-			if dep.Spec.Replicas != nil {
-				counts.Desired += *dep.Spec.Replicas
-			}
-		}
+		counts.Desired = sumNamedDeploymentReplicas(depList.Items, app)
 	}
 	list, err := c.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app=app-server,deployment=%s", ns),
+		LabelSelector: fmt.Sprintf("app=%s,deployment=%s", app, ns),
 	})
 	if err != nil {
 		return nil, ready, counts
 	}
+	names = make([]string, 0, len(list.Items))
 	for _, p := range list.Items {
+		if !isLiveInventoryPod(p) {
+			continue
+		}
 		isReady := podReadyStatus(p)
 		ready[p.Name] = isReady
 		names = append(names, p.Name)
@@ -98,6 +135,10 @@ func (c *MetricsCollector) listAppServerPods(ctx context.Context, ns string) (na
 		}
 	}
 	return names, ready, counts
+}
+
+func (c *MetricsCollector) listAppServerPods(ctx context.Context, ns string) (names []string, ready map[string]bool, counts BackendReplicas) {
+	return c.listLabeledLivePods(ctx, ns, "app-server")
 }
 
 func (c *MetricsCollector) workerReplicaSeries(ctx context.Context, ns string) (
@@ -127,35 +168,7 @@ func (c *MetricsCollector) workerReplicaSeries(ctx context.Context, ns string) (
 }
 
 func (c *MetricsCollector) listWorkerPods(ctx context.Context, ns string) (names []string, ready map[string]bool, counts BackendReplicas) {
-	ready = make(map[string]bool)
-	if c == nil || c.clientset == nil {
-		return nil, ready, counts
-	}
-	depList, err := c.clientset.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: "app=worker",
-	})
-	if err == nil {
-		for _, dep := range depList.Items {
-			if dep.Spec.Replicas != nil {
-				counts.Desired += *dep.Spec.Replicas
-			}
-		}
-	}
-	list, err := c.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app=worker,deployment=%s", ns),
-	})
-	if err != nil {
-		return nil, ready, counts
-	}
-	for _, p := range list.Items {
-		isReady := podReadyStatus(p)
-		ready[p.Name] = isReady
-		names = append(names, p.Name)
-		if isReady {
-			counts.Ready++
-		}
-	}
-	return names, ready, counts
+	return c.listLabeledLivePods(ctx, ns, "worker")
 }
 
 func mergePodMetricMaps(
@@ -195,6 +208,12 @@ func mergePodMetricMaps(
 	}
 	for _, n := range names {
 		add(n)
+	}
+	// Non-nil names means Kubernetes inventory was listed. Leftover Prom
+	// series for Succeeded/Failed pods must not reappear as replica rows.
+	// Nil names (list failed) still falls back to Prom labels.
+	if names != nil {
+		return out
 	}
 	for name := range rps {
 		add(name)
