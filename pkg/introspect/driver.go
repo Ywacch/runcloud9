@@ -104,6 +104,9 @@ type CacheDriver interface {
 	Driver
 	ScanKeys(ctx context.Context, pattern string, cursor uint64, count int) ([]KeyInfo, uint64, error)
 	GetKeyValue(ctx context.Context, key string) (KeyValue, error)
+	// CountStudentKeys returns student-facing keys in the cache keyspace.
+	// Platform probe keys are excluded. Independent of SCAN pattern.
+	CountStudentKeys(ctx context.Context) (int64, error)
 }
 
 // QueueDriver can list whitelisted queues and peek messages.

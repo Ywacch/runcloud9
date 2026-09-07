@@ -26,7 +26,7 @@ func NewRedisDriver(ctx context.Context, host string) (*RedisDriver, error) {
 }
 
 func (d *RedisDriver) Capabilities() []Capability {
-	return []Capability{CapKeys, CapKeyValue}
+	return []Capability{CapKeys, CapKeyValue, CapStats}
 }
 
 func (d *RedisDriver) Close() error {

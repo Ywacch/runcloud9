@@ -55,6 +55,30 @@ func TestIntrospectRejectsUnwhitelistedQueue(t *testing.T) {
 	}
 }
 
+func TestValidateIntrospectAction_StatsNeedsNoPattern(t *testing.T) {
+	t.Parallel()
+	spec := introspect.ComponentSpec{
+		Engine:      "redis",
+		KeyPatterns: []string{"timeline:*"},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/stats", nil)
+	if err := validateIntrospectAction("stats", spec, "", req); err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+}
+
+func TestValidateIntrospectAction_KeysStarForbiddenWhenNotWhitelisted(t *testing.T) {
+	t.Parallel()
+	spec := introspect.ComponentSpec{
+		Engine:      "redis",
+		KeyPatterns: []string{"timeline:*"},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/keys?pattern=*", nil)
+	if err := validateIntrospectAction("keys", spec, "", req); err == nil {
+		t.Fatal("expected error for pattern *")
+	}
+}
+
 func TestResolveIntrospectHost_RabbitMQ(t *testing.T) {
 	t.Parallel()
 	host, err := resolveIntrospectHost(context.Background(), "rabbitmq", "mq", "ns1", "primary", "", nil, nil)
