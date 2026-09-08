@@ -15,10 +15,11 @@ type DeploymentDesign struct {
 }
 
 type DeploymentNode struct {
-	ID     string                 `json:"id"`
-	Type   string                 `json:"type"`
-	Name   string                 `json:"name"`
-	Config map[string]interface{} `json:"config"`
+	ID       string                 `json:"id"`
+	Type     string                 `json:"type"`
+	Name     string                 `json:"name"`
+	Config   map[string]interface{} `json:"config"`
+	Position []float64              `json:"position,omitempty"`
 }
 
 type DeploymentConn struct {

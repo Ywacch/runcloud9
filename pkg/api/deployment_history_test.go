@@ -95,6 +95,14 @@ func TestHandleListDeploymentHistory_success(t *testing.T) {
 				"peak_rps":                1200.5,
 				"peak_p99_ms":             json.Number("42.25"),
 			},
+			Topology: &store.DeploymentHistoryTopology{
+				Nodes: []store.DeploymentHistoryTopologyNode{
+					{ID: "app-1", Type: "app-server", Position: []float64{2, 0.3, 0}},
+				},
+				Connections: []store.DeploymentHistoryTopologyConn{
+					{SourceID: "app-1", TargetID: "db-1", Protocol: "http"},
+				},
+			},
 			ExpiresAt: expiresAt,
 			CreatedAt: createdAt,
 		},
@@ -138,5 +146,8 @@ func TestHandleListDeploymentHistory_success(t *testing.T) {
 	}
 	if item.PeakP99Ms == nil || *item.PeakP99Ms != 42.25 {
 		t.Fatalf("peakP99Ms = %v", item.PeakP99Ms)
+	}
+	if item.Topology == nil || len(item.Topology.Nodes) != 1 || item.Topology.Nodes[0].ID != "app-1" {
+		t.Fatalf("topology = %#v", item.Topology)
 	}
 }

@@ -20,17 +20,18 @@ const (
 var errInvalidDeploymentHistoryLimit = errors.New("limit must be a positive integer")
 
 type deploymentHistoryResponse struct {
-	ID              string   `json:"id"`
-	Namespace       string   `json:"namespace"`
-	Template        string   `json:"template"`
-	Archetype       string   `json:"archetype"`
-	Status          string   `json:"status"`
-	CreatedAt       string   `json:"createdAt"`
-	ExpiresAt       string   `json:"expiresAt"`
-	TerminatedAt    string   `json:"terminatedAt,omitempty"`
-	DurationSeconds *float64 `json:"durationSeconds,omitempty"`
-	PeakRPS         *float64 `json:"peakRps,omitempty"`
-	PeakP99Ms       *float64 `json:"peakP99Ms,omitempty"`
+	ID              string                           `json:"id"`
+	Namespace       string                           `json:"namespace"`
+	Template        string                           `json:"template"`
+	Archetype       string                           `json:"archetype"`
+	Status          string                           `json:"status"`
+	CreatedAt       string                           `json:"createdAt"`
+	ExpiresAt       string                           `json:"expiresAt"`
+	TerminatedAt    string                           `json:"terminatedAt,omitempty"`
+	DurationSeconds *float64                         `json:"durationSeconds,omitempty"`
+	PeakRPS         *float64                         `json:"peakRps,omitempty"`
+	PeakP99Ms       *float64                         `json:"peakP99Ms,omitempty"`
+	Topology        *store.DeploymentHistoryTopology `json:"topology,omitempty"`
 }
 
 func (h *Handler) handleListDeploymentHistory(w http.ResponseWriter, r *http.Request) {
@@ -95,6 +96,7 @@ func deploymentHistoryItem(row store.DeploymentHistoryRow) deploymentHistoryResp
 		DurationSeconds: summaryNumber(row.MetricsSummary, "actual_duration_seconds"),
 		PeakRPS:         summaryNumber(row.MetricsSummary, "peak_rps"),
 		PeakP99Ms:       summaryNumber(row.MetricsSummary, "peak_p99_ms"),
+		Topology:        row.Topology,
 	}
 }
 
