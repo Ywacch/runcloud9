@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -70,6 +71,10 @@ func TestDrainDeployQueue_ExpiresTTL(t *testing.T) {
 	if row.Status != "terminated" {
 		t.Fatalf("status = %q, want terminated", row.Status)
 	}
+	kinds := admissionKinds(copyAdmissionEvents(s))
+	if !slices.Contains(kinds, store.AdmissionKindRoomExpired) {
+		t.Fatalf("events kinds = %v, want room_expired", kinds)
+	}
 }
 
 func TestDrainDeployQueue_PromotesWhenFits(t *testing.T) {
@@ -110,6 +115,13 @@ func TestDrainDeployQueue_PromotesWhenFits(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertPromotedFromQueue(t, row.Status)
+	if row.MetricsSummary["promoted_at"] == nil {
+		t.Fatalf("promoted_at missing: %+v", row.MetricsSummary)
+	}
+	kinds := admissionKinds(copyAdmissionEvents(s))
+	if !slices.Contains(kinds, store.AdmissionKindRoomPromoted) {
+		t.Fatalf("events kinds = %v, want room_promoted", kinds)
+	}
 }
 
 func TestDrainDeployQueue_PaidPromotedBeforeFittingExplorer(t *testing.T) {

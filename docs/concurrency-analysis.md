@@ -157,6 +157,72 @@ Homogeneous `url-shortener-small` campaign `homogeneous-url-shortener-20260721-0
 
 Unset both budget vars to leave the room gate off.
 
+## Room vs door wait events
+
+The API appends rows to Supabase `public.admission_events` (service role only). Rows survive promote and door acquire. `queue_full` has no `cloud_deployments` row.
+
+| `kind` | Meaning |
+|---|---|
+| `room_queued` | Admit wrote `status=queued` (room full). |
+| `room_promoted` | Queue claimed the row. `wait_ms` is queue time. |
+| `room_expired` | Queue TTL. `wait_ms` is time spent queued. |
+| `door_wait` | Doorway full; orchestration blocked. |
+| `door_acquired` | Slot taken after a wait. `wait_ms` is door wait. Immediate acquire writes nothing. |
+| `queue_full` | 429; wait list also full. |
+
+Session stamps on `cloud_deployments.metrics_summary`: `queued_at`, `promoted_at`, `door_wait_started_at`, `door_acquired_at`. Use the event table for unique people and rejects.
+
+### Weekly queries
+
+Unique people and event counts (UTC day):
+
+```sql
+select
+  date_trunc('day', created_at) as day,
+  kind,
+  count(distinct user_id) as unique_users,
+  count(*) as events
+from public.admission_events
+where created_at >= now() - interval '7 days'
+  and kind in ('room_queued', 'door_wait', 'queue_full')
+  and user_id is not null
+group by 1, 2
+order by 1, 2;
+```
+
+Peak hour:
+
+```sql
+select
+  date_trunc('hour', created_at) as hour,
+  kind,
+  count(*) as events,
+  count(distinct user_id) as unique_users
+from public.admission_events
+where created_at >= now() - interval '7 days'
+  and kind in ('room_queued', 'door_wait', 'queue_full')
+group by 1, 2
+order by events desc
+limit 24;
+```
+
+Wait length (p50 / p95):
+
+```sql
+select
+  kind,
+  percentile_cont(0.50) within group (order by wait_ms) as p50_ms,
+  percentile_cont(0.95) within group (order by wait_ms) as p95_ms,
+  count(*) as samples
+from public.admission_events
+where created_at >= now() - interval '7 days'
+  and kind in ('room_promoted', 'door_acquired', 'room_expired')
+  and wait_ms is not null
+group by kind;
+```
+
+Room high: raise `CLUSTER_DEPLOY_BUDGET_*` or cluster size. Door high: raise `MAX_CONCURRENT_PROVISIONS` or speed provision. `queue_full` climbing: both wait lists are saturated.
+
 **Analogies:** the **room** is steady-state weighted occupancy; the **door** is concurrent orchestrations; **person size** is `QuotaResourceLimits` for that design. A jam at the door (too many simultaneous provisions) fails more deployments than the room can hold once people enter in paced batches.
 
 **Ops:** apply [`docs/sql/admitted_weights.sql`](sql/admitted_weights.sql) before enabling the room gate. Keep `cloud9-api` at `replicas: 1` until admission is DB-atomic (in-process mutex + doorway semaphore + deploy queue). Phase 2: room full → **201** `status=queued` (first-fit promote); designs that cannot fit an empty room → **422** `reason=design_exceeds_cluster_capacity` (never queued); queue overflow → **429** `reason=queue_full`. Create still packs free room when the design fits current occupancy. Room `queuePosition` is wait-list index, not strict deploy order (smaller queued entries may promote ahead of a blocked heavier head). Defaults: `MAX_DEPLOY_QUEUE=20`, `DEPLOY_QUEUE_TTL_SECONDS=900`, `PROVISION_ETA_SECONDS=240`. When the doorway is full, admitted deploys stay `provisioning` and set `metricsSummary.provision_phase=waiting_for_provision_slot` until a slot is acquired (orchestration timeout still starts after acquire). GET exposes live `queuePosition` / `estimatedWaitSeconds` for doorway waiters as `ceil(position * doorHoldAvg / doorWidth)` (hold time = acquire→release EWMA; fallback `PROVISION_ETA_SECONDS`).

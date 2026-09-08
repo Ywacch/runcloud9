@@ -62,6 +62,7 @@ type deploymentStore interface {
 	CountQueuedDeployments(ctx context.Context) (int, error)
 	CountUserDeploymentsSince(ctx context.Context, userID string, since time.Time) (int, error)
 	ClaimQueued(ctx context.Context, namespace string) (bool, error)
+	InsertAdmissionEvent(ctx context.Context, ev store.AdmissionEvent) error
 	CreateDeployment(ctx context.Context, params store.CreateDeploymentParams) (string, error)
 	SumActiveAdmissionWeights(ctx context.Context) (store.AdmissionOccupancy, error)
 	UpdateStatus(ctx context.Context, namespace, status string) error

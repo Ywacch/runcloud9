@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -855,9 +856,23 @@ func TestHandleCreateDeployment_RoomBudget_EnqueuesWhenFull(t *testing.T) {
 		t.Fatalf("estimatedWaitSeconds = %d, want > 0", out.EstimatedWaitSeconds)
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if len(s.active) != 1 || s.active[0].Status != "queued" {
-		t.Fatalf("active = %+v, want one queued", s.active)
+		active := s.active
+		s.mu.Unlock()
+		t.Fatalf("active = %+v, want one queued", active)
+	}
+	ns := s.active[0].Namespace
+	kinds := admissionKinds(s.events)
+	s.mu.Unlock()
+	if !slices.Contains(kinds, store.AdmissionKindRoomQueued) {
+		t.Fatalf("events kinds = %v, want room_queued", kinds)
+	}
+	row, err := s.GetDeployment(context.Background(), ns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.MetricsSummary["queued_at"] == nil {
+		t.Fatalf("queued_at missing: %+v", row.MetricsSummary)
 	}
 }
 
@@ -981,6 +996,10 @@ func TestHandleCreateDeployment_RoomBudget_QueueFull(t *testing.T) {
 	_ = json.Unmarshal(rec2.Body.Bytes(), &er)
 	if er.Reason != "queue_full" {
 		t.Fatalf("reason = %q, want queue_full body=%s", er.Reason, rec2.Body.String())
+	}
+	kinds := admissionKinds(copyAdmissionEvents(s))
+	if !slices.Contains(kinds, store.AdmissionKindQueueFull) {
+		t.Fatalf("events kinds = %v, want queue_full", kinds)
 	}
 }
 
@@ -1724,6 +1743,7 @@ type fakeDeploymentStore struct {
 	sumOccErr          error
 	forcedMonthlyCount *int
 	monthlyCountErr    error
+	events             []store.AdmissionEvent
 }
 
 func newFakeDeploymentStore() *fakeDeploymentStore {
@@ -1885,6 +1905,13 @@ func (f *fakeDeploymentStore) ClaimQueued(_ context.Context, namespace string) (
 		}
 	}
 	return true, nil
+}
+
+func (f *fakeDeploymentStore) InsertAdmissionEvent(_ context.Context, ev store.AdmissionEvent) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, ev)
+	return nil
 }
 
 func (f *fakeDeploymentStore) UpdateStatus(_ context.Context, namespace, status string) error {

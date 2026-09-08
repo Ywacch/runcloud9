@@ -59,6 +59,7 @@ func (h *Handler) runBackgroundProvision(
 	defer h.clearProvisionCancel(namespace)
 
 	start := time.Now()
+	var doorWaited bool
 	workCtx, cancel, release, err := beginProvisionWork(
 		lifeCtx,
 		h.door,
@@ -66,6 +67,8 @@ func (h *Handler) runBackgroundProvision(
 		provisionOrchestrationTimeout(os.Getenv("DEPLOYER")),
 		paid,
 		func() {
+			doorWaited = true
+			waitStart := time.Now().UTC()
 			h.emitProvisionStatus(
 				namespace,
 				"waiting_for_provision_slot",
@@ -75,6 +78,16 @@ func (h *Handler) runBackgroundProvision(
 				nil,
 				"layer_deploying",
 			)
+			h.stampMetrics(context.Background(), namespace, map[string]any{
+				"door_wait_started_at": rfc3339UTC(waitStart),
+			})
+			h.recordAdmissionEvent(context.Background(), store.AdmissionEvent{
+				UserID:    userID,
+				Namespace: namespace,
+				Template:  design.Template,
+				Kind:      store.AdmissionKindDoorWait,
+				Paid:      paid,
+			})
 		},
 	)
 	if h.door != nil {
@@ -83,6 +96,20 @@ func (h *Handler) runBackgroundProvision(
 		} else {
 			log.Printf("provision door acquired namespace=%s paid=%t waited=%s", namespace, paid, time.Since(start))
 		}
+	}
+	if err == nil && doorWaited {
+		acquiredAt := time.Now()
+		h.stampMetrics(context.Background(), namespace, map[string]any{
+			"door_acquired_at": rfc3339UTC(acquiredAt),
+		})
+		h.recordAdmissionEvent(context.Background(), store.AdmissionEvent{
+			UserID:    userID,
+			Namespace: namespace,
+			Template:  design.Template,
+			Kind:      store.AdmissionKindDoorAcquired,
+			WaitMS:    intPtr(durationMillis(acquiredAt.Sub(start))),
+			Paid:      paid,
+		})
 	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) || h.isDeploymentStatus(namespace, "terminated") {

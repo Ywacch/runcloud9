@@ -247,15 +247,28 @@ func (h *Handler) promoteQueuedPass(
 
 func (h *Handler) terminateQueuedLocked(ctx context.Context, namespace, reason string, queueExpired bool) {
 	log.Printf("deploy queue: terminating queued namespace=%s reason=%s", namespace, reason)
+	row, rowErr := h.store.GetDeployment(ctx, namespace)
 	_ = h.store.UpdateStatus(ctx, namespace, "terminated")
+	now := time.Now()
 	summary := map[string]any{
-		"terminated_at": time.Now().UTC().Format(time.RFC3339),
+		"terminated_at": rfc3339UTC(now),
 		"reason":        reason,
 	}
 	if queueExpired {
 		summary["queue_expired"] = true
 	}
 	_ = h.store.UpdateMetricsSummary(ctx, namespace, summary)
+	if queueExpired && rowErr == nil {
+		h.recordAdmissionEvent(ctx, store.AdmissionEvent{
+			UserID:    row.UserID,
+			Namespace: namespace,
+			Template:  row.Template,
+			Kind:      store.AdmissionKindRoomExpired,
+			WaitMS:    intPtr(durationMillis(now.Sub(row.CreatedAt))),
+			Paid:      h.admissionPaid(ctx, row.UserID),
+			Detail:    map[string]any{"reason": reason},
+		})
+	}
 }
 
 // promoteQueuedLocked claims the head and starts background provision.
@@ -269,6 +282,19 @@ func (h *Handler) promoteQueuedLocked(ctx context.Context, head store.QueuedDepl
 	if !claimed {
 		return false
 	}
+
+	promotedAt := time.Now()
+	h.stampMetrics(ctx, head.Namespace, map[string]any{
+		"promoted_at": rfc3339UTC(promotedAt),
+	})
+	h.recordAdmissionEvent(ctx, store.AdmissionEvent{
+		UserID:    head.UserID,
+		Namespace: head.Namespace,
+		Template:  head.Template,
+		Kind:      store.AdmissionKindRoomPromoted,
+		WaitMS:    intPtr(durationMillis(promotedAt.Sub(head.CreatedAt))),
+		Paid:      h.queueRowIsPaid(ctx, head),
+	})
 
 	row, err := h.store.GetDeployment(ctx, head.Namespace)
 	if err != nil {

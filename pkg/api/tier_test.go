@@ -29,6 +29,9 @@ func (s *stubUserStore) CountUserDeploymentsSince(context.Context, string, time.
 	return s.monthlyUsed, nil
 }
 func (s *stubUserStore) ClaimQueued(context.Context, string) (bool, error) { return false, nil }
+func (s *stubUserStore) InsertAdmissionEvent(context.Context, store.AdmissionEvent) error {
+	return nil
+}
 func (s *stubUserStore) CreateDeployment(context.Context, store.CreateDeploymentParams) (string, error) {
 	return "", nil
 }
