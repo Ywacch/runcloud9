@@ -31,6 +31,36 @@ type ActiveDeploymentRow struct {
 // MetricsSummary is included so the API can expose selected summary scalars without
 // returning the full session history.
 type DeploymentHistoryRow struct {
+	ID             string                     `json:"id"`
+	Namespace      string                     `json:"namespace"`
+	Template       string                     `json:"template"`
+	Archetype      string                     `json:"archetype"`
+	Status         string                     `json:"status"`
+	MetricsSummary map[string]any             `json:"metrics_summary"`
+	ExpiresAt      time.Time                  `json:"expires_at"`
+	CreatedAt      time.Time                  `json:"created_at"`
+	Topology       *DeploymentHistoryTopology `json:"topology,omitempty"`
+}
+
+// DeploymentHistoryTopology is a compact layout for history miniview cards.
+type DeploymentHistoryTopology struct {
+	Nodes       []DeploymentHistoryTopologyNode `json:"nodes"`
+	Connections []DeploymentHistoryTopologyConn `json:"connections"`
+}
+
+type DeploymentHistoryTopologyNode struct {
+	ID       string    `json:"id"`
+	Type     string    `json:"type"`
+	Position []float64 `json:"position,omitempty"`
+}
+
+type DeploymentHistoryTopologyConn struct {
+	SourceID string `json:"sourceId"`
+	TargetID string `json:"targetId"`
+	Protocol string `json:"protocol"`
+}
+
+type deploymentHistoryDBRow struct {
 	ID             string         `json:"id"`
 	Namespace      string         `json:"namespace"`
 	Template       string         `json:"template"`
@@ -39,6 +69,7 @@ type DeploymentHistoryRow struct {
 	MetricsSummary map[string]any `json:"metrics_summary"`
 	ExpiresAt      time.Time      `json:"expires_at"`
 	CreatedAt      time.Time      `json:"created_at"`
+	Design         map[string]any `json:"design"`
 }
 
 // CreateDeploymentParams are the inputs for creating a deployment row.
@@ -366,7 +397,7 @@ func (s *DeploymentStore) ListUserDeploymentHistory(ctx context.Context, userID 
 	}
 
 	data, _, err := s.client.From("cloud_deployments").
-		Select("id,namespace,template,archetype,status,metrics_summary,expires_at,created_at", "exact", false).
+		Select("id,namespace,template,archetype,status,metrics_summary,expires_at,created_at,design", "exact", false).
 		Eq("user_id", userID).
 		In("status", []string{"terminated", "failed"}).
 		Order("created_at", &postgrest.OrderOpts{Ascending: false}).
@@ -376,9 +407,108 @@ func (s *DeploymentStore) ListUserDeploymentHistory(ctx context.Context, userID 
 		return nil, fmt.Errorf("store.ListUserDeploymentHistory: %w", err)
 	}
 
-	var rows []DeploymentHistoryRow
-	if err := json.Unmarshal(data, &rows); err != nil {
+	var dbRows []deploymentHistoryDBRow
+	if err := json.Unmarshal(data, &dbRows); err != nil {
 		return nil, fmt.Errorf("store.ListUserDeploymentHistory: parse: %w", err)
 	}
+	rows := make([]DeploymentHistoryRow, 0, len(dbRows))
+	for _, dbRow := range dbRows {
+		rows = append(rows, DeploymentHistoryRow{
+			ID:             dbRow.ID,
+			Namespace:      dbRow.Namespace,
+			Template:       dbRow.Template,
+			Archetype:      dbRow.Archetype,
+			Status:         dbRow.Status,
+			MetricsSummary: dbRow.MetricsSummary,
+			ExpiresAt:      dbRow.ExpiresAt,
+			CreatedAt:      dbRow.CreatedAt,
+			Topology:       CompactTopologyFromDesign(dbRow.Design),
+		})
+	}
 	return rows, nil
+}
+
+// CompactTopologyFromDesign extracts id/type/position nodes and connections for history cards.
+func CompactTopologyFromDesign(design map[string]any) *DeploymentHistoryTopology {
+	if design == nil {
+		return nil
+	}
+	nodesRaw, ok := design["nodes"].([]any)
+	if !ok || len(nodesRaw) == 0 {
+		return nil
+	}
+	nodes := make([]DeploymentHistoryTopologyNode, 0, len(nodesRaw))
+	for _, raw := range nodesRaw {
+		nodeMap, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		id, _ := nodeMap["id"].(string)
+		typ, _ := nodeMap["type"].(string)
+		if id == "" || typ == "" {
+			continue
+		}
+		out := DeploymentHistoryTopologyNode{ID: id, Type: typ}
+		if posRaw, ok := nodeMap["position"].([]any); ok && len(posRaw) == 3 {
+			pos := make([]float64, 0, 3)
+			valid := true
+			for _, v := range posRaw {
+				switch n := v.(type) {
+				case float64:
+					pos = append(pos, n)
+				case float32:
+					pos = append(pos, float64(n))
+				case int:
+					pos = append(pos, float64(n))
+				case int64:
+					pos = append(pos, float64(n))
+				case json.Number:
+					f, err := n.Float64()
+					if err != nil {
+						valid = false
+						break
+					}
+					pos = append(pos, f)
+				default:
+					valid = false
+				}
+				if !valid {
+					break
+				}
+			}
+			if valid && len(pos) == 3 {
+				out.Position = pos
+			}
+		}
+		nodes = append(nodes, out)
+	}
+	if len(nodes) == 0 {
+		return nil
+	}
+	connsRaw, _ := design["connections"].([]any)
+	connections := make([]DeploymentHistoryTopologyConn, 0, len(connsRaw))
+	for _, raw := range connsRaw {
+		connMap, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		sourceID, _ := connMap["sourceId"].(string)
+		targetID, _ := connMap["targetId"].(string)
+		if sourceID == "" || targetID == "" {
+			continue
+		}
+		protocol, _ := connMap["protocol"].(string)
+		if protocol == "" {
+			protocol = "http"
+		}
+		connections = append(connections, DeploymentHistoryTopologyConn{
+			SourceID: sourceID,
+			TargetID: targetID,
+			Protocol: protocol,
+		})
+	}
+	return &DeploymentHistoryTopology{
+		Nodes:       nodes,
+		Connections: connections,
+	}
 }
