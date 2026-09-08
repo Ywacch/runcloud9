@@ -190,3 +190,23 @@ func parseConsistencySamplesJSON(body []byte) cacheStaleSample {
 		RequestID: row.RequestID,
 	}
 }
+
+// scrapeAppTrafficConsistency reads cumulative readrouter counters from Prometheus for student RYW/monotonic.
+// CacheDbStale stays on consistency_read_stale_total (E4); this scrapes replica consistency only.
+func (c *MetricsCollector) scrapeAppTrafficConsistency(ctx context.Context, nsSel string) appTrafficConsistency {
+	out := appTrafficConsistency{}
+	if c == nil || nsSel == "" {
+		return out
+	}
+	ryw, _, _ := c.queryScalar(ctx, fmt.Sprintf(`sum(ryw_violations_total{%s})`, nsSel))
+	mono, _, _ := c.queryScalar(ctx, fmt.Sprintf(`sum(monotonic_violations_total{%s})`, nsSel))
+	redirects, _, _ := c.queryScalar(ctx, fmt.Sprintf(`sum(ryw_leader_redirects_total{%s})`, nsSel))
+	out.RYWTotal = ryw
+	out.MonoTotal = mono
+	out.LeaderRedirects = redirects
+
+	byRoute := c.queryMultiResult(ctx, fmt.Sprintf(`sum(db_read_total{%s}) by (route)`, nsSel), "route")
+	out.LeaderReads = int64(byRoute["leader"] + 0.5)
+	out.ReplicaReads = int64(byRoute["replica"] + 0.5)
+	return out
+}

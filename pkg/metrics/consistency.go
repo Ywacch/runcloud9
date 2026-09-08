@@ -2,7 +2,6 @@ package metrics
 
 import (
 	"fmt"
-	"strconv"
 	"sync"
 	"time"
 
@@ -14,11 +13,23 @@ const (
 	ruleRYWViolation       = "ryw_violation"
 	ruleMonotonicViolation = "monotonic_violation"
 	ruleCacheDbStale       = "cache_db_stale"
+
+	guaranteeHeldByNone = "none"
+	guaranteeHeldByApp  = "app"
 )
 
 // cacheStaleSample is the newest stale-read evidence row scraped from app-server.
 type cacheStaleSample struct {
 	Key, Served, Truth, RequestID string
+}
+
+// appTrafficConsistency is scraped readrouter Prometheus state for one Collect tick.
+type appTrafficConsistency struct {
+	RYWTotal        float64
+	MonoTotal       float64
+	LeaderReads     int64
+	ReplicaReads    int64
+	LeaderRedirects float64
 }
 
 // ConsistencyDetector turns observer probe snapshots into L1 invariant events and db consistency counters.
@@ -31,6 +42,10 @@ type ConsistencyDetector struct {
 	appStaleTotal map[string]float64
 	appStaleSeen  map[string]float64
 	lastSample    map[string]cacheStaleSample
+
+	appTraffic  map[string]appTrafficConsistency
+	appRYWSeen  map[string]float64
+	appMonoSeen map[string]float64
 }
 
 // NewConsistencyDetector creates a detector backed by the given probe reader.
@@ -42,6 +57,9 @@ func NewConsistencyDetector(reader consistencyProbeReader) *ConsistencyDetector 
 		appStaleTotal: make(map[string]float64),
 		appStaleSeen:  make(map[string]float64),
 		lastSample:    make(map[string]cacheStaleSample),
+		appTraffic:    make(map[string]appTrafficConsistency),
+		appRYWSeen:    make(map[string]float64),
+		appMonoSeen:   make(map[string]float64),
 	}
 }
 
@@ -59,9 +77,21 @@ func (cd *ConsistencyDetector) NoteAppCacheStale(namespace string, total float64
 	}
 }
 
-// Eval reads the latest probe result, updates db.Consistency, and emits invariant events on transitions.
-// RYW and monotonic violations are observer-sourced until Phase 2.5 PR9. Student-facing cache_db_stale
-// is sourced from app Prometheus counters (not the _c9_probe canary).
+// NoteAppTrafficConsistency records scraped readrouter counters for RYW/monotonic and read offload.
+// Call once per Collect tick before Eval. Student RYW/monotonic events use these totals, not the probe.
+func (cd *ConsistencyDetector) NoteAppTrafficConsistency(namespace string, traffic appTrafficConsistency) {
+	if cd == nil || namespace == "" {
+		return
+	}
+	cd.mu.Lock()
+	defer cd.mu.Unlock()
+	cd.appTraffic[namespace] = traffic
+}
+
+// Eval updates db.Consistency and emits invariant events on transitions.
+// Student-facing RYW/monotonic come from app Prometheus counters (Phase 2.5 PR9).
+// Student-facing cache_db_stale comes from app counters (E4). The _c9_probe observer
+// remains a lag/reachability canary (replicaStalenessVersions, LastProbeError only).
 func (cd *ConsistencyDetector) Eval(namespace string, dm *DeploymentMetrics, topo TopologyFlags, _ *templates.TemplateSpec) []Event {
 	if cd == nil || dm == nil || namespace == "" || !topo.HasDB {
 		return nil
@@ -73,31 +103,13 @@ func (cd *ConsistencyDetector) Eval(namespace string, dm *DeploymentMetrics, top
 	if topo.HasCache {
 		out = append(out, cd.evalAppCacheStale(namespace, now)...)
 	}
+	out = append(out, cd.evalAppRYW(namespace, now)...)
+	out = append(out, cd.evalAppMonotonic(namespace, now)...)
 
 	var result probes.ProbeResult
 	probeOK := false
 	if cd.reader != nil {
 		result, probeOK = cd.reader.Latest(namespace)
-	}
-
-	if probeOK {
-		if result.RYWStalenessVersions > 0 {
-			if cd.fire(namespace, ruleRYWViolation) {
-				cd.incrementViolation(namespace, ruleRYWViolation)
-				out = append(out, cd.rywEvent(now, result))
-			}
-		} else {
-			cd.clear(namespace, ruleRYWViolation)
-		}
-
-		if result.MonotonicViolation {
-			if cd.fire(namespace, ruleMonotonicViolation) {
-				cd.incrementViolation(namespace, ruleMonotonicViolation)
-				out = append(out, cd.monotonicEvent(now, result))
-			}
-		} else {
-			cd.clear(namespace, ruleMonotonicViolation)
-		}
 	}
 
 	if cm, exists := dm.Components["db"]; exists {
@@ -120,6 +132,9 @@ func (cd *ConsistencyDetector) Cleanup(namespace string) {
 	delete(cd.appStaleTotal, namespace)
 	delete(cd.appStaleSeen, namespace)
 	delete(cd.lastSample, namespace)
+	delete(cd.appTraffic, namespace)
+	delete(cd.appRYWSeen, namespace)
+	delete(cd.appMonoSeen, namespace)
 }
 
 func (cd *ConsistencyDetector) evalAppCacheStale(namespace string, now time.Time) []Event {
@@ -143,11 +158,58 @@ func (cd *ConsistencyDetector) evalAppCacheStale(namespace string, now time.Time
 	return nil
 }
 
+func (cd *ConsistencyDetector) evalAppRYW(namespace string, now time.Time) []Event {
+	cd.mu.Lock()
+	total := cd.appTraffic[namespace].RYWTotal
+	lastSeen := cd.appRYWSeen[namespace]
+	cd.appRYWSeen[namespace] = total
+	cd.mu.Unlock()
+
+	if total > lastSeen {
+		if cd.fire(namespace, ruleRYWViolation) {
+			cd.incrementViolation(namespace, ruleRYWViolation)
+			return []Event{cd.rywTrafficEvent(now, total-lastSeen)}
+		}
+		return nil
+	}
+	if total == lastSeen {
+		cd.clear(namespace, ruleRYWViolation)
+	}
+	return nil
+}
+
+func (cd *ConsistencyDetector) evalAppMonotonic(namespace string, now time.Time) []Event {
+	cd.mu.Lock()
+	total := cd.appTraffic[namespace].MonoTotal
+	lastSeen := cd.appMonoSeen[namespace]
+	cd.appMonoSeen[namespace] = total
+	cd.mu.Unlock()
+
+	if total > lastSeen {
+		if cd.fire(namespace, ruleMonotonicViolation) {
+			cd.incrementViolation(namespace, ruleMonotonicViolation)
+			return []Event{cd.monotonicTrafficEvent(now, total-lastSeen)}
+		}
+		return nil
+	}
+	if total == lastSeen {
+		cd.clear(namespace, ruleMonotonicViolation)
+	}
+	return nil
+}
+
 func (cd *ConsistencyDetector) statusFor(namespace string, result probes.ProbeResult, ok bool) *ConsistencyStatus {
+	cd.mu.Lock()
+	traffic := cd.appTraffic[namespace]
+	cd.mu.Unlock()
+
 	status := &ConsistencyStatus{
 		RYWViolations:       cd.violationCount(namespace, ruleRYWViolation),
 		MonotonicViolations: cd.violationCount(namespace, ruleMonotonicViolation),
 		CacheDbStale:        cd.violationCount(namespace, ruleCacheDbStale),
+		LeaderReads:         traffic.LeaderReads,
+		ReplicaReads:        traffic.ReplicaReads,
+		GuaranteeHeldBy:     guaranteeHeldByFromTraffic(traffic),
 	}
 	if sample, has := cd.sampleFor(namespace); has {
 		status.LastCacheKey = sample.Key
@@ -158,9 +220,17 @@ func (cd *ConsistencyDetector) statusFor(namespace string, result probes.ProbeRe
 	if !ok {
 		return status
 	}
+	// Probe stays a lag/reachability canary — do not source student RYW/monotonic from it.
 	status.ReplicaStalenessVersions = result.RYWStalenessVersions
 	status.LastProbeError = result.LastErr
 	return status
+}
+
+func guaranteeHeldByFromTraffic(traffic appTrafficConsistency) string {
+	if traffic.LeaderRedirects > 0 {
+		return guaranteeHeldByApp
+	}
+	return guaranteeHeldByNone
 }
 
 func (cd *ConsistencyDetector) sampleFor(namespace string) (cacheStaleSample, bool) {
@@ -170,7 +240,11 @@ func (cd *ConsistencyDetector) sampleFor(namespace string) (cacheStaleSample, bo
 	return sample, ok && sample.Key != ""
 }
 
-func (cd *ConsistencyDetector) rywEvent(now time.Time, result probes.ProbeResult) Event {
+func (cd *ConsistencyDetector) rywTrafficEvent(now time.Time, delta float64) Event {
+	desc := "A replica read observed a write that has not replayed yet"
+	if delta >= 1 {
+		desc = fmt.Sprintf("App observed %.0f read-your-writes violation(s) on replica traffic", delta)
+	}
 	return Event{
 		Timestamp:   now,
 		Type:        "invariant",
@@ -179,15 +253,20 @@ func (cd *ConsistencyDetector) rywEvent(now time.Time, result probes.ProbeResult
 		RuleID:      ruleRYWViolation,
 		Audience:    "student",
 		Title:       "Read-your-writes violation",
-		Description: fmt.Sprintf("Replica is %d logical version(s) behind the latest primary write", result.RYWStalenessVersions),
+		Description: desc,
 		Detail: map[string]string{
-			"kind":              "ryw",
-			"stalenessVersions": strconv.FormatInt(result.RYWStalenessVersions, 10),
+			"kind":   "ryw",
+			"source": "traffic",
+			"delta":  fmt.Sprintf("%.0f", delta),
 		},
 	}
 }
 
-func (cd *ConsistencyDetector) monotonicEvent(now time.Time, result probes.ProbeResult) Event {
+func (cd *ConsistencyDetector) monotonicTrafficEvent(now time.Time, delta float64) Event {
+	desc := "A later replica read observed an earlier replication position"
+	if delta >= 1 {
+		desc = fmt.Sprintf("App observed %.0f monotonic-read violation(s) on replica traffic", delta)
+	}
 	return Event{
 		Timestamp:   now,
 		Type:        "invariant",
@@ -196,11 +275,11 @@ func (cd *ConsistencyDetector) monotonicEvent(now time.Time, result probes.Probe
 		RuleID:      ruleMonotonicViolation,
 		Audience:    "student",
 		Title:       "Monotonic read violation",
-		Description: fmt.Sprintf("Replica version regressed to %d after observing a higher version", result.ReplicaVersion),
+		Description: desc,
 		Detail: map[string]string{
-			"kind":              "monotonic",
-			"stalenessVersions": strconv.FormatInt(result.RYWStalenessVersions, 10),
-			"replicaVersion":    strconv.FormatInt(result.ReplicaVersion, 10),
+			"kind":   "monotonic",
+			"source": "traffic",
+			"delta":  fmt.Sprintf("%.0f", delta),
 		},
 	}
 }

@@ -239,6 +239,12 @@ type ConsistencyStatus struct {
 	LastCacheServed          string `json:"lastCacheServed,omitempty"`
 	LastCacheTruth           string `json:"lastCacheTruth,omitempty"`
 	LastCacheRequestID       string `json:"lastCacheRequestId,omitempty"`
+	// LeaderReads / ReplicaReads are cumulative app db_read_total by route (read offload split).
+	LeaderReads  int64 `json:"leaderReads"`
+	ReplicaReads int64 `json:"replicaReads"`
+	// GuaranteeHeldBy is "app" when the in-app read router has redirected for RYW,
+	// "db" when remote_apply holds it (Phase 2.6), otherwise "none".
+	GuaranteeHeldBy string `json:"guaranteeHeldBy,omitempty"`
 }
 
 // ComponentLayerMetrics holds per-process metrics for a layered component (e.g. redis-internal vs cache-proxy).
