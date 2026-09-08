@@ -81,6 +81,7 @@ func (h *Handler) admitAndCreate(
 
 	status := statusProvisioning
 	expiresAt := sessionExpiresAt
+	queuedAhead := 0
 
 	if h.roomBudget != nil {
 		if admission.ExceedsRoom(h.roomBudget, weight) {
@@ -100,10 +101,18 @@ func (h *Handler) admitAndCreate(
 				return "", fmt.Errorf("%w: %w", errCountQueued, err)
 			}
 			if n >= h.maxDeployQueue {
+				h.recordAdmissionEvent(ctx, store.AdmissionEvent{
+					UserID:        userID,
+					Template:      design.Template,
+					Kind:          store.AdmissionKindQueueFull,
+					QueuePosition: intPtr(n),
+					Paid:          h.admissionPaid(ctx, userID),
+				})
 				return "", errQueueFull
 			}
 			status = statusQueued
 			expiresAt = time.Now().Add(h.queueTTL)
+			queuedAhead = n
 		}
 	}
 
@@ -125,6 +134,20 @@ func (h *Handler) admitAndCreate(
 	})
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", errCreateRow, err)
+	}
+	if status == statusQueued {
+		now := time.Now()
+		h.stampMetrics(ctx, namespace, map[string]any{
+			"queued_at": rfc3339UTC(now),
+		})
+		h.recordAdmissionEvent(ctx, store.AdmissionEvent{
+			UserID:        userID,
+			Namespace:     namespace,
+			Template:      design.Template,
+			Kind:          store.AdmissionKindRoomQueued,
+			QueuePosition: intPtr(queuedAhead + 1),
+			Paid:          h.admissionPaid(ctx, userID),
+		})
 	}
 	return status, nil
 }

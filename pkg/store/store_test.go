@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -34,6 +35,9 @@ func TestCreateAndUpdateDeployment(t *testing.T) {
 
 	id, err := s.CreateDeployment(ctx, params)
 	if err != nil {
+		if liveStoreCredentialsInvalid(err) {
+			t.Skipf("live Supabase credentials rejected: %v", err)
+		}
 		t.Fatalf("CreateDeployment: %v", err)
 	}
 	if id == "" {
@@ -52,6 +56,43 @@ func TestCreateAndUpdateDeployment(t *testing.T) {
 	if row.Status != "running" {
 		t.Errorf("expected status running, got %s", row.Status)
 	}
+}
+
+func TestLiveStoreCredentialsInvalid(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "unregistered", err: errString("store.CreateDeployment: () Unregistered API key"), want: true},
+		{name: "invalid key", err: errString("Invalid API key"), want: true},
+		{name: "logic error", err: errString("store.CreateDeployment: parse response"), want: false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := liveStoreCredentialsInvalid(tt.err); got != tt.want {
+				t.Fatalf("liveStoreCredentialsInvalid(%v) = %v want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+type errString string
+
+func (e errString) Error() string { return string(e) }
+
+func liveStoreCredentialsInvalid(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unregistered api key") ||
+		strings.Contains(msg, "invalid api key") ||
+		(strings.Contains(msg, "jwt") && strings.Contains(msg, "unauthorized"))
 }
 
 func TestListUserDeploymentHistory_requiresUser(t *testing.T) {
