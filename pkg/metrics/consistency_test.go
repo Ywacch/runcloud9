@@ -17,9 +17,10 @@ func (s *stubConsistencyProbeReader) Latest(string) (probes.ProbeResult, bool) {
 	return s.result, s.ok
 }
 
-func TestConsistencyDetector_RYWViolation(t *testing.T) {
+func TestConsistencyDetector_RYWFromTraffic(t *testing.T) {
 	t.Parallel()
 
+	// Probe reports staleness, but student RYW must follow app counters only.
 	reader := &stubConsistencyProbeReader{
 		ok: true,
 		result: probes.ProbeResult{
@@ -33,6 +34,7 @@ func TestConsistencyDetector_RYWViolation(t *testing.T) {
 	topo := TopologyFlags{HasDB: true}
 	dm := &DeploymentMetrics{Components: map[string]ComponentMetrics{"db": {Component: "db"}}}
 
+	cd.NoteAppTrafficConsistency(ns, appTrafficConsistency{RYWTotal: 1, ReplicaReads: 4, LeaderReads: 2})
 	ev := cd.Eval(ns, dm, topo, nil)
 	if len(ev) != 1 {
 		t.Fatalf("want 1 event, got %d", len(ev))
@@ -40,53 +42,88 @@ func TestConsistencyDetector_RYWViolation(t *testing.T) {
 	if ev[0].RuleID != ruleRYWViolation || ev[0].Type != "invariant" {
 		t.Fatalf("event: %+v", ev[0])
 	}
-	if ev[0].Detail["stalenessVersions"] != "2" {
+	if ev[0].Detail["source"] != "traffic" {
 		t.Fatalf("detail: %+v", ev[0].Detail)
 	}
-	if dm.Components["db"].Consistency == nil || dm.Components["db"].Consistency.RYWViolations != 1 {
-		t.Fatalf("consistency: %+v", dm.Components["db"].Consistency)
+	cons := dm.Components["db"].Consistency
+	if cons == nil || cons.RYWViolations != 1 {
+		t.Fatalf("consistency: %+v", cons)
 	}
-	if dm.Components["db"].Consistency.ReplicaStalenessVersions != 2 {
-		t.Fatalf("staleness: %+v", dm.Components["db"].Consistency)
+	if cons.ReplicaStalenessVersions != 2 {
+		t.Fatalf("probe lag should still surface: %+v", cons)
+	}
+	if cons.LeaderReads != 2 || cons.ReplicaReads != 4 {
+		t.Fatalf("route split: %+v", cons)
+	}
+	if cons.GuaranteeHeldBy != guaranteeHeldByNone {
+		t.Fatalf("guarantee without redirects: %+v", cons)
 	}
 
+	cd.NoteAppTrafficConsistency(ns, appTrafficConsistency{RYWTotal: 1, ReplicaReads: 4, LeaderReads: 2})
 	if again := cd.Eval(ns, dm, topo, nil); len(again) != 0 {
 		t.Fatalf("want suppression, got %d events", len(again))
 	}
 
-	reader.result.RYWStalenessVersions = 0
+	cd.NoteAppTrafficConsistency(ns, appTrafficConsistency{RYWTotal: 1, ReplicaReads: 5, LeaderReads: 2})
 	if clear := cd.Eval(ns, dm, topo, nil); len(clear) != 0 {
-		t.Fatalf("recovery tick should not fire: %+v", clear)
-	}
-	if dm.Components["db"].Consistency.ReplicaStalenessVersions != 0 {
-		t.Fatalf("expected zero staleness after recovery, got %+v", dm.Components["db"].Consistency)
+		t.Fatalf("stable total should clear latch without firing: %+v", clear)
 	}
 
-	reader.result.RYWStalenessVersions = 1
+	cd.NoteAppTrafficConsistency(ns, appTrafficConsistency{
+		RYWTotal:        2,
+		ReplicaReads:    5,
+		LeaderReads:     3,
+		LeaderRedirects: 1,
+	})
 	if refire := cd.Eval(ns, dm, topo, nil); len(refire) != 1 {
-		t.Fatalf("want refire after recovery, got %d", len(refire))
+		t.Fatalf("want refire after delta, got %d", len(refire))
 	}
-	if dm.Components["db"].Consistency.RYWViolations != 2 {
-		t.Fatalf("counter: %+v", dm.Components["db"].Consistency)
+	cons = dm.Components["db"].Consistency
+	if cons.RYWViolations != 2 {
+		t.Fatalf("counter: %+v", cons)
+	}
+	if cons.GuaranteeHeldBy != guaranteeHeldByApp {
+		t.Fatalf("want app guarantee after redirects, got %+v", cons)
 	}
 }
 
-func TestConsistencyDetector_MonotonicViolation(t *testing.T) {
+func TestConsistencyDetector_ProbeDoesNotEmitStudentRYW(t *testing.T) {
 	t.Parallel()
 
 	reader := &stubConsistencyProbeReader{
 		ok: true,
 		result: probes.ProbeResult{
-			WrittenVersion:     8,
-			ReplicaVersion:     4,
-			MonotonicViolation: true,
+			RYWStalenessVersions: 9,
+			MonotonicViolation:   true,
 		},
 	}
 	cd := NewConsistencyDetector(reader)
+	ns := "ns-probe-only"
+	topo := TopologyFlags{HasDB: true}
+	dm := &DeploymentMetrics{Components: map[string]ComponentMetrics{"db": {Component: "db"}}}
+
+	ev := cd.Eval(ns, dm, topo, nil)
+	if len(ev) != 0 {
+		t.Fatalf("probe must not emit student RYW/monotonic, got %d", len(ev))
+	}
+	cons := dm.Components["db"].Consistency
+	if cons == nil || cons.RYWViolations != 0 || cons.MonotonicViolations != 0 {
+		t.Fatalf("student counters must stay 0: %+v", cons)
+	}
+	if cons.ReplicaStalenessVersions != 9 {
+		t.Fatalf("canary lag missing: %+v", cons)
+	}
+}
+
+func TestConsistencyDetector_MonotonicFromTraffic(t *testing.T) {
+	t.Parallel()
+
+	cd := NewConsistencyDetector(&stubConsistencyProbeReader{ok: false})
 	ns := "ns-mono"
 	topo := TopologyFlags{HasDB: true}
 	dm := &DeploymentMetrics{Components: map[string]ComponentMetrics{"db": {Component: "db"}}}
 
+	cd.NoteAppTrafficConsistency(ns, appTrafficConsistency{MonoTotal: 1, ReplicaReads: 2})
 	ev := cd.Eval(ns, dm, topo, &templates.TemplateSpec{})
 	if len(ev) != 1 {
 		t.Fatalf("want 1 event, got %d", len(ev))
@@ -107,7 +144,7 @@ func TestConsistencyDetector_NoProbeResult(t *testing.T) {
 	dm := &DeploymentMetrics{Components: map[string]ComponentMetrics{"db": {Component: "db"}}}
 
 	if ev := cd.Eval(ns, dm, TopologyFlags{HasDB: true}, nil); len(ev) != 0 {
-		t.Fatalf("want no events without probe result, got %d", len(ev))
+		t.Fatalf("want no events without traffic, got %d", len(ev))
 	}
 	if dm.Components["db"].Consistency == nil {
 		t.Fatal("expected consistency block with zero counters")
@@ -115,24 +152,25 @@ func TestConsistencyDetector_NoProbeResult(t *testing.T) {
 	if dm.Components["db"].Consistency.RYWViolations != 0 {
 		t.Fatalf("consistency: %+v", dm.Components["db"].Consistency)
 	}
+	if dm.Components["db"].Consistency.GuaranteeHeldBy != guaranteeHeldByNone {
+		t.Fatalf("guarantee: %+v", dm.Components["db"].Consistency)
+	}
 }
 
 func TestConsistencyDetector_Cleanup(t *testing.T) {
 	t.Parallel()
 
-	reader := &stubConsistencyProbeReader{
-		ok:     true,
-		result: probes.ProbeResult{RYWStalenessVersions: 1},
-	}
-	cd := NewConsistencyDetector(reader)
+	cd := NewConsistencyDetector(&stubConsistencyProbeReader{ok: false})
 	ns := "ns-cleanup"
 	topo := TopologyFlags{HasDB: true}
 	dm := &DeploymentMetrics{Components: map[string]ComponentMetrics{"db": {Component: "db"}}}
 
+	cd.NoteAppTrafficConsistency(ns, appTrafficConsistency{RYWTotal: 1})
 	if ev := cd.Eval(ns, dm, topo, nil); len(ev) != 1 {
 		t.Fatalf("initial fire: %d", len(ev))
 	}
 	cd.Cleanup(ns)
+	cd.NoteAppTrafficConsistency(ns, appTrafficConsistency{RYWTotal: 1})
 	if ev := cd.Eval(ns, dm, topo, nil); len(ev) != 1 {
 		t.Fatalf("want refire after cleanup, got %d", len(ev))
 	}
@@ -144,7 +182,8 @@ func TestConsistencyDetector_Cleanup(t *testing.T) {
 func TestConsistencyDetector_SkipsWithoutDB(t *testing.T) {
 	t.Parallel()
 
-	cd := NewConsistencyDetector(&stubConsistencyProbeReader{ok: true, result: probes.ProbeResult{RYWStalenessVersions: 1}})
+	cd := NewConsistencyDetector(&stubConsistencyProbeReader{ok: false})
+	cd.NoteAppTrafficConsistency("ns", appTrafficConsistency{RYWTotal: 1})
 	dm := &DeploymentMetrics{Components: map[string]ComponentMetrics{"db": {Component: "db"}}}
 	if ev := cd.Eval("ns", dm, TopologyFlags{}, nil); len(ev) != 0 {
 		t.Fatalf("want no events without db topology, got %d", len(ev))

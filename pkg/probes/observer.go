@@ -53,6 +53,9 @@ type observerSession struct {
 }
 
 // Observer runs a slow background loop per deployment namespace.
+// Results are a lag/reachability canary for ConsistencyStatus (replicaStalenessVersions,
+// LastProbeError). Student-facing ryw_violation / monotonic_violation events are sourced
+// from app readrouter Prometheus counters, not from this loop.
 type Observer struct {
 	mu           sync.Mutex
 	sessions     map[string]*observerSession
