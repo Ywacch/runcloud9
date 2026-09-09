@@ -6,14 +6,25 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 type stubRow struct {
-	err error
+	err       error
+	tokenText string
 }
 
 func (s stubRow) Scan(dest ...any) error {
-	return s.err
+	if s.err != nil {
+		return s.err
+	}
+	for _, d := range dest {
+		if p, ok := d.(*string); ok && s.tokenText != "" {
+			*p = s.tokenText
+		}
+	}
+	return nil
 }
 
 type stubPool struct {
@@ -191,4 +202,194 @@ func TestQueryRead_leaderRouteUsesPrimaryTarget(t *testing.T) {
 	if route != RouteLeader || target != defaultWriteTarget {
 		t.Fatalf("route=%v target=%q", route, target)
 	}
+}
+
+func TestQueryRead_RYW_staleReplicaRedirectsLeader(t *testing.T) {
+	t.Parallel()
+
+	replica := stubPool{row: stubRow{tokenText: "0/1"}}
+	leader := stubPool{row: stubRow{}}
+	r := &ReadRouter{
+		engine:      PostgresEngine{},
+		policy:      PolicyRYW,
+		clients:     make(map[string]*clientState),
+		maxSize:     defaultMaxClients,
+		clientTTL:   defaultClientTTL,
+		writePool:   leader,
+		writeTarget: defaultWriteTarget,
+		readPools:   []replicaEntry{{pool: replica, host: "postgres-replica-0"}},
+	}
+	writeTok, err := r.engine.ParseToken("0/100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.AfterWrite("client-a", writeTok)
+
+	rywBefore := counterTotal(rywViolationsTotal)
+	redirectBefore := counterTotal(rywLeaderRedirectsTotal)
+
+	route, target, err := r.QueryRead(context.Background(), "client-a",
+		func(readTokenExpr string) (string, []any) {
+			return "SELECT 1, " + readTokenExpr, nil
+		},
+		func(row pgx.Row, replayToken *string) error {
+			if replayToken != nil {
+				return row.Scan(new(int), replayToken)
+			}
+			return row.Scan(new(int))
+		},
+	)
+	if err != nil {
+		t.Fatalf("QueryRead: %v", err)
+	}
+	if route != RouteLeader {
+		t.Fatalf("route: got %v want leader", route)
+	}
+	if target != defaultWriteTarget {
+		t.Fatalf("target: got %q want %q", target, defaultWriteTarget)
+	}
+	if counterTotal(rywViolationsTotal)-rywBefore != 0 {
+		t.Fatalf("ryw violations should not increment on redirect")
+	}
+	if counterTotal(rywLeaderRedirectsTotal)-redirectBefore != 1 {
+		t.Fatalf("expected one leader redirect")
+	}
+}
+
+func TestQueryRead_RYW_replicaCaughtUp(t *testing.T) {
+	t.Parallel()
+
+	replica := stubPool{row: stubRow{tokenText: "0/100"}}
+	leader := stubPool{row: stubRow{}}
+	r := &ReadRouter{
+		engine:      PostgresEngine{},
+		policy:      PolicyRYW,
+		clients:     make(map[string]*clientState),
+		maxSize:     defaultMaxClients,
+		clientTTL:   defaultClientTTL,
+		writePool:   leader,
+		writeTarget: defaultWriteTarget,
+		readPools:   []replicaEntry{{pool: replica, host: "postgres-replica-0"}},
+	}
+	writeTok, err := r.engine.ParseToken("0/100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.AfterWrite("client-a", writeTok)
+
+	route, target, err := r.QueryRead(context.Background(), "client-a",
+		func(readTokenExpr string) (string, []any) {
+			return "SELECT 1, " + readTokenExpr, nil
+		},
+		func(row pgx.Row, replayToken *string) error {
+			return row.Scan(new(int), replayToken)
+		},
+	)
+	if err != nil {
+		t.Fatalf("QueryRead: %v", err)
+	}
+	if route != RouteReplica {
+		t.Fatalf("route: got %v want replica", route)
+	}
+	if target != "postgres-replica-0" {
+		t.Fatalf("target: got %q", target)
+	}
+}
+
+func TestQueryRead_RYW_errNoRowsAfterWriteRedirectsLeader(t *testing.T) {
+	t.Parallel()
+
+	replica := stubPool{row: stubRow{err: pgx.ErrNoRows}}
+	leader := stubPool{row: stubRow{}}
+	r := &ReadRouter{
+		engine:      PostgresEngine{},
+		policy:      PolicyRYW,
+		clients:     make(map[string]*clientState),
+		maxSize:     defaultMaxClients,
+		clientTTL:   defaultClientTTL,
+		writePool:   leader,
+		writeTarget: defaultWriteTarget,
+		readPools:   []replicaEntry{{pool: replica, host: "postgres-replica-0"}},
+	}
+	writeTok, err := r.engine.ParseToken("0/100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.AfterWrite("client-a", writeTok)
+
+	redirectBefore := counterTotal(rywLeaderRedirectsTotal)
+
+	route, target, err := r.QueryRead(context.Background(), "client-a",
+		func(readTokenExpr string) (string, []any) {
+			return "SELECT 1, " + readTokenExpr, nil
+		},
+		func(row pgx.Row, replayToken *string) error {
+			return row.Scan(replayToken)
+		},
+	)
+	if err != nil {
+		t.Fatalf("QueryRead: %v", err)
+	}
+	if route != RouteLeader {
+		t.Fatalf("route: got %v want leader", route)
+	}
+	if target != defaultWriteTarget {
+		t.Fatalf("target: got %q want %q", target, defaultWriteTarget)
+	}
+	if counterTotal(rywLeaderRedirectsTotal)-redirectBefore != 1 {
+		t.Fatalf("expected one leader redirect after ErrNoRows")
+	}
+}
+
+func TestQueryRead_replicaPolicy_staleTokenServed(t *testing.T) {
+	t.Parallel()
+
+	replica := stubPool{row: stubRow{tokenText: "0/1"}}
+	leader := stubPool{row: stubRow{}}
+	r := &ReadRouter{
+		engine:      PostgresEngine{},
+		policy:      PolicyReplica,
+		clients:     make(map[string]*clientState),
+		maxSize:     defaultMaxClients,
+		clientTTL:   defaultClientTTL,
+		writePool:   leader,
+		writeTarget: defaultWriteTarget,
+		readPools:   []replicaEntry{{pool: replica, host: "postgres-replica-0"}},
+	}
+	writeTok, err := r.engine.ParseToken("0/100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.AfterWrite("client-a", writeTok)
+
+	staleBefore := counterTotal(replicaStaleReadsTotal)
+	rywBefore := counterTotal(rywViolationsTotal)
+
+	route, target, err := r.QueryRead(context.Background(), "client-a",
+		func(readTokenExpr string) (string, []any) {
+			return "SELECT 1, " + readTokenExpr, nil
+		},
+		func(row pgx.Row, replayToken *string) error {
+			return row.Scan(new(int), replayToken)
+		},
+	)
+	if err != nil {
+		t.Fatalf("QueryRead: %v", err)
+	}
+	if route != RouteReplica {
+		t.Fatalf("route: got %v want replica", route)
+	}
+	if target != "postgres-replica-0" {
+		t.Fatalf("target: got %q", target)
+	}
+	if counterTotal(replicaStaleReadsTotal)-staleBefore != 1 {
+		t.Fatalf("expected replica stale counter increment")
+	}
+	if counterTotal(rywViolationsTotal)-rywBefore != 0 {
+		t.Fatalf("ryw violations should not increment under replica policy")
+	}
+}
+
+func counterTotal(c prometheus.Counter) float64 {
+	return testutil.ToFloat64(c)
 }

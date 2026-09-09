@@ -8,6 +8,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+var errRYWRedirectLeader = errors.New("readrouter: ryw redirect to leader")
+
 // QueryRead executes a single-row read on the routed pool.
 // build receives readTokenExpr when routed to replica; include it as the last
 // selected column (text). scan must read application columns and, when
@@ -26,11 +28,28 @@ func (r *ReadRouter) QueryRead(
 		return RouteLeader, r.leaderTarget(), fmt.Errorf("readrouter: nil write pool")
 	}
 
-	route := r.RouteRead(clientID, r.policy)
-	if route == RouteReplica && len(r.readPools) > 0 {
-		target, err := r.queryReplicaRoundRobin(ctx, clientID, build, scan)
-		if err == nil || errors.Is(err, pgx.ErrNoRows) {
-			return RouteReplica, target, err
+	pol := r.policy
+	if len(r.readPools) > 0 {
+		switch pol {
+		case PolicyRYW, PolicyRYWMonotonic:
+			target, err := r.queryReplicaRoundRobin(ctx, clientID, build, scan, true)
+			if errors.Is(err, errRYWRedirectLeader) {
+				rywLeaderRedirectsTotal.Inc()
+			} else if err == nil || errors.Is(err, pgx.ErrNoRows) {
+				return RouteReplica, target, err
+			} else if !shouldFailover(err) {
+				return RouteReplica, target, err
+			}
+		default:
+			if r.RouteRead(clientID, pol) == RouteReplica {
+				target, err := r.queryReplicaRoundRobin(ctx, clientID, build, scan, false)
+				if err == nil || errors.Is(err, pgx.ErrNoRows) {
+					return RouteReplica, target, err
+				}
+				if !shouldFailover(err) {
+					return RouteReplica, target, err
+				}
+			}
 		}
 	}
 
@@ -58,6 +77,7 @@ func (r *ReadRouter) queryReplicaRoundRobin(
 	clientID string,
 	build func(readTokenExpr string) (sql string, args []any),
 	scan func(row pgx.Row, replayToken *string) error,
+	rywRedirect bool,
 ) (string, error) {
 	tokenExpr := r.engine.ReadTokenExpr()
 	start := r.nextReplicaStart()
@@ -72,17 +92,25 @@ func (r *ReadRouter) queryReplicaRoundRobin(
 		row := entry.pool.QueryRow(ctx, sql, args...)
 		err := scan(row, replayToken)
 		if err == nil {
-			dbReadTotal.WithLabelValues(RouteReplica.String()).Inc()
 			if tokenText != "" {
 				tok, parseErr := r.engine.ParseToken(tokenText)
 				if parseErr != nil {
 					return entry.host, fmt.Errorf("parse replay token: %w", parseErr)
 				}
+				if rywRedirect && r.tokenBehindLastWrite(clientID, tok) {
+					return "", errRYWRedirectLeader
+				}
+				dbReadTotal.WithLabelValues(RouteReplica.String()).Inc()
 				r.RecordRead(clientID, tok)
+				return entry.host, nil
 			}
+			dbReadTotal.WithLabelValues(RouteReplica.String()).Inc()
 			return entry.host, nil
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
+			if rywRedirect && r.hasLastWrite(clientID) {
+				return "", errRYWRedirectLeader
+			}
 			dbReadTotal.WithLabelValues(RouteReplica.String()).Inc()
 			return entry.host, err
 		}

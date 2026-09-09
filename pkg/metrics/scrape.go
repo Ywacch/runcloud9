@@ -201,9 +201,11 @@ func (c *MetricsCollector) scrapeAppTrafficConsistency(ctx context.Context, nsSe
 	ryw, _, _ := c.queryScalar(ctx, fmt.Sprintf(`sum(ryw_violations_total{%s})`, nsSel))
 	mono, _, _ := c.queryScalar(ctx, fmt.Sprintf(`sum(monotonic_violations_total{%s})`, nsSel))
 	redirects, _, _ := c.queryScalar(ctx, fmt.Sprintf(`sum(ryw_leader_redirects_total{%s})`, nsSel))
+	stale, _, _ := c.queryScalar(ctx, fmt.Sprintf(`sum(replica_stale_reads_total{%s})`, nsSel))
 	out.RYWTotal = ryw
 	out.MonoTotal = mono
 	out.LeaderRedirects = redirects
+	out.ReplicaStaleTotal = stale
 
 	byRoute := c.queryMultiResult(ctx, fmt.Sprintf(`sum(db_read_total{%s}) by (route)`, nsSel), "route")
 	out.LeaderReads = int64(byRoute["leader"] + 0.5)

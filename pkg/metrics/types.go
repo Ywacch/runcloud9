@@ -242,6 +242,8 @@ type ConsistencyStatus struct {
 	// LeaderReads / ReplicaReads are cumulative app db_read_total by route (read offload split).
 	LeaderReads  int64 `json:"leaderReads"`
 	ReplicaReads int64 `json:"replicaReads"`
+	// ReplicaStaleReads is cumulative replica_stale_reads_total (eventual policy tradeoff).
+	ReplicaStaleReads int64 `json:"replicaStaleReads"`
 	// GuaranteeHeldBy is "app" when the in-app read router has redirected for RYW,
 	// "db" when remote_apply holds it (Phase 2.6), otherwise "none".
 	GuaranteeHeldBy string `json:"guaranteeHeldBy,omitempty"`

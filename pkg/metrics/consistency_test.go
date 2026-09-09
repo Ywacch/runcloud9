@@ -17,6 +17,30 @@ func (s *stubConsistencyProbeReader) Latest(string) (probes.ProbeResult, bool) {
 	return s.result, s.ok
 }
 
+func TestConsistencyDetector_ReplicaStaleReadsOnStatus(t *testing.T) {
+	t.Parallel()
+
+	cd := NewConsistencyDetector(&stubConsistencyProbeReader{ok: false})
+	ns := "ns-stale"
+	topo := TopologyFlags{HasDB: true}
+	dm := &DeploymentMetrics{Components: map[string]ComponentMetrics{"db": {Component: "db"}}}
+
+	cd.NoteAppTrafficConsistency(ns, appTrafficConsistency{
+		ReplicaStaleTotal: 3,
+		ReplicaReads:      10,
+		LeaderReads:       2,
+	})
+	cd.Eval(ns, dm, topo, nil)
+
+	cons := dm.Components["db"].Consistency
+	if cons == nil || cons.ReplicaStaleReads != 3 {
+		t.Fatalf("replica stale reads: %+v", cons)
+	}
+	if cons.RYWViolations != 0 {
+		t.Fatalf("stale reads must not emit RYW violations: %+v", cons)
+	}
+}
+
 func TestConsistencyDetector_RYWFromTraffic(t *testing.T) {
 	t.Parallel()
 

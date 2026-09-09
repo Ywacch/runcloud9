@@ -25,11 +25,12 @@ type cacheStaleSample struct {
 
 // appTrafficConsistency is scraped readrouter Prometheus state for one Collect tick.
 type appTrafficConsistency struct {
-	RYWTotal        float64
-	MonoTotal       float64
-	LeaderReads     int64
-	ReplicaReads    int64
-	LeaderRedirects float64
+	RYWTotal          float64
+	MonoTotal         float64
+	LeaderReads       int64
+	ReplicaReads      int64
+	LeaderRedirects   float64
+	ReplicaStaleTotal float64
 }
 
 // ConsistencyDetector turns observer probe snapshots into L1 invariant events and db consistency counters.
@@ -209,6 +210,7 @@ func (cd *ConsistencyDetector) statusFor(namespace string, result probes.ProbeRe
 		CacheDbStale:        cd.violationCount(namespace, ruleCacheDbStale),
 		LeaderReads:         traffic.LeaderReads,
 		ReplicaReads:        traffic.ReplicaReads,
+		ReplicaStaleReads:   int64(traffic.ReplicaStaleTotal + 0.5),
 		GuaranteeHeldBy:     guaranteeHeldByFromTraffic(traffic),
 	}
 	if sample, has := cd.sampleFor(namespace); has {
