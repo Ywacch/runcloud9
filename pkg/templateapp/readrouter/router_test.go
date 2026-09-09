@@ -2,6 +2,8 @@ package readrouter
 
 import (
 	"testing"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestParseLSN_roundTripAndMalformed(t *testing.T) {
@@ -190,13 +192,21 @@ func TestReadRouter_RecordRead_violations(t *testing.T) {
 		}
 	})
 
-	t.Run("replica policy no ryw", func(t *testing.T) {
+	t.Run("replica policy stale read counter", func(t *testing.T) {
 		t.Parallel()
 		r := NewReadRouter(nil, nil, eng, PolicyReplica)
 		r.AfterWrite("c1", writeTok)
+		staleBefore := testutil.ToFloat64(replicaStaleReadsTotal)
+		rywBefore := testutil.ToFloat64(rywViolationsTotal)
 		ryw, mono := r.RecordRead("c1", staleRead)
 		if ryw || mono {
 			t.Fatalf("ryw=%v mono=%v want neither", ryw, mono)
+		}
+		if testutil.ToFloat64(replicaStaleReadsTotal)-staleBefore != 1 {
+			t.Fatalf("expected replica stale counter increment")
+		}
+		if testutil.ToFloat64(rywViolationsTotal)-rywBefore != 0 {
+			t.Fatalf("ryw violations must not increment under replica policy")
 		}
 	})
 }

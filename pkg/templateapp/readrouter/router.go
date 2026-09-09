@@ -196,6 +196,23 @@ func (r *ReadRouter) RouteRead(clientID string, pol RoutingPolicy) Route {
 	}
 }
 
+func (r *ReadRouter) hasLastWrite(clientID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st := r.clients[clientID]
+	return st != nil && st.lastWrite != nil
+}
+
+func (r *ReadRouter) tokenBehindLastWrite(clientID string, token ConsistencyToken) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st := r.clients[clientID]
+	if st == nil || st.lastWrite == nil {
+		return false
+	}
+	return !token.GTE(st.lastWrite)
+}
+
 func (r *ReadRouter) needsLeaderForRYW(clientID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -241,7 +258,9 @@ func (r *ReadRouter) RecordRead(clientID string, t ConsistencyToken) (rywViolati
 			rywViolationsTotal.Inc()
 		}
 	case PolicyReplica:
-		// replica policy does not emit RYW violations
+		if st.lastWrite != nil && !t.GTE(st.lastWrite) {
+			replicaStaleReadsTotal.Inc()
+		}
 	}
 
 	switch r.policy {

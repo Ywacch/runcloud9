@@ -31,4 +31,10 @@ var (
 			Help: "Reads redirected to leader to satisfy read-your-writes",
 		},
 	)
+	replicaStaleReadsTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "replica_stale_reads_total",
+			Help: "Replica reads served while the replica token was behind the client's last write (eventual policy; not a broken RYW guarantee)",
+		},
+	)
 )
