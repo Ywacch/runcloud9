@@ -1085,6 +1085,145 @@ func TestHandleCreateDeployment_RoomBudget_UnsetSkipsGate(t *testing.T) {
 	}
 }
 
+func testURLShortenerDeployBody() ([]byte, deployer.DeploymentDesign) {
+	body := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "standard",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app", Type: "app-server", Name: "app", Config: map[string]interface{}{}},
+			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app", TargetID: "db"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+	return raw, body
+}
+
+func TestHandleCreateDeployment_DuplicateCreateCooldown_InternalTier(t *testing.T) {
+	t.Setenv("ENV", "development")
+	t.Setenv("SUPABASE_JWT_SECRET", "")
+	t.Setenv("SUPABASE_URL", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "")
+
+	s := newFakeDeploymentStore()
+	s.users = map[string]store.UserRecord{
+		"dev-user": {IsInternal: true},
+	}
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	raw, _ := testURLShortenerDeployBody()
+
+	firstReq := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	firstReq.Header.Set("Content-Type", "application/json")
+	firstRec := httptest.NewRecorder()
+	mux.ServeHTTP(firstRec, firstReq)
+	if firstRec.Code != http.StatusCreated {
+		t.Fatalf("first create: want 201, got %d body=%s", firstRec.Code, firstRec.Body.String())
+	}
+
+	secondReq := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	secondReq.Header.Set("Content-Type", "application/json")
+	secondRec := httptest.NewRecorder()
+	mux.ServeHTTP(secondRec, secondReq)
+	if secondRec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second create: want 429, got %d body=%s", secondRec.Code, secondRec.Body.String())
+	}
+	var er struct {
+		Error  string `json:"error"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(secondRec.Body.Bytes(), &er); err != nil {
+		t.Fatal(err)
+	}
+	if er.Reason != "duplicate_create" {
+		t.Fatalf("reason = %q, want duplicate_create body=%s", er.Reason, secondRec.Body.String())
+	}
+	if er.Error != userAtCapacityMessage {
+		t.Fatalf("error = %q, want %q", er.Error, userAtCapacityMessage)
+	}
+}
+
+func TestHandleCreateDeployment_DuplicateCreateCooldown_BurstHeader(t *testing.T) {
+	t.Setenv("ENV", "development")
+	t.Setenv("SUPABASE_JWT_SECRET", "")
+	t.Setenv("SUPABASE_URL", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "")
+
+	s := newFakeDeploymentStore()
+	s.users = map[string]store.UserRecord{
+		"dev-user": {IsInternal: true},
+	}
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	raw, _ := testURLShortenerDeployBody()
+
+	firstReq := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	firstReq.Header.Set("Content-Type", "application/json")
+	firstReq.Header.Set("X-Cloud9-Batch-Launch", "1")
+	firstRec := httptest.NewRecorder()
+	mux.ServeHTTP(firstRec, firstReq)
+	if firstRec.Code != http.StatusCreated {
+		t.Fatalf("first burst create: want 201, got %d body=%s", firstRec.Code, firstRec.Body.String())
+	}
+
+	secondReq := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	secondReq.Header.Set("Content-Type", "application/json")
+	secondReq.Header.Set("X-Cloud9-Batch-Launch", "1")
+	secondRec := httptest.NewRecorder()
+	mux.ServeHTTP(secondRec, secondReq)
+	if secondRec.Code != http.StatusCreated {
+		t.Fatalf("second burst create: want 201, got %d body=%s", secondRec.Code, secondRec.Body.String())
+	}
+}
+
+func TestHandleCreateDeployment_DuplicateCreateCooldown_OldActiveAllowed(t *testing.T) {
+	t.Setenv("ENV", "development")
+	t.Setenv("SUPABASE_JWT_SECRET", "")
+	t.Setenv("SUPABASE_URL", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "")
+
+	s := newFakeDeploymentStore()
+	s.users = map[string]store.UserRecord{
+		"dev-user": {IsInternal: true},
+	}
+	existingNS := "existing-internal-old"
+	s.byNS[existingNS] = store.DeploymentRow{
+		ID:        "existing-old",
+		UserID:    "dev-user",
+		Namespace: existingNS,
+		Status:    "running",
+		CreatedAt: time.Now().Add(-1 * time.Minute),
+	}
+	s.active = append(s.active, store.ActiveDeploymentRow{
+		ID:        "existing-old",
+		Namespace: existingNS,
+		Status:    "running",
+		CreatedAt: time.Now().Add(-1 * time.Minute),
+	})
+
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	raw, _ := testURLShortenerDeployBody()
+	req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("second lab after 1m: want 201, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleCreateDeployment_ConcurrentLimit_InternalTier(t *testing.T) {
 	t.Setenv("ENV", "development")
 	t.Setenv("SUPABASE_JWT_SECRET", "")
@@ -1116,18 +1255,7 @@ func TestHandleCreateDeployment_ConcurrentLimit_InternalTier(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	body := deployer.DeploymentDesign{
-		Template:  "url-shortener",
-		Archetype: "standard",
-		Nodes: []deployer.DeploymentNode{
-			{ID: "app", Type: "app-server", Name: "app", Config: map[string]interface{}{}},
-			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
-		},
-		Connections: []deployer.DeploymentConn{
-			{SourceID: "app", TargetID: "db"},
-		},
-	}
-	raw, _ := json.Marshal(body)
+	raw, _ := testURLShortenerDeployBody()
 
 	atLimitReq := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
 	atLimitReq.Header.Set("Content-Type", "application/json")

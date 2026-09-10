@@ -129,6 +129,9 @@ func (c *apiClient) doJSONStatus(ctx context.Context, method, path string, body 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if method == http.MethodPost && path == "/deployments" {
+		req.Header.Set("X-Cloud9-Batch-Launch", "1")
+	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return 0, err

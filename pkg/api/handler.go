@@ -458,9 +458,10 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 
 	status := statusProvisioning
 	if h.store != nil {
+		allowBurst := strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Cloud9-Batch-Launch")), "1")
 		h.admitMu.Lock()
 		var admitErr error
-		status, admitErr = h.admitAndCreate(r.Context(), userID, limits.MaxConcurrent, limits.MaxSessionsPerMonth, design, resourceQuotaTier, namespace, sessionExpiresAt)
+		status, admitErr = h.admitAndCreate(r.Context(), userID, limits.MaxConcurrent, limits.MaxSessionsPerMonth, design, resourceQuotaTier, namespace, sessionExpiresAt, allowBurst)
 		h.admitMu.Unlock()
 		if admitErr != nil {
 			log.Printf("admit create deployment: %v", admitErr)
