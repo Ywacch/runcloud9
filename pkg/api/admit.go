@@ -22,7 +22,10 @@ const (
 )
 
 var (
-	errUserAtCapacity       = errors.New("user at concurrent deployment capacity")
+	errUserAtCapacity = errors.New("user at concurrent deployment capacity")
+	// errDuplicateCreate is returned when a non-burst create follows another active
+	// deployment created within duplicateCreateWindow on the same API replica.
+	errDuplicateCreate      = errors.New("duplicate create within cooldown")
 	errMonthlySessionLimit  = errors.New("monthly session limit reached")
 	errClusterBusy          = errors.New("cluster deploy budget full")
 	errQueueFull            = errors.New("deploy queue full")
@@ -38,11 +41,31 @@ var (
 const (
 	designExceedsClusterMessage = "this design needs more CPU or memory than the cluster provides"
 	monthlySessionLimitMessage  = "monthly session limit reached — upgrade or wait until next month"
+	userAtCapacityMessage       = "you already have an active deployment — end it before creating another"
+
+	duplicateCreateWindow = 3 * time.Second
 )
 
-// admitAndCreate enforces per-user concurrency, monthly session caps, and optional
-// room budget, then inserts the deployment row as provisioning or queued.
+// hasRecentActiveCreate reports whether any active row was created within window of now.
+// Rows with zero CreatedAt are treated as not recent (e.g. test fixtures).
+func hasRecentActiveCreate(active []store.ActiveDeploymentRow, now time.Time, window time.Duration) bool {
+	for _, row := range active {
+		if row.CreatedAt.IsZero() {
+			continue
+		}
+		if now.Sub(row.CreatedAt) < window {
+			return true
+		}
+	}
+	return false
+}
+
+// admitAndCreate enforces per-user concurrency, a short duplicate-create cooldown
+// (unless allowBurst), monthly session caps, and optional room budget, then inserts
+// the deployment row as provisioning or queued.
 // Caller must hold h.admitMu for the duration on a single-replica API.
+// The duplicate-create check is best-effort on one replica; burst callers opt out
+// via allowBurst (X-Cloud9-Batch-Launch).
 //
 // Returns the persisted status ("provisioning" or "queued").
 func (h *Handler) admitAndCreate(
@@ -54,6 +77,7 @@ func (h *Handler) admitAndCreate(
 	resourceQuotaTier string,
 	namespace string,
 	sessionExpiresAt time.Time,
+	allowBurst bool,
 ) (string, error) {
 	if h.store == nil {
 		return statusProvisioning, nil
@@ -62,6 +86,9 @@ func (h *Handler) admitAndCreate(
 	active, err := h.store.ListActiveDeployments(ctx, userID)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", errListActive, err)
+	}
+	if !allowBurst && hasRecentActiveCreate(active, time.Now(), duplicateCreateWindow) {
+		return "", errDuplicateCreate
 	}
 	if len(active) >= maxConcurrent {
 		return "", errUserAtCapacity
@@ -207,7 +234,9 @@ func writeMonthlySessionLimit(w http.ResponseWriter) {
 func writeAdmitError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errUserAtCapacity):
-		writeError(w, http.StatusTooManyRequests, "you already have an active deployment — end it before creating another")
+		writeError(w, http.StatusTooManyRequests, userAtCapacityMessage)
+	case errors.Is(err, errDuplicateCreate):
+		writeErrorWithReason(w, http.StatusTooManyRequests, userAtCapacityMessage, "duplicate_create")
 	case errors.Is(err, errMonthlySessionLimit):
 		writeMonthlySessionLimit(w)
 	case errors.Is(err, errDesignExceedsCluster):
