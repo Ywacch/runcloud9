@@ -20,6 +20,7 @@ type currentUserLimitsResponse struct {
 	AllowMQWorker        bool   `json:"allowMQWorker"`
 	AllowProxyCache      bool   `json:"allowProxyCache"`
 	MaxInstanceSize      string `json:"maxInstanceSize"`
+	MaxLoadgenRps        int    `json:"maxLoadgenRps"`
 }
 
 // currentUserResponse is the authenticated caller profile returned by GET /me.
@@ -69,6 +70,7 @@ func currentUserLimitsFromStore(limits store.TierLimits) currentUserLimitsRespon
 		AllowMQWorker:        limits.AllowMQWorker,
 		AllowProxyCache:      limits.AllowProxyCache,
 		MaxInstanceSize:      limits.MaxInstanceSize,
+		MaxLoadgenRps:        limits.MaxLoadgenRPS,
 	}
 	if limits.MaxSessionsPerMonth > 0 {
 		max := limits.MaxSessionsPerMonth

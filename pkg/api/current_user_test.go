@@ -33,26 +33,28 @@ func TestHandleGetCurrentUser(t *testing.T) {
 	futureRFC := future.Format(time.RFC3339)
 
 	tests := []struct {
-		name       string
-		env        string
-		user       store.UserRecord
-		userErr    error
-		wantTier   string
-		wantQuota  string
-		wantStatus int
-		wantLB     bool
-		wantMaxRep int32
-		wantMaxSz  string
+		name              string
+		env               string
+		user              store.UserRecord
+		userErr           error
+		wantTier          string
+		wantQuota         string
+		wantStatus        int
+		wantLB            bool
+		wantMaxRep        int32
+		wantMaxSz         string
+		wantMaxLoadgenRps int
 	}{
 		{
-			name:       "free tier dev default",
-			env:        "development",
-			wantTier:   store.TierFree,
-			wantQuota:  "explorer",
-			wantStatus: http.StatusOK,
-			wantLB:     true,
-			wantMaxRep: 3,
-			wantMaxSz:  store.InstanceSizeMedium,
+			name:              "free tier dev default",
+			env:               "development",
+			wantTier:          store.TierFree,
+			wantQuota:         "explorer",
+			wantStatus:        http.StatusOK,
+			wantLB:            true,
+			wantMaxRep:        3,
+			wantMaxSz:         store.InstanceSizeMedium,
+			wantMaxLoadgenRps: store.LoadgenRPSCapFree,
 		},
 		{
 			name: "engineer tier",
@@ -60,24 +62,26 @@ func TestHandleGetCurrentUser(t *testing.T) {
 				IsPremium:        true,
 				PremiumExpiresAt: &future,
 			},
-			wantTier:   store.TierEngineer,
-			wantQuota:  store.TierEngineer,
-			wantStatus: http.StatusOK,
-			wantLB:     true,
-			wantMaxRep: 3,
-			wantMaxSz:  store.InstanceSizeLarge,
+			wantTier:          store.TierEngineer,
+			wantQuota:         store.TierEngineer,
+			wantStatus:        http.StatusOK,
+			wantLB:            true,
+			wantMaxRep:        3,
+			wantMaxSz:         store.InstanceSizeLarge,
+			wantMaxLoadgenRps: store.LoadgenRPSCapEngineer,
 		},
 		{
 			name: "internal tier",
 			user: store.UserRecord{
 				IsInternal: true,
 			},
-			wantTier:   store.TierInternal,
-			wantQuota:  store.TierInternal,
-			wantStatus: http.StatusOK,
-			wantLB:     true,
-			wantMaxRep: 3,
-			wantMaxSz:  store.InstanceSizeLarge,
+			wantTier:          store.TierInternal,
+			wantQuota:         store.TierInternal,
+			wantStatus:        http.StatusOK,
+			wantLB:            true,
+			wantMaxRep:        3,
+			wantMaxSz:         store.InstanceSizeLarge,
+			wantMaxLoadgenRps: store.LoadgenRPSCapInternal,
 		},
 		{
 			name:       "missing user production",
@@ -133,6 +137,9 @@ func TestHandleGetCurrentUser(t *testing.T) {
 			}
 			if out.Limits.MaxInstanceSize != tt.wantMaxSz {
 				t.Fatalf("maxInstanceSize: got %q want %q", out.Limits.MaxInstanceSize, tt.wantMaxSz)
+			}
+			if out.Limits.MaxLoadgenRps != tt.wantMaxLoadgenRps {
+				t.Fatalf("maxLoadgenRps: got %d want %d", out.Limits.MaxLoadgenRps, tt.wantMaxLoadgenRps)
 			}
 			switch tt.wantTier {
 			case store.TierFree:

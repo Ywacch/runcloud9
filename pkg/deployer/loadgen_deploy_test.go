@@ -6,6 +6,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -35,6 +36,10 @@ func TestDeployLoadgen_CreatesDeploymentAndService(t *testing.T) {
 	if req.String() != "250m" {
 		t.Fatalf("cpu request: got %s want 250m", req.String())
 	}
+	mem := dep.Spec.Template.Spec.Containers[0].Resources.Requests[corev1.ResourceMemory]
+	if mem.String() != "256Mi" {
+		t.Fatalf("memory request: got %s want 256Mi", mem.String())
+	}
 
 	svc, err := cs.CoreV1().Services(ns).Get(context.Background(), loadgenService, metav1.GetOptions{})
 	if err != nil {
@@ -48,16 +53,24 @@ func TestDeployLoadgen_CreatesDeploymentAndService(t *testing.T) {
 func TestDeployLoadgen_EngineerTierResources(t *testing.T) {
 	t.Parallel()
 	res := loadgenResources("engineer")
+	cpu := res.Limits[corev1.ResourceCPU]
 	mem := res.Limits[corev1.ResourceMemory]
-	if mem.String() != "1Gi" {
-		t.Fatalf("engineer memory: got %s want 1Gi", mem.String())
+	if cpu.String() != "500m" {
+		t.Fatalf("engineer cpu: got %s want 500m", cpu.String())
+	}
+	if mem.String() != "512Mi" {
+		t.Fatalf("engineer memory: got %s want 512Mi", mem.String())
 	}
 }
 
 func TestDeployLoadgen_InternalTierResources(t *testing.T) {
 	t.Parallel()
 	res := loadgenResources("internal")
+	cpu := res.Limits[corev1.ResourceCPU]
 	mem := res.Limits[corev1.ResourceMemory]
+	if cpu.Cmp(resource.MustParse("1000m")) != 0 {
+		t.Fatalf("internal cpu: got %s want 1000m", cpu.String())
+	}
 	if mem.String() != "1Gi" {
 		t.Fatalf("internal memory: got %s want 1Gi", mem.String())
 	}

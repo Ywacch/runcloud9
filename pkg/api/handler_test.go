@@ -1536,6 +1536,88 @@ func TestHandleUpdateLoadGen_badRPS(t *testing.T) {
 	}
 }
 
+func TestHandleStartLoadGen_tierRPSCap(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		user       store.UserRecord
+		rps        int
+		wantStatus int
+	}{
+		{
+			name:       "free over cap",
+			user:       store.UserRecord{},
+			rps:        store.LoadgenRPSCapFree + 1,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name: "engineer at cap",
+			user: store.UserRecord{
+				IsPremium:        true,
+				PremiumExpiresAt: ptrTime(time.Now().Add(24 * time.Hour)),
+			},
+			rps:        store.LoadgenRPSCapEngineer,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name: "engineer over cap",
+			user: store.UserRecord{
+				IsPremium:        true,
+				PremiumExpiresAt: ptrTime(time.Now().Add(24 * time.Hour)),
+			},
+			rps:        store.LoadgenRPSCapEngineer + 1,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "internal at cap",
+			user:       store.UserRecord{IsInternal: true},
+			rps:        store.LoadgenRPSCapInternal,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "internal over cap",
+			user:       store.UserRecord{IsInternal: true},
+			rps:        store.LoadgenRPSCapInternal + 1,
+			wantStatus: http.StatusForbidden,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			lg := loadgen.NewLoadGenerator()
+			s := newFakeDeploymentStore()
+			s.users = map[string]store.UserRecord{"dev-user": tt.user}
+			s.byNS["ns-tier"] = store.DeploymentRow{
+				Namespace: "ns-tier",
+				UserID:    "dev-user",
+				Template:  "url-shortener",
+			}
+			h := NewHandler(nil, s, nil, nil, nil, nil, nil, lg, nil)
+			mux := http.NewServeMux()
+			h.RegisterRoutes(mux)
+
+			body := fmt.Sprintf(`{"template":"url-shortener","rps":%d}`, tt.rps)
+			req := httptest.NewRequest(http.MethodPost, "/deployments/ns-tier/loadgen", strings.NewReader(body))
+			req = req.WithContext(context.WithValue(req.Context(), userIDKey, "dev-user"))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status: want %d, got %d body=%s", tt.wantStatus, rec.Code, rec.Body.String())
+			}
+			_ = lg.Stop(context.Background(), "ns-tier")
+		})
+	}
+}
+
+func ptrTime(t time.Time) *time.Time {
+	return &t
+}
+
 func TestHandleStartLoadGen_RequestBodyTooLarge(t *testing.T) {
 	t.Parallel()
 	lg := loadgen.NewLoadGenerator()

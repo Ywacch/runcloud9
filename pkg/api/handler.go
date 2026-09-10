@@ -948,6 +948,10 @@ func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.validateLoadgenRPSForRequest(w, r, profile.RPS) {
+		return
+	}
+
 	if profile.BaseURL == "" && row != nil && designHasLoadBalancer(row.Design) {
 		profile.BaseURL = fmt.Sprintf("http://lb.%s.svc.cluster.local:80", namespace)
 	}
@@ -1050,8 +1054,7 @@ func (h *Handler) handleUpdateLoadGen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.RPS != nil {
-		if err := loadgen.ValidateLiveRPS(*body.RPS); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+		if !h.validateLoadgenRPSForRequest(w, r, *body.RPS) {
 			return
 		}
 	}
