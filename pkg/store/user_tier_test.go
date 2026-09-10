@@ -63,21 +63,22 @@ func TestGetTierLimits(t *testing.T) {
 		wantAllowMQWorker   bool
 		wantAllowProxyCache bool
 		wantMaxInstanceSize string
+		wantMaxLoadgenRPS   int
 	}{
 		{
 			tier: TierFree, wantConcurrent: 1, wantSessionCap: 9, wantMonthlySessions: 3, wantAllTemplates: false,
 			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
-			wantMaxInstanceSize: InstanceSizeMedium,
+			wantMaxInstanceSize: InstanceSizeMedium, wantMaxLoadgenRPS: LoadgenRPSCapFree,
 		},
 		{
 			tier: TierEngineer, wantConcurrent: 1, wantSessionCap: 15, wantMonthlySessions: 20, wantAllTemplates: true,
 			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
-			wantMaxInstanceSize: InstanceSizeLarge,
+			wantMaxInstanceSize: InstanceSizeLarge, wantMaxLoadgenRPS: LoadgenRPSCapEngineer,
 		},
 		{
 			tier: TierInternal, wantConcurrent: 40, wantSessionCap: 30, wantMonthlySessions: 0, wantAllTemplates: true,
 			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
-			wantMaxInstanceSize: InstanceSizeLarge,
+			wantMaxInstanceSize: InstanceSizeLarge, wantMaxLoadgenRPS: LoadgenRPSCapInternal,
 		},
 	}
 	for _, tt := range tests {
@@ -111,6 +112,9 @@ func TestGetTierLimits(t *testing.T) {
 			}
 			if got.MaxInstanceSize != tt.wantMaxInstanceSize {
 				t.Fatalf("MaxInstanceSize = %q, want %q", got.MaxInstanceSize, tt.wantMaxInstanceSize)
+			}
+			if got.MaxLoadgenRPS != tt.wantMaxLoadgenRPS {
+				t.Fatalf("MaxLoadgenRPS = %d, want %d", got.MaxLoadgenRPS, tt.wantMaxLoadgenRPS)
 			}
 			topo := got.TopologyLimits()
 			if topo.AllowProxyCache != tt.wantAllowProxyCache {

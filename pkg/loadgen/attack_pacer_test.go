@@ -129,3 +129,16 @@ func TestValidateLiveRPS(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestValidateLiveRPSForTier(t *testing.T) {
+	t.Parallel()
+	if err := ValidateLiveRPSForTier(501, 500); err == nil {
+		t.Fatal("expected tier cap error")
+	}
+	if err := ValidateLiveRPSForTier(500, 500); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateLiveRPSForTier(2000, 0); err != nil {
+		t.Fatal("tierMax 0 should skip tier check")
+	}
+}

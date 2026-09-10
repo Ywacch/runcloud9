@@ -474,6 +474,18 @@ func ValidateLiveRPS(rps int) error {
 	return nil
 }
 
+// ValidateLiveRPSForTier applies ValidateLiveRPS then a subscription tier ceiling.
+// tierMax <= 0 skips the tier check (store unavailable in tests).
+func ValidateLiveRPSForTier(rps int, tierMax int) error {
+	if err := ValidateLiveRPS(rps); err != nil {
+		return err
+	}
+	if tierMax > 0 && rps > tierMax {
+		return fmt.Errorf("loadgen: rps must be at most %d for your subscription tier", tierMax)
+	}
+	return nil
+}
+
 // ValidateLiveDistribution rejects unknown keys, negative weights, or all-zero mixes.
 // Every endpoint declared for templateID must appear in dist.
 func ValidateLiveDistribution(templateID string, dist map[string]int) error {

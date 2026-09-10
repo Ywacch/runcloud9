@@ -43,7 +43,7 @@ func TestEnsureNamespaceResourceQuota_createsQuota(t *testing.T) {
 		t.Fatalf("quota cpu: got %v want %v", gotCPU, wantCPU)
 	}
 	gotMem := rq.Spec.Hard[corev1.ResourceLimitsMemory]
-	wantMem := resource.MustParse("2240Mi")
+	wantMem := resource.MustParse("2112Mi")
 	if gotMem.Cmp(wantMem) != 0 {
 		t.Fatalf("quota memory: got %v want %v", gotMem, wantMem)
 	}

@@ -13,6 +13,11 @@ const (
 	TierEngineer = "engineer"
 	TierInternal = "internal"
 
+	// Live loadgen RPS ceilings per effective tier (measured on url-shortener).
+	LoadgenRPSCapFree     = 500
+	LoadgenRPSCapEngineer = 1000
+	LoadgenRPSCapInternal = 2000
+
 	// Instance size ceilings per tier (deployer normalizes alpha → small).
 	InstanceSizeMedium = "medium"
 	InstanceSizeLarge  = "large"
@@ -42,6 +47,7 @@ type TierLimits struct {
 	AllowMQWorker        bool
 	AllowProxyCache      bool
 	MaxInstanceSize      string // small/medium/large ceiling for canvas sizing knobs
+	MaxLoadgenRPS        int    // live loadgen requests-per-second ceiling
 }
 
 // StartOfUTCMonth returns 00:00:00 UTC on the first day of t's calendar month.
@@ -78,6 +84,7 @@ func GetTierLimits(tier string) TierLimits {
 			AllowMQWorker:        true,
 			AllowProxyCache:      true,
 			MaxInstanceSize:      InstanceSizeLarge,
+			MaxLoadgenRPS:        LoadgenRPSCapInternal,
 		}
 	case TierEngineer:
 		return TierLimits{
@@ -91,6 +98,7 @@ func GetTierLimits(tier string) TierLimits {
 			AllowMQWorker:        true,
 			AllowProxyCache:      true,
 			MaxInstanceSize:      InstanceSizeLarge,
+			MaxLoadgenRPS:        LoadgenRPSCapEngineer,
 		}
 	default:
 		return TierLimits{
@@ -104,6 +112,7 @@ func GetTierLimits(tier string) TierLimits {
 			AllowMQWorker:        true,
 			AllowProxyCache:      true,
 			MaxInstanceSize:      InstanceSizeMedium,
+			MaxLoadgenRPS:        LoadgenRPSCapFree,
 		}
 	}
 }

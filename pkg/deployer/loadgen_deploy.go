@@ -24,7 +24,7 @@ const (
 )
 
 // DeployLoadgen creates the per-namespace loadgen Deployment and Service.
-// userTier selects CPU/memory ("explorer" default, "engineer" for higher limits).
+// userTier selects CPU/memory (explorer / engineer / internal / architect).
 func DeployLoadgen(ctx context.Context, clientset kubernetes.Interface, namespace, userTier string) error {
 	if clientset == nil {
 		return fmt.Errorf("deploy loadgen: kubernetes client is nil")
@@ -93,26 +93,37 @@ func loadgenImage() string {
 
 func loadgenResources(userTier string) corev1.ResourceRequirements {
 	switch userTier {
-	case "engineer", "internal", "architect":
+	case "internal", "architect":
 		return corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("500m"),
+				corev1.ResourceCPU:    resource.MustParse("1000m"),
 				corev1.ResourceMemory: resource.MustParse("1Gi"),
 			},
 			Limits: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("500m"),
+				corev1.ResourceCPU:    resource.MustParse("1000m"),
 				corev1.ResourceMemory: resource.MustParse("1Gi"),
+			},
+		}
+	case "engineer":
+		return corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("500m"),
+				corev1.ResourceMemory: resource.MustParse("512Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("500m"),
+				corev1.ResourceMemory: resource.MustParse("512Mi"),
 			},
 		}
 	default:
 		return corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse("250m"),
-				corev1.ResourceMemory: resource.MustParse("512Mi"),
+				corev1.ResourceMemory: resource.MustParse("256Mi"),
 			},
 			Limits: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse("250m"),
-				corev1.ResourceMemory: resource.MustParse("512Mi"),
+				corev1.ResourceMemory: resource.MustParse("256Mi"),
 			},
 		}
 	}

@@ -37,7 +37,7 @@ func TestSumDesignResources_urlShortenerDefaults(t *testing.T) {
 	design := urlShortenerDefaultDesign()
 	got := SumDesignResources(design, "explorer")
 	assertQuantityEqual(t, got.CPU, "875m", "cpu total")
-	assertQuantityEqual(t, got.Memory, "1408Mi", "memory total")
+	assertQuantityEqual(t, got.Memory, "1152Mi", "memory total")
 }
 
 func TestSumDesignResources_dbReadReplicasIncreaseBudget(t *testing.T) {
@@ -147,7 +147,7 @@ func TestSumDesignResources_urlShortenerLite(t *testing.T) {
 
 	got := SumDesignResources(urlShortenerLiteDesign(), "explorer")
 	assertQuantityEqual(t, got.CPU, "625m", "cpu total")
-	assertQuantityEqual(t, got.Memory, "1280Mi", "memory total")
+	assertQuantityEqual(t, got.Memory, "1024Mi", "memory total")
 }
 
 func TestSumDesignResources_socialFeedPullLite(t *testing.T) {
@@ -155,7 +155,7 @@ func TestSumDesignResources_socialFeedPullLite(t *testing.T) {
 
 	got := SumDesignResources(socialFeedPullLiteDesign(), "explorer")
 	assertQuantityEqual(t, got.CPU, "500m", "cpu total")
-	assertQuantityEqual(t, got.Memory, "1Gi", "memory total")
+	assertQuantityEqual(t, got.Memory, "768Mi", "memory total")
 }
 
 func TestExplorerLiteBudget_maxAcrossTemplates(t *testing.T) {
@@ -182,7 +182,7 @@ func TestExplorerLiteBudget_maxAcrossTemplates(t *testing.T) {
 		}
 	}
 	assertQuantityEqual(t, maxCPU, "625m", "max lite cpu")
-	assertQuantityEqual(t, maxMem, "1280Mi", "max lite memory")
+	assertQuantityEqual(t, maxMem, "1024Mi", "max lite memory")
 }
 
 func TestValidateResourceBudget_litePassesExplorer(t *testing.T) {
@@ -354,7 +354,7 @@ func TestAutopilotAdmissionOverhead_urlShortenerDefault(t *testing.T) {
 
 	design := urlShortenerDefaultDesign()
 	got := autopilotAdmissionOverhead(design, "explorer")
-	assertQuantityEqual(t, got.Memory, "768Mi", "six sub-512Mi containers × 128Mi")
+	assertQuantityEqual(t, got.Memory, "896Mi", "seven sub-512Mi containers × 128Mi")
 }
 
 func TestQuotaResourceLimits_scaledLargeEngineerIncludesSlack(t *testing.T) {
