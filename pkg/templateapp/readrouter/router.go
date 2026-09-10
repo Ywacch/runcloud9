@@ -111,10 +111,13 @@ type clientState struct {
 	seenAt    time.Time
 }
 
-type queryPool interface {
+// Querier executes SQL reads against a routed pool.
+type Querier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
+
+type queryPool = Querier
 
 // ReplicaPool binds one replica pgx pool to its stable DNS hostname for Observe targets.
 type ReplicaPool struct {

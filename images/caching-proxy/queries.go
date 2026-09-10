@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/ywacch/cloud9/pkg/templateapp/readrouter"
 	"gopkg.in/yaml.v3"
 )
 
@@ -98,7 +99,7 @@ func captureArgs(matches []string, params []proxyParamSpec) ([]any, error) {
 	return args, nil
 }
 
-func proxyReadThrough(ctx context.Context, q readQuerier, rules []compiledProxyRule, cacheKey string) (string, error) {
+func proxyReadThrough(ctx context.Context, q readrouter.Querier, rules []compiledProxyRule, cacheKey string) (string, error) {
 	for _, rule := range rules {
 		matches := rule.re.FindStringSubmatch(cacheKey)
 		if matches == nil {

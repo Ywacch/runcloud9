@@ -34,17 +34,17 @@ type Order struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-type readQuerier interface {
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-}
-
 type readSplitRouter interface {
 	QueryRead(
 		ctx context.Context,
 		clientID string,
 		build func(readTokenExpr string) (sql string, args []any),
 		scan func(row pgx.Row, replayToken *string) error,
+	) (readrouter.Route, string, error)
+	QueryRows(
+		ctx context.Context,
+		clientID string,
+		run func(ctx context.Context, q readrouter.Querier) error,
 	) (readrouter.Route, string, error)
 	AfterWrite(clientID string, t readrouter.ConsistencyToken)
 }
@@ -83,14 +83,12 @@ func routerActive(r readSplitRouter) bool {
 	return true
 }
 
-func (db *DB) readQuerier(ctx context.Context) (readQuerier, string) {
+func (db *DB) queryRows(ctx context.Context, run func(context.Context, readrouter.Querier) error) (readrouter.Route, string, error) {
 	if !routerActive(db.router) {
-		return db.pool, "postgres"
+		err := run(ctx, db.pool)
+		return readrouter.RouteLeader, "postgres", err
 	}
-	if r, ok := db.router.(*readrouter.ReadRouter); ok {
-		return r.ReadTarget(trace.ClientID(ctx))
-	}
-	return db.pool, "postgres"
+	return db.router.QueryRows(ctx, trace.ClientID(ctx), run)
 }
 
 func (db *DB) recordWriteToken(ctx context.Context, clientID string) error {
@@ -208,21 +206,23 @@ func (db *DB) SeedIfEmpty(ctx context.Context) error {
 func (db *DB) ListProducts(ctx context.Context) ([]Product, error) {
 	var out []Product
 	err := postgres.ObserveTarget(ctx, "list_products", func() (string, error) {
-		q, target := db.readQuerier(ctx)
-		rows, err := q.Query(ctx, `SELECT id, name, price::float8, stock FROM products ORDER BY id`)
-		if err != nil {
-			return target, err
-		}
-		defer rows.Close()
-		out = out[:0]
-		for rows.Next() {
-			var p Product
-			if err := rows.Scan(&p.ID, &p.Name, &p.Price, &p.Stock); err != nil {
-				return target, err
+		_, target, err := db.queryRows(ctx, func(ctx context.Context, q readrouter.Querier) error {
+			rows, err := q.Query(ctx, `SELECT id, name, price::float8, stock FROM products ORDER BY id`)
+			if err != nil {
+				return err
 			}
-			out = append(out, p)
-		}
-		return target, rows.Err()
+			defer rows.Close()
+			out = out[:0]
+			for rows.Next() {
+				var p Product
+				if err := rows.Scan(&p.ID, &p.Name, &p.Price, &p.Stock); err != nil {
+					return err
+				}
+				out = append(out, p)
+			}
+			return rows.Err()
+		})
+		return target, err
 	})
 	return out, err
 }
@@ -421,21 +421,23 @@ func (db *DB) getOrderLeader(ctx context.Context, id int) (Order, error) {
 func (db *DB) ListProductIDs(ctx context.Context, limit int) ([]int, error) {
 	var ids []int
 	err := postgres.ObserveTarget(ctx, "list_product_ids", func() (string, error) {
-		q, target := db.readQuerier(ctx)
-		rows, err := q.Query(ctx, `SELECT id FROM products ORDER BY id LIMIT $1`, limit)
-		if err != nil {
-			return target, err
-		}
-		defer rows.Close()
-		ids = ids[:0]
-		for rows.Next() {
-			var id int
-			if err := rows.Scan(&id); err != nil {
-				return target, err
+		_, target, err := db.queryRows(ctx, func(ctx context.Context, q readrouter.Querier) error {
+			rows, err := q.Query(ctx, `SELECT id FROM products ORDER BY id LIMIT $1`, limit)
+			if err != nil {
+				return err
 			}
-			ids = append(ids, id)
-		}
-		return target, rows.Err()
+			defer rows.Close()
+			ids = ids[:0]
+			for rows.Next() {
+				var id int
+				if err := rows.Scan(&id); err != nil {
+					return err
+				}
+				ids = append(ids, id)
+			}
+			return rows.Err()
+		})
+		return target, err
 	})
 	return ids, err
 }

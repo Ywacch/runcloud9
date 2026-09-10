@@ -153,8 +153,6 @@ func TestReadRouter_RouteRead_policies(t *testing.T) {
 }
 
 func TestReadRouter_RecordRead_violations(t *testing.T) {
-	t.Parallel()
-
 	eng := PostgresEngine{}
 	writeTok, _ := eng.ParseToken("0/100")
 	oldRead, _ := eng.ParseToken("0/40")
@@ -162,7 +160,6 @@ func TestReadRouter_RecordRead_violations(t *testing.T) {
 	staleRead, _ := eng.ParseToken("0/80")
 
 	t.Run("ryw violation", func(t *testing.T) {
-		t.Parallel()
 		r := NewReadRouter(nil, nil, eng, PolicyRYW)
 		r.AfterWrite("c1", writeTok)
 		ryw, mono := r.RecordRead("c1", staleRead)
@@ -172,7 +169,6 @@ func TestReadRouter_RecordRead_violations(t *testing.T) {
 	})
 
 	t.Run("monotonic violation", func(t *testing.T) {
-		t.Parallel()
 		r := NewReadRouter(nil, nil, eng, PolicyMonotonic)
 		r.RecordRead("c1", newRead)
 		ryw, mono := r.RecordRead("c1", oldRead)
@@ -182,7 +178,6 @@ func TestReadRouter_RecordRead_violations(t *testing.T) {
 	})
 
 	t.Run("ryw+monotonic both", func(t *testing.T) {
-		t.Parallel()
 		r := NewReadRouter(nil, nil, eng, PolicyRYWMonotonic)
 		r.AfterWrite("c1", writeTok)
 		r.RecordRead("c1", newRead)
@@ -193,7 +188,6 @@ func TestReadRouter_RecordRead_violations(t *testing.T) {
 	})
 
 	t.Run("replica policy stale read counter", func(t *testing.T) {
-		t.Parallel()
 		r := NewReadRouter(nil, nil, eng, PolicyReplica)
 		r.AfterWrite("c1", writeTok)
 		staleBefore := testutil.ToFloat64(replicaStaleReadsTotal)

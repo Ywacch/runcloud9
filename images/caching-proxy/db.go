@@ -18,17 +18,17 @@ type URLRecord struct {
 	CreatedAt time.Time
 }
 
-type readQuerier interface {
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-}
-
 type readSplitRouter interface {
 	QueryRead(
 		ctx context.Context,
 		clientID string,
 		build func(readTokenExpr string) (sql string, args []any),
 		scan func(row pgx.Row, replayToken *string) error,
+	) (readrouter.Route, string, error)
+	QueryRows(
+		ctx context.Context,
+		clientID string,
+		run func(ctx context.Context, q readrouter.Querier) error,
 	) (readrouter.Route, string, error)
 	AfterWrite(clientID string, t readrouter.ConsistencyToken)
 }
@@ -67,14 +67,12 @@ func routerActive(r readSplitRouter) bool {
 	return true
 }
 
-func (db *DB) readQuerier(ctx context.Context) (readQuerier, string) {
+func (db *DB) queryRows(ctx context.Context, run func(context.Context, readrouter.Querier) error) (readrouter.Route, string, error) {
 	if !routerActive(db.router) {
-		return db.pool, "postgres"
+		err := run(ctx, db.pool)
+		return readrouter.RouteLeader, "postgres", err
 	}
-	if r, ok := db.router.(*readrouter.ReadRouter); ok {
-		return r.ReadTarget(trace.ClientID(ctx))
-	}
-	return db.pool, "postgres"
+	return db.router.QueryRows(ctx, trace.ClientID(ctx), run)
 }
 
 func (db *DB) recordWriteToken(ctx context.Context, clientID string) error {
@@ -219,9 +217,11 @@ func (db *DB) urlExistsLeader(ctx context.Context, code string) (bool, error) {
 func (db *DB) ReadThrough(ctx context.Context, cacheKey string, rules []compiledProxyRule) (string, error) {
 	var payload string
 	err := postgres.ObserveTarget(ctx, "db_read_through", func() (string, error) {
-		q, target := db.readQuerier(ctx)
-		p, err := proxyReadThrough(ctx, q, rules, cacheKey)
-		payload = p
+		_, target, err := db.queryRows(ctx, func(ctx context.Context, q readrouter.Querier) error {
+			p, err := proxyReadThrough(ctx, q, rules, cacheKey)
+			payload = p
+			return err
+		})
 		return target, err
 	})
 	return payload, err
@@ -230,21 +230,23 @@ func (db *DB) ReadThrough(ctx context.Context, cacheKey string, rules []compiled
 func (db *DB) ListCodes(ctx context.Context, limit int) ([]string, error) {
 	var codes []string
 	err := postgres.ObserveTarget(ctx, "list_codes", func() (string, error) {
-		q, target := db.readQuerier(ctx)
-		rows, err := q.Query(ctx, `SELECT code FROM urls ORDER BY code LIMIT $1`, limit)
-		if err != nil {
-			return target, err
-		}
-		defer rows.Close()
-		codes = codes[:0]
-		for rows.Next() {
-			var code string
-			if err := rows.Scan(&code); err != nil {
-				return target, err
+		_, target, err := db.queryRows(ctx, func(ctx context.Context, q readrouter.Querier) error {
+			rows, err := q.Query(ctx, `SELECT code FROM urls ORDER BY code LIMIT $1`, limit)
+			if err != nil {
+				return err
 			}
-			codes = append(codes, code)
-		}
-		return target, rows.Err()
+			defer rows.Close()
+			codes = codes[:0]
+			for rows.Next() {
+				var code string
+				if err := rows.Scan(&code); err != nil {
+					return err
+				}
+				codes = append(codes, code)
+			}
+			return rows.Err()
+		})
+		return target, err
 	})
 	return codes, err
 }
