@@ -42,17 +42,17 @@ type FeedItem struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-type readQuerier interface {
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-}
-
 type readSplitRouter interface {
 	QueryRead(
 		ctx context.Context,
 		clientID string,
 		build func(readTokenExpr string) (sql string, args []any),
 		scan func(row pgx.Row, replayToken *string) error,
+	) (readrouter.Route, string, error)
+	QueryRows(
+		ctx context.Context,
+		clientID string,
+		run func(ctx context.Context, q readrouter.Querier) error,
 	) (readrouter.Route, string, error)
 	AfterWrite(clientID string, t readrouter.ConsistencyToken)
 }
@@ -91,14 +91,12 @@ func routerActive(r readSplitRouter) bool {
 	return true
 }
 
-func (db *DB) readQuerier(ctx context.Context) (readQuerier, string) {
+func (db *DB) queryRows(ctx context.Context, run func(context.Context, readrouter.Querier) error) (readrouter.Route, string, error) {
 	if !routerActive(db.router) {
-		return db.pool, "postgres"
+		err := run(ctx, db.pool)
+		return readrouter.RouteLeader, "postgres", err
 	}
-	if r, ok := db.router.(*readrouter.ReadRouter); ok {
-		return r.ReadTarget(trace.ClientID(ctx))
-	}
-	return db.pool, "postgres"
+	return db.router.QueryRows(ctx, trace.ClientID(ctx), run)
 }
 
 func (db *DB) recordWriteToken(ctx context.Context, clientID string) error {
@@ -337,29 +335,31 @@ func (db *DB) InsertPost(ctx context.Context, userID int, content string) (Post,
 func (db *DB) GetFeedPull(ctx context.Context, userID, limit int) ([]FeedItem, error) {
 	var out []FeedItem
 	err := postgres.ObserveTarget(ctx, "get_feed_pull", func() (string, error) {
-		q, target := db.readQuerier(ctx)
-		rows, err := q.Query(ctx, `
-			SELECT p.id, p.user_id, u.username, p.content, p.created_at
-			FROM posts p
-			JOIN follows f ON f.following_id = p.user_id
-			JOIN users u ON u.id = p.user_id
-			WHERE f.follower_id = $1
-			ORDER BY p.created_at DESC
-			LIMIT $2
-		`, userID, limit)
-		if err != nil {
-			return target, err
-		}
-		defer rows.Close()
-		out = out[:0]
-		for rows.Next() {
-			var item FeedItem
-			if err := rows.Scan(&item.PostID, &item.AuthorID, &item.Username, &item.Content, &item.CreatedAt); err != nil {
-				return target, err
+		_, target, err := db.queryRows(ctx, func(ctx context.Context, q readrouter.Querier) error {
+			rows, err := q.Query(ctx, `
+				SELECT p.id, p.user_id, u.username, p.content, p.created_at
+				FROM posts p
+				JOIN follows f ON f.following_id = p.user_id
+				JOIN users u ON u.id = p.user_id
+				WHERE f.follower_id = $1
+				ORDER BY p.created_at DESC
+				LIMIT $2
+			`, userID, limit)
+			if err != nil {
+				return err
 			}
-			out = append(out, item)
-		}
-		return target, rows.Err()
+			defer rows.Close()
+			out = out[:0]
+			for rows.Next() {
+				var item FeedItem
+				if err := rows.Scan(&item.PostID, &item.AuthorID, &item.Username, &item.Content, &item.CreatedAt); err != nil {
+					return err
+				}
+				out = append(out, item)
+			}
+			return rows.Err()
+		})
+		return target, err
 	})
 	return out, err
 }
@@ -422,25 +422,27 @@ func (db *DB) SearchUsersByUsername(ctx context.Context, query string, limit int
 	}
 	var out []User
 	err := postgres.ObserveTarget(ctx, "search_users", func() (string, error) {
-		q, target := db.readQuerier(ctx)
 		pattern := "%" + escapeLikePattern(query) + "%"
-		rows, err := q.Query(ctx,
-			`SELECT id, username, bio FROM users WHERE username ILIKE $1 ESCAPE '\' ORDER BY username LIMIT $2`,
-			pattern, limit,
-		)
-		if err != nil {
-			return target, err
-		}
-		defer rows.Close()
-		out = out[:0]
-		for rows.Next() {
-			var u User
-			if err := rows.Scan(&u.ID, &u.Username, &u.Bio); err != nil {
-				return target, err
+		_, target, err := db.queryRows(ctx, func(ctx context.Context, q readrouter.Querier) error {
+			rows, err := q.Query(ctx,
+				`SELECT id, username, bio FROM users WHERE username ILIKE $1 ESCAPE '\' ORDER BY username LIMIT $2`,
+				pattern, limit,
+			)
+			if err != nil {
+				return err
 			}
-			out = append(out, u)
-		}
-		return target, rows.Err()
+			defer rows.Close()
+			out = out[:0]
+			for rows.Next() {
+				var u User
+				if err := rows.Scan(&u.ID, &u.Username, &u.Bio); err != nil {
+					return err
+				}
+				out = append(out, u)
+			}
+			return rows.Err()
+		})
+		return target, err
 	})
 	return out, err
 }
@@ -451,24 +453,26 @@ func (db *DB) ListUsers(ctx context.Context, limit int) ([]User, error) {
 	}
 	var out []User
 	err := postgres.ObserveTarget(ctx, "list_users", func() (string, error) {
-		q, target := db.readQuerier(ctx)
-		rows, err := q.Query(ctx,
-			`SELECT id, username, bio FROM users ORDER BY id LIMIT $1`,
-			limit,
-		)
-		if err != nil {
-			return target, err
-		}
-		defer rows.Close()
-		out = out[:0]
-		for rows.Next() {
-			var u User
-			if err := rows.Scan(&u.ID, &u.Username, &u.Bio); err != nil {
-				return target, err
+		_, target, err := db.queryRows(ctx, func(ctx context.Context, q readrouter.Querier) error {
+			rows, err := q.Query(ctx,
+				`SELECT id, username, bio FROM users ORDER BY id LIMIT $1`,
+				limit,
+			)
+			if err != nil {
+				return err
 			}
-			out = append(out, u)
-		}
-		return target, rows.Err()
+			defer rows.Close()
+			out = out[:0]
+			for rows.Next() {
+				var u User
+				if err := rows.Scan(&u.ID, &u.Username, &u.Bio); err != nil {
+					return err
+				}
+				out = append(out, u)
+			}
+			return rows.Err()
+		})
+		return target, err
 	})
 	return out, err
 }
@@ -476,24 +480,26 @@ func (db *DB) ListUsers(ctx context.Context, limit int) ([]User, error) {
 func (db *DB) GetFollowers(ctx context.Context, userID int) ([]int, error) {
 	var ids []int
 	err := postgres.ObserveTarget(ctx, "get_followers", func() (string, error) {
-		q, target := db.readQuerier(ctx)
-		rows, err := q.Query(ctx,
-			`SELECT DISTINCT follower_id FROM follows WHERE following_id = $1`,
-			userID,
-		)
-		if err != nil {
-			return target, err
-		}
-		defer rows.Close()
-		ids = ids[:0]
-		for rows.Next() {
-			var id int
-			if err := rows.Scan(&id); err != nil {
-				return target, err
+		_, target, err := db.queryRows(ctx, func(ctx context.Context, q readrouter.Querier) error {
+			rows, err := q.Query(ctx,
+				`SELECT DISTINCT follower_id FROM follows WHERE following_id = $1`,
+				userID,
+			)
+			if err != nil {
+				return err
 			}
-			ids = append(ids, id)
-		}
-		return target, rows.Err()
+			defer rows.Close()
+			ids = ids[:0]
+			for rows.Next() {
+				var id int
+				if err := rows.Scan(&id); err != nil {
+					return err
+				}
+				ids = append(ids, id)
+			}
+			return rows.Err()
+		})
+		return target, err
 	})
 	return ids, err
 }
@@ -501,21 +507,23 @@ func (db *DB) GetFollowers(ctx context.Context, userID int) ([]int, error) {
 func (db *DB) QueryUserPool(ctx context.Context, sql string) ([]int, error) {
 	var ids []int
 	err := postgres.ObserveTarget(ctx, "list_user_ids", func() (string, error) {
-		q, target := db.readQuerier(ctx)
-		rows, err := q.Query(ctx, sql)
-		if err != nil {
-			return target, err
-		}
-		defer rows.Close()
-		ids = ids[:0]
-		for rows.Next() {
-			var id int
-			if err := rows.Scan(&id); err != nil {
-				return target, err
+		_, target, err := db.queryRows(ctx, func(ctx context.Context, q readrouter.Querier) error {
+			rows, err := q.Query(ctx, sql)
+			if err != nil {
+				return err
 			}
-			ids = append(ids, id)
-		}
-		return target, rows.Err()
+			defer rows.Close()
+			ids = ids[:0]
+			for rows.Next() {
+				var id int
+				if err := rows.Scan(&id); err != nil {
+					return err
+				}
+				ids = append(ids, id)
+			}
+			return rows.Err()
+		})
+		return target, err
 	})
 	return ids, err
 }

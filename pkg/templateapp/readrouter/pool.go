@@ -129,3 +129,110 @@ func (r *ReadRouter) queryReplicaRoundRobin(
 func shouldFailover(err error) bool {
 	return err != nil && !errors.Is(err, pgx.ErrNoRows)
 }
+
+// QueryRows executes a multi-row read on the routed pool.
+// run receives the pool chosen for the query. Routing mirrors QueryRead:
+// under RYW, try replica first with a sidecar LSN peek; redirect to leader when behind.
+func (r *ReadRouter) QueryRows(
+	ctx context.Context,
+	clientID string,
+	run func(ctx context.Context, q Querier) error,
+) (Route, string, error) {
+	if r == nil {
+		return RouteLeader, defaultWriteTarget, fmt.Errorf("readrouter: nil ReadRouter")
+	}
+	if r.writePool == nil {
+		return RouteLeader, r.leaderTarget(), fmt.Errorf("readrouter: nil write pool")
+	}
+
+	pol := r.policy
+	if len(r.readPools) > 0 {
+		switch pol {
+		case PolicyRYW, PolicyRYWMonotonic:
+			target, err := r.queryRowsReplicaRoundRobin(ctx, clientID, run, true)
+			if errors.Is(err, errRYWRedirectLeader) {
+				rywLeaderRedirectsTotal.Inc()
+			} else if err == nil {
+				return RouteReplica, target, nil
+			} else if !shouldFailover(err) {
+				return RouteReplica, target, err
+			}
+		default:
+			if r.RouteRead(clientID, pol) == RouteReplica {
+				target, err := r.queryRowsReplicaRoundRobin(ctx, clientID, run, false)
+				if err == nil {
+					return RouteReplica, target, nil
+				}
+				if !shouldFailover(err) {
+					return RouteReplica, target, err
+				}
+			}
+		}
+	}
+
+	if err := run(ctx, r.writePool); err != nil {
+		return RouteLeader, r.leaderTarget(), err
+	}
+	dbReadTotal.WithLabelValues(RouteLeader.String()).Inc()
+	return RouteLeader, r.leaderTarget(), nil
+}
+
+func (r *ReadRouter) queryRowsReplicaRoundRobin(
+	ctx context.Context,
+	clientID string,
+	run func(ctx context.Context, q Querier) error,
+	rywRedirect bool,
+) (string, error) {
+	start := r.nextReplicaStart()
+	var lastErr error
+
+	for i := 0; i < len(r.readPools); i++ {
+		idx := (start + i) % len(r.readPools)
+		entry := r.readPools[idx]
+
+		var tokenText string
+		row := entry.pool.QueryRow(ctx, "SELECT "+r.engine.ReadTokenExpr())
+		err := row.Scan(&tokenText)
+		if errors.Is(err, pgx.ErrNoRows) {
+			lastErr = err
+			continue
+		}
+		if err != nil {
+			if shouldFailover(err) {
+				lastErr = err
+				continue
+			}
+			return entry.host, err
+		}
+
+		var tok ConsistencyToken
+		if tokenText != "" {
+			parsed, parseErr := r.engine.ParseToken(tokenText)
+			if parseErr != nil {
+				return entry.host, fmt.Errorf("parse replay token: %w", parseErr)
+			}
+			tok = parsed
+			if rywRedirect && r.tokenBehindLastWrite(clientID, tok) {
+				return "", errRYWRedirectLeader
+			}
+		}
+
+		if err := run(ctx, entry.pool); err != nil {
+			if shouldFailover(err) {
+				lastErr = err
+				continue
+			}
+			return entry.host, err
+		}
+
+		dbReadTotal.WithLabelValues(RouteReplica.String()).Inc()
+		if tok != nil {
+			r.RecordRead(clientID, tok)
+		}
+		return entry.host, nil
+	}
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", fmt.Errorf("readrouter: no replica pools configured")
+}
