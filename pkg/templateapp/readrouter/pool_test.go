@@ -805,3 +805,109 @@ func TestQueryRows_replicaPolicy_concurrentWriteDuringRunNotStale(t *testing.T) 
 		t.Fatalf("concurrent write during run must not count as replica stale read")
 	}
 }
+
+func TestQueryRead_RYW_concurrentWriteDuringScanNotViolation(t *testing.T) {
+	replica := stubPool{row: stubRow{tokenText: "0/100"}}
+	leader := stubPool{row: stubRow{}}
+	r := &ReadRouter{
+		engine:      PostgresEngine{},
+		policy:      PolicyRYW,
+		clients:     make(map[string]*clientState),
+		maxSize:     defaultMaxClients,
+		clientTTL:   defaultClientTTL,
+		writePool:   leader,
+		writeTarget: defaultWriteTarget,
+		readPools:   []replicaEntry{{pool: replica, host: "postgres-replica-0"}},
+	}
+	writeTok, err := r.engine.ParseToken("0/100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.AfterWrite("client-a", writeTok)
+	concurrentWrite, err := r.engine.ParseToken("0/110")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rywBefore := counterTotal(rywViolationsTotal)
+	redirectBefore := counterTotal(rywLeaderRedirectsTotal)
+
+	route, target, err := r.QueryRead(context.Background(), "client-a",
+		func(readTokenExpr string) (string, []any) {
+			return "SELECT 1, " + readTokenExpr, nil
+		},
+		func(row pgx.Row, replayToken *string) error {
+			if err := row.Scan(new(int), replayToken); err != nil {
+				return err
+			}
+			r.AfterWrite("client-a", concurrentWrite)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("QueryRead: %v", err)
+	}
+	if route != RouteReplica {
+		t.Fatalf("route: got %v want replica", route)
+	}
+	if target != "postgres-replica-0" {
+		t.Fatalf("target: got %q", target)
+	}
+	if counterTotal(rywViolationsTotal)-rywBefore != 0 {
+		t.Fatalf("concurrent write during scan must not count as RYW violation")
+	}
+	if counterTotal(rywLeaderRedirectsTotal)-redirectBefore != 0 {
+		t.Fatalf("expected no leader redirect when replica was caught up at baseline")
+	}
+}
+
+func TestQueryRead_replicaPolicy_concurrentWriteDuringScanNotStale(t *testing.T) {
+	replica := stubPool{row: stubRow{tokenText: "0/100"}}
+	leader := stubPool{row: stubRow{}}
+	r := &ReadRouter{
+		engine:      PostgresEngine{},
+		policy:      PolicyReplica,
+		clients:     make(map[string]*clientState),
+		maxSize:     defaultMaxClients,
+		clientTTL:   defaultClientTTL,
+		writePool:   leader,
+		writeTarget: defaultWriteTarget,
+		readPools:   []replicaEntry{{pool: replica, host: "postgres-replica-0"}},
+	}
+	writeTok, err := r.engine.ParseToken("0/100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.AfterWrite("client-a", writeTok)
+	concurrentWrite, err := r.engine.ParseToken("0/110")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	staleBefore := counterTotal(replicaStaleReadsTotal)
+
+	route, target, err := r.QueryRead(context.Background(), "client-a",
+		func(readTokenExpr string) (string, []any) {
+			return "SELECT 1, " + readTokenExpr, nil
+		},
+		func(row pgx.Row, replayToken *string) error {
+			if err := row.Scan(new(int), replayToken); err != nil {
+				return err
+			}
+			r.AfterWrite("client-a", concurrentWrite)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("QueryRead: %v", err)
+	}
+	if route != RouteReplica {
+		t.Fatalf("route: got %v want replica", route)
+	}
+	if target != "postgres-replica-0" {
+		t.Fatalf("target: got %q", target)
+	}
+	if counterTotal(replicaStaleReadsTotal)-staleBefore != 0 {
+		t.Fatalf("concurrent write during scan must not count as replica stale read")
+	}
+}

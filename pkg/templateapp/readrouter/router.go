@@ -199,26 +199,9 @@ func (r *ReadRouter) RouteRead(clientID string, pol RoutingPolicy) Route {
 	}
 }
 
-func (r *ReadRouter) hasLastWrite(clientID string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	st := r.clients[clientID]
-	return st != nil && st.lastWrite != nil
-}
-
-func (r *ReadRouter) tokenBehindLastWrite(clientID string, token ConsistencyToken) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	st := r.clients[clientID]
-	if st == nil || st.lastWrite == nil {
-		return false
-	}
-	return tokenBehindBaseline(token, st.lastWrite)
-}
-
-// snapshotLastWrite returns the client's lastWrite at call time for QueryRows
-// routing baselines. Writes recorded after the snapshot are concurrent with the
-// in-flight read, not causally prior to it.
+// snapshotLastWrite returns the client's lastWrite at call time for QueryRead
+// and QueryRows routing baselines. Writes recorded after the snapshot are
+// concurrent with the in-flight read, not causally prior to it.
 func (r *ReadRouter) snapshotLastWrite(clientID string) ConsistencyToken {
 	r.mu.Lock()
 	defer r.mu.Unlock()
