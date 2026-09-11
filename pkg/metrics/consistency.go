@@ -16,6 +16,7 @@ const (
 
 	guaranteeHeldByNone = "none"
 	guaranteeHeldByApp  = "app"
+	guaranteeHeldByDB   = "db"
 )
 
 // cacheStaleSample is the newest stale-read evidence row scraped from app-server.
@@ -114,7 +115,7 @@ func (cd *ConsistencyDetector) Eval(namespace string, dm *DeploymentMetrics, top
 	}
 
 	if cm, exists := dm.Components["db"]; exists {
-		cm.Consistency = cd.statusFor(namespace, result, probeOK)
+		cm.Consistency = cd.statusFor(namespace, result, probeOK, topo)
 		dm.Components["db"] = cm
 	}
 
@@ -199,7 +200,7 @@ func (cd *ConsistencyDetector) evalAppMonotonic(namespace string, now time.Time)
 	return nil
 }
 
-func (cd *ConsistencyDetector) statusFor(namespace string, result probes.ProbeResult, ok bool) *ConsistencyStatus {
+func (cd *ConsistencyDetector) statusFor(namespace string, result probes.ProbeResult, ok bool, topo TopologyFlags) *ConsistencyStatus {
 	cd.mu.Lock()
 	traffic := cd.appTraffic[namespace]
 	cd.mu.Unlock()
@@ -211,7 +212,7 @@ func (cd *ConsistencyDetector) statusFor(namespace string, result probes.ProbeRe
 		LeaderReads:         traffic.LeaderReads,
 		ReplicaReads:        traffic.ReplicaReads,
 		ReplicaStaleReads:   int64(traffic.ReplicaStaleTotal + 0.5),
-		GuaranteeHeldBy:     guaranteeHeldByFromTraffic(traffic),
+		GuaranteeHeldBy:     guaranteeHeldByFrom(traffic, topo),
 	}
 	if sample, has := cd.sampleFor(namespace); has {
 		status.LastCacheKey = sample.Key
@@ -228,7 +229,13 @@ func (cd *ConsistencyDetector) statusFor(namespace string, result probes.ProbeRe
 	return status
 }
 
-func guaranteeHeldByFromTraffic(traffic appTrafficConsistency) string {
+func guaranteeHeldByFrom(traffic appTrafficConsistency, topo TopologyFlags) string {
+	if topo.HasDB && topo.DBReadReplicas > 0 && topo.SyncCommitLevel == "remote_apply" {
+		switch topo.ReplicationMode {
+		case "semi-sync", "sync":
+			return guaranteeHeldByDB
+		}
+	}
 	if traffic.LeaderRedirects > 0 {
 		return guaranteeHeldByApp
 	}

@@ -575,6 +575,9 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 		} else {
 			env["DB_REPLICATION"] = "async"
 		}
+		if level, err := syncCommitLevelFromConfig(node.Config); err == nil {
+			env["DB_SYNC_COMMIT_LEVEL"] = level
+		}
 	case "cache":
 		if cacheProxy {
 			env["STRATEGY"] = cacheNodeStrategy(node)
