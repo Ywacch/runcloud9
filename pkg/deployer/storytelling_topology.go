@@ -18,6 +18,7 @@ type StorytellingTopology struct {
 	DBRole           string
 	ReadReplicaCount int
 	ReplicationMode  string
+	SyncCommitLevel  string
 	CacheEngine      string
 	CacheRole        string
 	HasProxyCache    bool
@@ -52,6 +53,7 @@ func StorytellingTopologyFromDesign(d *DeploymentDesign, template string) Storyt
 			} else {
 				t.ReplicationMode = "async"
 			}
+			t.SyncCommitLevel = parseSyncCommitLevel(n.Config)
 			t.DBRole = "primary"
 		case "cache":
 			t.HasCache = true

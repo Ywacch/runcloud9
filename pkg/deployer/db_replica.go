@@ -29,17 +29,34 @@ const (
 func postgresPrimaryCommand(nodeConfig map[string]any) []string {
 	spec := componentRegistry["db"]
 	cmd := append([]string(nil), spec.Command...)
-	mode, err := parseReplicationMode(nodeConfig)
-	if err != nil {
-		mode = "async"
-	}
-	if mode == "sync" && parseReadReplicaCount(nodeConfig) >= 1 {
-		cmd = append(cmd,
-			"-c", "synchronous_commit=on",
-			"-c", "synchronous_standby_names=*",
-		)
-	}
+	cmd = append(cmd, postgresSynchronousReplicationArgs(nodeConfig)...)
 	return cmd
+}
+
+// postgresSynchronousReplicationArgs returns -c flag pairs for synchronous replication settings.
+func postgresSynchronousReplicationArgs(nodeConfig map[string]any) []string {
+	readReplicas := parseReadReplicaCount(nodeConfig)
+	if readReplicas < 1 {
+		return nil
+	}
+	mode, err := parseReplicationMode(nodeConfig)
+	if err != nil || !requiresSynchronousReplication(mode) {
+		return nil
+	}
+	level := parseSyncCommitLevel(nodeConfig)
+	var standbyNames string
+	switch mode {
+	case replicationModeSemiSync:
+		standbyNames = "ANY 1 (*)"
+	case replicationModeSync:
+		standbyNames = fmt.Sprintf("FIRST %d (*)", readReplicas)
+	default:
+		return nil
+	}
+	return []string{
+		"-c", "synchronous_commit=" + level,
+		"-c", "synchronous_standby_names=" + standbyNames,
+	}
 }
 
 func dbReadReplicaCount(cfg DeployConfig) int32 {

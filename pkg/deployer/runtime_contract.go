@@ -16,6 +16,9 @@ const (
 	// WarningCodeReadConsistencyClamped is emitted when monotonic policies require
 	// at least two read replicas but the design has fewer; deploy clamps to ryw.
 	WarningCodeReadConsistencyClamped = "read_consistency_clamped"
+	// WarningCodeReplicationSemiSyncEquivalent is emitted when semi-sync is chosen
+	// with fewer than two read replicas (ANY 1 vs FIRST 1 is not meaningfully distinct).
+	WarningCodeReplicationSemiSyncEquivalent = "replication_semi_sync_equivalent"
 )
 
 // ValidateRuntimeContract checks deploy-time runtime preconditions before orchestration starts.
@@ -27,6 +30,7 @@ func ValidateRuntimeContract(design DeploymentDesign, tmpl *templates.TemplateSp
 		validateAppServerReplicas,
 		validateWorkerReplicas,
 		validateDBReadReplicas,
+		validateDBReplicationConfig,
 		validateDBReadConsistency,
 		validateProxyQueries,
 		validateAppServerEnv,
@@ -92,11 +96,23 @@ func validateDBReadReplicas(design DeploymentDesign, _ *templates.TemplateSpec) 
 		if err != nil {
 			return fmt.Errorf("database %q: %w", node.Name, err)
 		}
-		if mode == "sync" && count < 1 {
+		if requiresSynchronousReplication(mode) && count < 1 {
 			return fmt.Errorf(
-				"database %q replicationMode sync requires at least one read replica (readReplicas=%d)",
-				node.Name, count,
+				"database %q replicationMode %s requires at least one read replica (readReplicas=%d)",
+				node.Name, mode, count,
 			)
+		}
+	}
+	return nil
+}
+
+func validateDBReplicationConfig(design DeploymentDesign, _ *templates.TemplateSpec) error {
+	for _, node := range design.Nodes {
+		if node.Type != "db" {
+			continue
+		}
+		if _, err := syncCommitLevelFromConfig(node.Config); err != nil {
+			return fmt.Errorf("database %q: %w", node.Name, err)
 		}
 	}
 	return nil
@@ -134,6 +150,27 @@ func RuntimeContractWarnings(design DeploymentDesign) []TopologyWarning {
 			Message: fmt.Sprintf(
 				"Database %q readConsistency %q requires at least two read replicas; deploying with ryw instead",
 				node.Name, policy,
+			),
+			NodeIDs: []string{node.ID},
+		})
+	}
+	for _, node := range design.Nodes {
+		if node.Type != "db" {
+			continue
+		}
+		mode, err := parseReplicationMode(node.Config)
+		if err != nil {
+			continue
+		}
+		readReplicas := parseReadReplicaCount(node.Config)
+		if mode != replicationModeSemiSync || readReplicas >= 2 {
+			continue
+		}
+		warnings = append(warnings, TopologyWarning{
+			Code: WarningCodeReplicationSemiSyncEquivalent,
+			Message: fmt.Sprintf(
+				"Database %q replicationMode semi-sync with one read replica behaves like sync (FIRST 1); add a second replica to teach ANY 1",
+				node.Name,
 			),
 			NodeIDs: []string{node.ID},
 		})

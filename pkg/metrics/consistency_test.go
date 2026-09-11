@@ -111,6 +111,32 @@ func TestConsistencyDetector_RYWFromTraffic(t *testing.T) {
 	}
 }
 
+func TestConsistencyDetector_GuaranteeHeldByDB_remoteApply(t *testing.T) {
+	t.Parallel()
+
+	cd := NewConsistencyDetector(&stubConsistencyProbeReader{ok: false})
+	ns := "ns-db-ryw"
+	topo := TopologyFlags{
+		HasDB:           true,
+		DBReadReplicas:  2,
+		ReplicationMode: "semi-sync",
+		SyncCommitLevel: "remote_apply",
+	}
+	dm := &DeploymentMetrics{Components: map[string]ComponentMetrics{"db": {Component: "db"}}}
+
+	cd.NoteAppTrafficConsistency(ns, appTrafficConsistency{
+		ReplicaReads:    10,
+		LeaderReads:     3,
+		LeaderRedirects: 3,
+	})
+	cd.Eval(ns, dm, topo, nil)
+
+	cons := dm.Components["db"].Consistency
+	if cons == nil || cons.GuaranteeHeldBy != guaranteeHeldByDB {
+		t.Fatalf("remote_apply should attribute guarantee to db, got %+v", cons)
+	}
+}
+
 func TestConsistencyDetector_ProbeDoesNotEmitStudentRYW(t *testing.T) {
 	t.Parallel()
 

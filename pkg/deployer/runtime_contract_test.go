@@ -275,6 +275,39 @@ func TestValidateRuntimeContract_Table(t *testing.T) {
 			wantErr: "replicationMode sync requires",
 		},
 		{
+			name:       "semi-sync replication requires read replica",
+			templateID: "url-shortener",
+			design: DeploymentDesign{
+				Template: "url-shortener",
+				Nodes: []DeploymentNode{
+					{ID: "app1", Type: "app-server", Name: "App"},
+					{ID: "db1", Type: "db", Name: "PostgreSQL", Config: map[string]interface{}{
+						"replicationMode": "semi-sync",
+						"readReplicas":    0,
+					}},
+				},
+				Connections: []DeploymentConn{{SourceID: "app1", TargetID: "db1"}},
+			},
+			wantErr: "replicationMode semi-sync requires",
+		},
+		{
+			name:       "invalid syncCommitLevel rejected",
+			templateID: "url-shortener",
+			design: DeploymentDesign{
+				Template: "url-shortener",
+				Nodes: []DeploymentNode{
+					{ID: "app1", Type: "app-server", Name: "App"},
+					{ID: "db1", Type: "db", Name: "PostgreSQL", Config: map[string]interface{}{
+						"readReplicas":    1,
+						"replicationMode": "sync",
+						"syncCommitLevel": "quorum",
+					}},
+				},
+				Connections: []DeploymentConn{{SourceID: "app1", TargetID: "db1"}},
+			},
+			wantErr: "syncCommitLevel must be one of",
+		},
+		{
 			name:       "non-postgres engine rejects read replicas",
 			templateID: "url-shortener",
 			design: DeploymentDesign{
@@ -357,6 +390,26 @@ func TestValidateRuntimeContract_Table(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRuntimeContractWarnings_ReplicationSemiSyncEquivalent(t *testing.T) {
+	t.Parallel()
+
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "db1", Type: "db", Name: "PostgreSQL", Config: map[string]interface{}{
+				"readReplicas":    1,
+				"replicationMode": "semi-sync",
+			}},
+		},
+	}
+	got := RuntimeContractWarnings(design)
+	if len(got) != 1 {
+		t.Fatalf("warnings: want 1, got %d (%+v)", len(got), got)
+	}
+	if got[0].Code != WarningCodeReplicationSemiSyncEquivalent {
+		t.Fatalf("code: got %q want %q", got[0].Code, WarningCodeReplicationSemiSyncEquivalent)
 	}
 }
 

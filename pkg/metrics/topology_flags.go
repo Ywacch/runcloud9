@@ -20,4 +20,10 @@ type TopologyFlags struct {
 	// HasProxyCache is true when the cache node uses write-through or write-behind
 	// (legacy read-through is folded to write-through and still counts as proxy).
 	HasProxyCache bool
+	// DBReadReplicas is the max readReplicas across database nodes in the design.
+	DBReadReplicas int
+	// ReplicationMode is async, semi-sync, or sync from the database node config.
+	ReplicationMode string
+	// SyncCommitLevel is remote_write, on, or remote_apply when replication waits on standbys.
+	SyncCommitLevel string
 }

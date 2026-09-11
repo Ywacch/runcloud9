@@ -52,6 +52,27 @@ func TestStorytellingTopologyFromDesign_Storage(t *testing.T) {
 	}
 }
 
+func TestStorytellingTopologyFromDesign_SyncCommitLevel(t *testing.T) {
+	t.Parallel()
+	d := &DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{Type: "db", Config: map[string]interface{}{
+				"engine":          "postgresql",
+				"replicationMode": "semi-sync",
+				"readReplicas":    2,
+				"syncCommitLevel": "remote_apply",
+			}},
+		},
+	}
+	got := StorytellingTopologyFromDesign(d, "")
+	if got.ReplicationMode != "semi-sync" {
+		t.Fatalf("ReplicationMode: want semi-sync, got %q", got.ReplicationMode)
+	}
+	if got.SyncCommitLevel != "remote_apply" {
+		t.Fatalf("SyncCommitLevel: want remote_apply, got %q", got.SyncCommitLevel)
+	}
+}
+
 func TestStorytellingTopologyFromDesign_ReadReplicas(t *testing.T) {
 	t.Parallel()
 	d := &DeploymentDesign{

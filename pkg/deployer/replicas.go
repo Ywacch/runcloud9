@@ -15,6 +15,14 @@ const (
 	readConsistencyRYW          = "ryw"
 	readConsistencyMonotonic    = "monotonic"
 	readConsistencyRYWMonotonic = "ryw+monotonic"
+
+	replicationModeAsync    = "async"
+	replicationModeSemiSync = "semi-sync"
+	replicationModeSync     = "sync"
+
+	syncCommitRemoteWrite = "remote_write"
+	syncCommitOn          = "on"
+	syncCommitRemoteApply = "remote_apply"
 )
 
 // parseReplicaCount reads config.replicas, returning defaultVal when unset or invalid.
@@ -122,18 +130,59 @@ func readReplicaCountFromConfig(config map[string]any, min, max int) (int32, err
 	return int32(n), nil
 }
 
-// parseReplicationMode normalizes config.replicationMode to async or sync.
+// parseReplicationMode normalizes config.replicationMode to async, semi-sync, or sync.
 // Empty, none, and legacy read-replica map to async. Unknown values return an error.
 func parseReplicationMode(config map[string]any) (string, error) {
 	raw := strings.TrimSpace(strings.ToLower(configString(config, "replicationMode", "")))
 	switch raw {
 	case "", "none", "async", "asynchronous", "read-replica":
-		return "async", nil
+		return replicationModeAsync, nil
+	case "semi-sync", "semi_sync", "semisync":
+		return replicationModeSemiSync, nil
 	case "sync", "synchronous":
-		return "sync", nil
+		return replicationModeSync, nil
 	default:
-		return "", fmt.Errorf("replicationMode must be async or sync (got %q)", raw)
+		return "", fmt.Errorf("replicationMode must be async, semi-sync, or sync (got %q)", raw)
 	}
+}
+
+func syncCommitLevelEnumList() string {
+	return "remote_write, on, remote_apply"
+}
+
+func isValidSyncCommitLevel(level string) bool {
+	switch level {
+	case syncCommitRemoteWrite, syncCommitOn, syncCommitRemoteApply:
+		return true
+	default:
+		return false
+	}
+}
+
+// parseSyncCommitLevel reads config.syncCommitLevel, defaulting to on when unset.
+func parseSyncCommitLevel(config map[string]any) string {
+	level, err := syncCommitLevelFromConfig(config)
+	if err != nil {
+		return syncCommitOn
+	}
+	return level
+}
+
+// syncCommitLevelFromConfig parses and validates config.syncCommitLevel.
+func syncCommitLevelFromConfig(config map[string]any) (string, error) {
+	raw := strings.TrimSpace(strings.ToLower(configString(config, "syncCommitLevel", "")))
+	if raw == "" {
+		return syncCommitOn, nil
+	}
+	if !isValidSyncCommitLevel(raw) {
+		return "", fmt.Errorf("syncCommitLevel must be one of %s (got %q)", syncCommitLevelEnumList(), raw)
+	}
+	return raw, nil
+}
+
+// requiresSynchronousReplication reports whether mode waits on standbys at commit time.
+func requiresSynchronousReplication(mode string) bool {
+	return mode == replicationModeSemiSync || mode == replicationModeSync
 }
 
 // seedReplicaReadyBeforeRestore returns how many read-replica pods must be Ready

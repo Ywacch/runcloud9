@@ -167,6 +167,8 @@ func TestParseReplicationMode(t *testing.T) {
 	}{
 		{name: "default async", cfg: nil, want: "async"},
 		{name: "none maps async", cfg: map[string]any{"replicationMode": "none"}, want: "async"},
+		{name: "semi-sync", cfg: map[string]any{"replicationMode": "semi-sync"}, want: "semi-sync"},
+		{name: "semi_sync alias", cfg: map[string]any{"replicationMode": "semi_sync"}, want: "semi-sync"},
 		{name: "sync", cfg: map[string]any{"replicationMode": "sync"}, want: "sync"},
 		{name: "synchronous alias", cfg: map[string]any{"replicationMode": "synchronous"}, want: "sync"},
 		{name: "asynchronous alias", cfg: map[string]any{"replicationMode": "asynchronous"}, want: "async"},
@@ -179,6 +181,42 @@ func TestParseReplicationMode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := parseReplicationMode(tc.cfg)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSyncCommitLevelFromConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		cfg     map[string]any
+		want    string
+		wantErr bool
+	}{
+		{name: "default on", cfg: nil, want: "on"},
+		{name: "remote_write", cfg: map[string]any{"syncCommitLevel": "remote_write"}, want: "remote_write"},
+		{name: "remote_apply", cfg: map[string]any{"syncCommitLevel": "remote_apply"}, want: "remote_apply"},
+		{name: "unknown rejected", cfg: map[string]any{"syncCommitLevel": "quorum"}, wantErr: true},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := syncCommitLevelFromConfig(tc.cfg)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
