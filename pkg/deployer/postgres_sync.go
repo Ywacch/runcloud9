@@ -68,17 +68,23 @@ func postgresSyncGUCsFromConfig(nodeConfig map[string]any) (postgresSyncGUCs, bo
 	}, true
 }
 
-// enableSynchronousReplicationSQL returns ALTER SYSTEM + reload statements.
+// enableSynchronousReplicationStatements returns ALTER SYSTEM + reload SQL.
+// Each statement must be executed in its own psql -c invocation: a multi-statement
+// -c script runs inside an implicit transaction, and ALTER SYSTEM is forbidden there.
 // Writes postgresql.auto.conf in ephemeral PGDATA; survives container restart in the
 // same pod but is lost if the pod is recreated (workstream 2).
-func enableSynchronousReplicationSQL(gucs postgresSyncGUCs) string {
-	return fmt.Sprintf(
-		"ALTER SYSTEM SET synchronous_standby_names = '%s'; "+
-			"ALTER SYSTEM SET synchronous_commit = '%s'; "+
-			"SELECT pg_reload_conf();",
-		escapePostgresSQLLiteral(gucs.StandbyNames),
-		escapePostgresSQLLiteral(gucs.CommitLevel),
-	)
+func enableSynchronousReplicationStatements(gucs postgresSyncGUCs) []string {
+	return []string{
+		fmt.Sprintf(
+			"ALTER SYSTEM SET synchronous_standby_names = '%s'",
+			escapePostgresSQLLiteral(gucs.StandbyNames),
+		),
+		fmt.Sprintf(
+			"ALTER SYSTEM SET synchronous_commit = '%s'",
+			escapePostgresSQLLiteral(gucs.CommitLevel),
+		),
+		"SELECT pg_reload_conf()",
+	}
 }
 
 func escapePostgresSQLLiteral(s string) string {
@@ -147,8 +153,10 @@ func enablePostgresSynchronousReplication(ctx context.Context, admin postgresAdm
 		return fmt.Errorf("wait for streaming standbys: %w", err)
 	}
 
-	if _, err := admin.execSQL(ctx, enableSynchronousReplicationSQL(gucs)); err != nil {
-		return fmt.Errorf("apply synchronous replication GUCs: %w", err)
+	for _, stmt := range enableSynchronousReplicationStatements(gucs) {
+		if _, err := admin.execSQL(ctx, stmt); err != nil {
+			return fmt.Errorf("apply synchronous replication GUCs (%s): %w", stmt, err)
+		}
 	}
 
 	if err := waitForReplicationCount(ctx, admin, sqlCountSyncQuorumReplicas, int(minReady)); err != nil {
