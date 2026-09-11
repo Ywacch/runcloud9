@@ -133,6 +133,8 @@ func shouldFailover(err error) bool {
 // QueryRows executes a multi-row read on the routed pool.
 // run receives the pool chosen for the query. Routing mirrors QueryRead:
 // under RYW, try replica first with a sidecar LSN peek; redirect to leader when behind.
+// RYW and replica-stale accounting freeze lastWrite before the peek; writes that
+// complete during run are concurrent with this read, not causally prior.
 func (r *ReadRouter) QueryRows(
 	ctx context.Context,
 	clientID string,
@@ -189,6 +191,7 @@ func (r *ReadRouter) queryRowsReplicaRoundRobin(
 	for i := 0; i < len(r.readPools); i++ {
 		idx := (start + i) % len(r.readPools)
 		entry := r.readPools[idx]
+		writeBaseline := r.snapshotLastWrite(clientID)
 
 		var tokenText string
 		row := entry.pool.QueryRow(ctx, "SELECT "+r.engine.ReadTokenExpr())
@@ -212,7 +215,7 @@ func (r *ReadRouter) queryRowsReplicaRoundRobin(
 				return entry.host, fmt.Errorf("parse replay token: %w", parseErr)
 			}
 			tok = parsed
-			if rywRedirect && r.tokenBehindLastWrite(clientID, tok) {
+			if rywRedirect && tokenBehindBaseline(tok, writeBaseline) {
 				return "", errRYWRedirectLeader
 			}
 		}
@@ -227,7 +230,7 @@ func (r *ReadRouter) queryRowsReplicaRoundRobin(
 
 		dbReadTotal.WithLabelValues(RouteReplica.String()).Inc()
 		if tok != nil {
-			r.RecordRead(clientID, tok)
+			r.recordReadAgainst(clientID, tok, writeBaseline)
 		}
 		return entry.host, nil
 	}

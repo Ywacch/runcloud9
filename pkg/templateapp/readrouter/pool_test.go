@@ -676,3 +676,132 @@ func TestQueryRows_replicaPolicy_stalePeekServed(t *testing.T) {
 		t.Fatalf("ryw violations should not increment under replica policy")
 	}
 }
+
+func TestTokenBehindBaseline(t *testing.T) {
+	t.Parallel()
+
+	engine := PostgresEngine{}
+	tok100, err := engine.ParseToken("0/100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok90, err := engine.ParseToken("0/90")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name          string
+		token         ConsistencyToken
+		writeBaseline ConsistencyToken
+		want          bool
+	}{
+		{name: "nil write baseline", token: tok100, writeBaseline: nil, want: false},
+		{name: "nil token", token: nil, writeBaseline: tok100, want: false},
+		{name: "caught up", token: tok100, writeBaseline: tok100, want: false},
+		{name: "behind", token: tok90, writeBaseline: tok100, want: true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tokenBehindBaseline(tt.token, tt.writeBaseline); got != tt.want {
+				t.Fatalf("tokenBehindBaseline() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestQueryRows_RYW_concurrentWriteDuringRunNotViolation(t *testing.T) {
+	replica := stubPool{row: stubRow{tokenText: "0/100"}}
+	leader := stubPool{row: stubRow{}}
+	r := &ReadRouter{
+		engine:      PostgresEngine{},
+		policy:      PolicyRYW,
+		clients:     make(map[string]*clientState),
+		maxSize:     defaultMaxClients,
+		clientTTL:   defaultClientTTL,
+		writePool:   leader,
+		writeTarget: defaultWriteTarget,
+		readPools:   []replicaEntry{{pool: replica, host: "postgres-replica-0"}},
+	}
+	writeTok, err := r.engine.ParseToken("0/100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.AfterWrite("client-a", writeTok)
+	concurrentWrite, err := r.engine.ParseToken("0/110")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rywBefore := counterTotal(rywViolationsTotal)
+	redirectBefore := counterTotal(rywLeaderRedirectsTotal)
+
+	route, target, err := r.QueryRows(context.Background(), "client-a", func(_ context.Context, q Querier) error {
+		if q == replica {
+			r.AfterWrite("client-a", concurrentWrite)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("QueryRows: %v", err)
+	}
+	if route != RouteReplica {
+		t.Fatalf("route: got %v want replica", route)
+	}
+	if target != "postgres-replica-0" {
+		t.Fatalf("target: got %q", target)
+	}
+	if counterTotal(rywViolationsTotal)-rywBefore != 0 {
+		t.Fatalf("concurrent write during run must not count as RYW violation")
+	}
+	if counterTotal(rywLeaderRedirectsTotal)-redirectBefore != 0 {
+		t.Fatalf("expected no leader redirect when peek was caught up at baseline")
+	}
+}
+
+func TestQueryRows_replicaPolicy_concurrentWriteDuringRunNotStale(t *testing.T) {
+	replica := stubPool{row: stubRow{tokenText: "0/100"}}
+	leader := stubPool{row: stubRow{}}
+	r := &ReadRouter{
+		engine:      PostgresEngine{},
+		policy:      PolicyReplica,
+		clients:     make(map[string]*clientState),
+		maxSize:     defaultMaxClients,
+		clientTTL:   defaultClientTTL,
+		writePool:   leader,
+		writeTarget: defaultWriteTarget,
+		readPools:   []replicaEntry{{pool: replica, host: "postgres-replica-0"}},
+	}
+	writeTok, err := r.engine.ParseToken("0/100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.AfterWrite("client-a", writeTok)
+	concurrentWrite, err := r.engine.ParseToken("0/110")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	staleBefore := counterTotal(replicaStaleReadsTotal)
+
+	route, target, err := r.QueryRows(context.Background(), "client-a", func(_ context.Context, q Querier) error {
+		if q == replica {
+			r.AfterWrite("client-a", concurrentWrite)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("QueryRows: %v", err)
+	}
+	if route != RouteReplica {
+		t.Fatalf("route: got %v want replica", route)
+	}
+	if target != "postgres-replica-0" {
+		t.Fatalf("target: got %q", target)
+	}
+	if counterTotal(replicaStaleReadsTotal)-staleBefore != 0 {
+		t.Fatalf("concurrent write during run must not count as replica stale read")
+	}
+}

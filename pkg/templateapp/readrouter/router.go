@@ -213,7 +213,28 @@ func (r *ReadRouter) tokenBehindLastWrite(clientID string, token ConsistencyToke
 	if st == nil || st.lastWrite == nil {
 		return false
 	}
-	return !token.GTE(st.lastWrite)
+	return tokenBehindBaseline(token, st.lastWrite)
+}
+
+// snapshotLastWrite returns the client's lastWrite at call time for QueryRows
+// routing baselines. Writes recorded after the snapshot are concurrent with the
+// in-flight read, not causally prior to it.
+func (r *ReadRouter) snapshotLastWrite(clientID string) ConsistencyToken {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st := r.clients[clientID]
+	if st == nil || st.lastWrite == nil {
+		return nil
+	}
+	return st.lastWrite
+}
+
+// tokenBehindBaseline reports whether token trails the frozen write baseline.
+func tokenBehindBaseline(token, writeBaseline ConsistencyToken) bool {
+	if token == nil || writeBaseline == nil {
+		return false
+	}
+	return !token.GTE(writeBaseline)
 }
 
 func (r *ReadRouter) needsLeaderForRYW(clientID string) bool {
@@ -262,6 +283,44 @@ func (r *ReadRouter) RecordRead(clientID string, t ConsistencyToken) (rywViolati
 		}
 	case PolicyReplica:
 		if st.lastWrite != nil && !t.GTE(st.lastWrite) {
+			replicaStaleReadsTotal.Inc()
+		}
+	}
+
+	switch r.policy {
+	case PolicyMonotonic, PolicyRYWMonotonic:
+		if st.lastRead != nil && !t.GTE(st.lastRead) {
+			monotonicViolation = true
+			monotonicViolationsTotal.Inc()
+		}
+	}
+	return rywViolation, monotonicViolation
+}
+
+// recordReadAgainst updates read token state using a frozen write baseline from
+// the start of QueryRows. RYW and replica-stale checks compare against
+// writeBaseline, not live lastWrite, so concurrent writes during run() do not
+// count as violations.
+func (r *ReadRouter) recordReadAgainst(clientID string, t, writeBaseline ConsistencyToken) (rywViolation, monotonicViolation bool) {
+	if clientID == "" || t == nil {
+		return false, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st := r.getOrCreateLocked(clientID)
+	defer func() {
+		st.lastRead = t
+		st.seenAt = time.Now()
+	}()
+
+	switch r.policy {
+	case PolicyRYW, PolicyRYWMonotonic:
+		if tokenBehindBaseline(t, writeBaseline) {
+			rywViolation = true
+			rywViolationsTotal.Inc()
+		}
+	case PolicyReplica:
+		if tokenBehindBaseline(t, writeBaseline) {
 			replicaStaleReadsTotal.Inc()
 		}
 	}
