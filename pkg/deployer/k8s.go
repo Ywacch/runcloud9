@@ -137,6 +137,9 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 		if err := k.waitForReady(ctx, cfg, dbReplicaAppLabel, minReady, waitProgressOpts{prefix: prefix}); err != nil {
 			return err
 		}
+		if err := enablePostgresSynchronousReplication(ctx, k.newPostgresAdmin(cfg.Namespace), cfg.Node.Config, minReady); err != nil {
+			return fmt.Errorf("enable postgres synchronous replication: %w", err)
+		}
 		invokeAfterPrimaryReady(ctx, cfg)
 		if minReady < desiredReady {
 			return k.waitForReady(ctx, cfg, dbReplicaAppLabel, desiredReady, waitProgressOpts{prefix: prefix})

@@ -25,38 +25,11 @@ const (
 	dbReplicaBasebackupScript = `until pg_isready -h db -U syscrack; do sleep 1; done; pg_basebackup -h db -U syscrack -D $PGDATA -Fp -Xs -R -P --checkpoint=fast; echo "primary_conninfo = 'host=db port=5432 user=syscrack application_name=${HOSTNAME} sslmode=disable'" >> "$PGDATA/postgresql.auto.conf"`
 )
 
-// postgresPrimaryCommand returns the postgres primary command, including sync flags when configured.
-func postgresPrimaryCommand(nodeConfig map[string]any) []string {
+// postgresPrimaryCommand returns the postgres primary container command.
+// Synchronous replication GUCs are applied after standbys stream (see postgres_sync.go).
+func postgresPrimaryCommand(_ map[string]any) []string {
 	spec := componentRegistry["db"]
-	cmd := append([]string(nil), spec.Command...)
-	cmd = append(cmd, postgresSynchronousReplicationArgs(nodeConfig)...)
-	return cmd
-}
-
-// postgresSynchronousReplicationArgs returns -c flag pairs for synchronous replication settings.
-func postgresSynchronousReplicationArgs(nodeConfig map[string]any) []string {
-	readReplicas := parseReadReplicaCount(nodeConfig)
-	if readReplicas < 1 {
-		return nil
-	}
-	mode, err := parseReplicationMode(nodeConfig)
-	if err != nil || !requiresSynchronousReplication(mode) {
-		return nil
-	}
-	level := parseSyncCommitLevel(nodeConfig)
-	var standbyNames string
-	switch mode {
-	case replicationModeSemiSync:
-		standbyNames = "ANY 1 (*)"
-	case replicationModeSync:
-		standbyNames = fmt.Sprintf("FIRST %d (*)", readReplicas)
-	default:
-		return nil
-	}
-	return []string{
-		"-c", "synchronous_commit=" + level,
-		"-c", "synchronous_standby_names=" + standbyNames,
-	}
+	return append([]string(nil), spec.Command...)
 }
 
 func dbReadReplicaCount(cfg DeployConfig) int32 {

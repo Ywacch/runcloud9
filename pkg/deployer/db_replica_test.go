@@ -8,53 +8,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-func TestPostgresPrimaryCommand_syncIncludesStandbyNames(t *testing.T) {
-	t.Parallel()
-
-	cfg := map[string]any{
-		"replicationMode": "sync",
-		"readReplicas":    1,
-	}
-	cmd := strings.Join(postgresPrimaryCommand(cfg), " ")
-	for _, want := range []string{"synchronous_commit=on", "synchronous_standby_names=FIRST 1 (*)"} {
-		if !strings.Contains(cmd, want) {
-			t.Fatalf("command missing %q: %q", want, cmd)
-		}
-	}
-}
-
-func TestPostgresPrimaryCommand_semiSyncUsesAnyOne(t *testing.T) {
-	t.Parallel()
-
-	cfg := map[string]any{
-		"replicationMode": "semi-sync",
-		"readReplicas":    2,
-		"syncCommitLevel": "remote_apply",
-	}
-	cmd := strings.Join(postgresPrimaryCommand(cfg), " ")
-	for _, want := range []string{
-		"synchronous_commit=remote_apply",
-		"synchronous_standby_names=ANY 1 (*)",
-	} {
-		if !strings.Contains(cmd, want) {
-			t.Fatalf("command missing %q: %q", want, cmd)
-		}
-	}
-}
-
-func TestPostgresSynchronousReplicationArgs_syncTwoReplicasFirstN(t *testing.T) {
-	t.Parallel()
-
-	args := postgresSynchronousReplicationArgs(map[string]any{
-		"replicationMode": "sync",
-		"readReplicas":    2,
-	})
-	got := strings.Join(args, " ")
-	if !strings.Contains(got, "synchronous_standby_names=FIRST 2 (*)") {
-		t.Fatalf("got %q", got)
-	}
-}
-
 func TestPostgresPrimaryCommand_asyncOmitsStandbyNames(t *testing.T) {
 	t.Parallel()
 
