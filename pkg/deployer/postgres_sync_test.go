@@ -121,7 +121,7 @@ func TestPostgresSyncGUCsFromConfig(t *testing.T) {
 	}
 }
 
-func TestEnableSynchronousReplicationSQL(t *testing.T) {
+func TestEnableSynchronousReplicationStatements(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -152,10 +152,14 @@ func TestEnableSynchronousReplicationSQL(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := enableSynchronousReplicationSQL(tc.gucs)
+			got := enableSynchronousReplicationStatements(tc.gucs)
+			if len(got) != 3 {
+				t.Fatalf("expected 3 statements, got %d: %v", len(got), got)
+			}
+			joined := strings.Join(got, "; ")
 			for _, fragment := range tc.want {
-				if !strings.Contains(got, fragment) {
-					t.Fatalf("SQL missing %q: %q", fragment, got)
+				if !strings.Contains(joined, fragment) {
+					t.Fatalf("SQL missing %q: %q", fragment, joined)
 				}
 			}
 		})
@@ -237,6 +241,8 @@ func (f *fakePostgresAdmin) execSQL(_ context.Context, query string) (string, er
 		return f.showCommit, nil
 	case strings.Contains(query, "ALTER SYSTEM"):
 		return "", nil
+	case query == "SELECT pg_reload_conf()":
+		return "", nil
 	default:
 		return "", errors.New("unexpected query")
 	}
@@ -261,8 +267,14 @@ func TestEnablePostgresSynchronousReplication_success(t *testing.T) {
 	if err := enablePostgresSynchronousReplication(ctx, admin, cfg, 1); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(admin.execCalls[2], "ALTER SYSTEM") {
-		t.Fatalf("expected ALTER SYSTEM in exec calls: %v", admin.execCalls)
+	alterCount := 0
+	for _, call := range admin.execCalls {
+		if strings.Contains(call, "ALTER SYSTEM") {
+			alterCount++
+		}
+	}
+	if alterCount != 2 {
+		t.Fatalf("expected 2 ALTER SYSTEM calls, got %d: %v", alterCount, admin.execCalls)
 	}
 }
 
