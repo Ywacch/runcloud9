@@ -15,6 +15,8 @@ var errRYWRedirectLeader = errors.New("readrouter: ryw redirect to leader")
 // selected column (text). scan must read application columns and, when
 // replayToken is non-nil, scan the replay token into *replayToken last.
 // The returned target is the hostname used for postgres.Observe (postgres on leader).
+// RYW and replica-stale accounting freeze lastWrite before the replica QueryRow;
+// writes that complete during scan are concurrent with this read, not causally prior.
 func (r *ReadRouter) QueryRead(
 	ctx context.Context,
 	clientID string,
@@ -86,6 +88,7 @@ func (r *ReadRouter) queryReplicaRoundRobin(
 	for i := 0; i < len(r.readPools); i++ {
 		idx := (start + i) % len(r.readPools)
 		entry := r.readPools[idx]
+		writeBaseline := r.snapshotLastWrite(clientID)
 		var tokenText string
 		replayToken := &tokenText
 		sql, args := build(tokenExpr)
@@ -97,18 +100,18 @@ func (r *ReadRouter) queryReplicaRoundRobin(
 				if parseErr != nil {
 					return entry.host, fmt.Errorf("parse replay token: %w", parseErr)
 				}
-				if rywRedirect && r.tokenBehindLastWrite(clientID, tok) {
+				if rywRedirect && tokenBehindBaseline(tok, writeBaseline) {
 					return "", errRYWRedirectLeader
 				}
 				dbReadTotal.WithLabelValues(RouteReplica.String()).Inc()
-				r.RecordRead(clientID, tok)
+				r.recordReadAgainst(clientID, tok, writeBaseline)
 				return entry.host, nil
 			}
 			dbReadTotal.WithLabelValues(RouteReplica.String()).Inc()
 			return entry.host, nil
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
-			if rywRedirect && r.hasLastWrite(clientID) {
+			if rywRedirect && writeBaseline != nil {
 				return "", errRYWRedirectLeader
 			}
 			dbReadTotal.WithLabelValues(RouteReplica.String()).Inc()
