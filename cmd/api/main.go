@@ -332,6 +332,7 @@ func main() {
 
 	recoverDeployments(context.Background(), deploymentStore, scheduler)
 	handler.StartDeployQueue(context.Background())
+	handler.StartChaosPartitionSweep(context.Background())
 
 	port := "8080"
 	if len(os.Args) > 1 {

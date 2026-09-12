@@ -3,10 +3,8 @@ package chaos
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -18,25 +16,13 @@ const DefaultPartitionTTL = 15 * time.Minute
 
 // ActivePartitionScenarios lists scenario ids with an active partition policy in the namespace.
 func ActivePartitionScenarios(ctx context.Context, client kubernetes.Interface, namespace string) ([]string, error) {
-	if client == nil {
-		return nil, fmt.Errorf("chaos: kubernetes client is required")
-	}
-	if namespace == "" {
-		return nil, fmt.Errorf("chaos: namespace is required")
-	}
-
-	policies, err := client.NetworkingV1().NetworkPolicies(namespace).List(ctx, metav1.ListOptions{})
+	partitions, err := ListActivePartitions(ctx, client, namespace)
 	if err != nil {
-		return nil, fmt.Errorf("chaos: list partition policies: %w", err)
+		return nil, err
 	}
-
-	var active []string
-	for _, p := range policies.Items {
-		scenario := p.Labels[ChaosLabelScenario]
-		if scenario == "" {
-			continue
-		}
-		active = append(active, scenario)
+	active := make([]string, 0, len(partitions))
+	for _, part := range partitions {
+		active = append(active, part.Scenario)
 	}
 	return active, nil
 }
