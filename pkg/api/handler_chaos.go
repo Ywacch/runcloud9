@@ -12,6 +12,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/chaos"
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/metrics"
+	"github.com/ywacch/cloud9/pkg/store"
 )
 
 type chaosRequest struct {
@@ -19,31 +20,42 @@ type chaosRequest struct {
 	TargetComponent string `json:"targetComponent"`
 }
 
-// handleChaos applies a one-shot chaos scenario to a running deployment.
-func (h *Handler) handleChaos(w http.ResponseWriter, r *http.Request) {
+type chaosPartitionResponse struct {
+	Scenario        string `json:"scenario"`
+	TargetComponent string `json:"targetComponent"`
+	ExpiresAt       string `json:"expiresAt,omitempty"`
+}
+
+func (h *Handler) requireChaosDeployment(w http.ResponseWriter, r *http.Request, namespace string) *store.DeploymentRow {
+	if h.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "deployment store unavailable")
+		return nil
+	}
+	row := h.requireOwnership(w, r, namespace)
+	if row == nil {
+		return nil
+	}
+	if row.Status != "running" {
+		writeError(w, http.StatusBadRequest, "chaos requires deployment status running")
+		return nil
+	}
+	if h.clientset == nil {
+		writeError(w, http.StatusServiceUnavailable, "chaos requires kubernetes (set DEPLOYER=k8s)")
+		return nil
+	}
+	return row
+}
+
+// handleChaosApply applies a chaos scenario to a running deployment.
+func (h *Handler) handleChaosApply(w http.ResponseWriter, r *http.Request) {
 	namespace := r.PathValue("id")
 	if namespace == "" {
 		writeError(w, http.StatusBadRequest, "missing deployment id")
 		return
 	}
 
-	if h.store == nil {
-		writeError(w, http.StatusServiceUnavailable, "deployment store unavailable")
-		return
-	}
-
-	row := h.requireOwnership(w, r, namespace)
+	row := h.requireChaosDeployment(w, r, namespace)
 	if row == nil {
-		return
-	}
-
-	if row.Status != "running" {
-		writeError(w, http.StatusBadRequest, "chaos requires deployment status running")
-		return
-	}
-
-	if h.clientset == nil {
-		writeError(w, http.StatusServiceUnavailable, "chaos requires kubernetes (set DEPLOYER=k8s)")
 		return
 	}
 	limitJSONBody(w, r)
@@ -92,6 +104,10 @@ func (h *Handler) handleChaos(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := scenario.Apply(r.Context(), namespace, *design, req.TargetComponent); err != nil {
+		if errors.Is(err, chaos.ErrPartitionAlreadyActive) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -100,6 +116,10 @@ func (h *Handler) handleChaos(w http.ResponseWriter, r *http.Request) {
 		if dbCfg, ok := deployer.DatabaseNodeConfig(*design); ok && deployer.RequiresPostgresSynchronousReplication(dbCfg) {
 			h.reconcilePostgresSyncAfterChaos(namespace, dbCfg)
 		}
+	}
+
+	if scenario.Stateful() {
+		h.refreshChaosPartitionTTL(r.Context(), namespace)
 	}
 
 	if h.eventBus != nil {
@@ -125,6 +145,83 @@ func (h *Handler) handleChaos(w http.ResponseWriter, r *http.Request) {
 		"status":          "applied",
 		"scenario":        req.Scenario,
 		"targetComponent": req.TargetComponent,
+	})
+}
+
+// handleChaosHeal removes active partition policies from a running deployment.
+func (h *Handler) handleChaosHeal(w http.ResponseWriter, r *http.Request) {
+	namespace := r.PathValue("id")
+	if namespace == "" {
+		writeError(w, http.StatusBadRequest, "missing deployment id")
+		return
+	}
+	if h.requireChaosDeployment(w, r, namespace) == nil {
+		return
+	}
+
+	healed, err := chaos.HealPartitions(r.Context(), h.clientset, namespace)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	h.cancelChaosPartitionTTL(namespace)
+	for _, part := range healed {
+		h.emitChaosHeal(namespace, part, "manual")
+	}
+
+	resp := make([]chaosPartitionResponse, 0, len(healed))
+	for _, part := range healed {
+		item := chaosPartitionResponse{
+			Scenario:        part.Scenario,
+			TargetComponent: part.TargetComponent,
+		}
+		if !part.ExpiresAt.IsZero() {
+			item.ExpiresAt = part.ExpiresAt.UTC().Format(time.RFC3339)
+		}
+		resp = append(resp, item)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":     "healed",
+		"partitions": resp,
+	})
+}
+
+// handleChaosList returns active partition policies for page reload.
+func (h *Handler) handleChaosList(w http.ResponseWriter, r *http.Request) {
+	namespace := r.PathValue("id")
+	if namespace == "" {
+		writeError(w, http.StatusBadRequest, "missing deployment id")
+		return
+	}
+	if h.requireChaosDeployment(w, r, namespace) == nil {
+		return
+	}
+
+	active, err := chaos.ListActivePartitions(r.Context(), h.clientset, namespace)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	resp := make([]chaosPartitionResponse, 0, len(active))
+	for _, part := range active {
+		item := chaosPartitionResponse{
+			Scenario:        part.Scenario,
+			TargetComponent: part.TargetComponent,
+		}
+		if !part.ExpiresAt.IsZero() {
+			item.ExpiresAt = part.ExpiresAt.UTC().Format(time.RFC3339)
+		}
+		resp = append(resp, item)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"partitions": resp,
 	})
 }
 

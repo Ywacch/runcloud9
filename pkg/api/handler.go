@@ -53,6 +53,8 @@ type Handler struct {
 	queueTTL         time.Duration
 	queueWake        chan struct{}
 	provisionETA     *provisionETA
+	chaosTTLMu       sync.Mutex
+	chaosTTLTimers   map[string]*time.Timer
 }
 
 type deploymentStore interface {
@@ -69,6 +71,7 @@ type deploymentStore interface {
 	UpdateExpiresAt(ctx context.Context, namespace string, expiresAt time.Time) error
 	UpdateMetricsSummary(ctx context.Context, namespace string, patch map[string]any) error
 	GetDeployment(ctx context.Context, namespace string) (store.DeploymentRow, error)
+	GetStaleDeployments(ctx context.Context) ([]store.DeploymentRow, error)
 	SetMetricsSummary(ctx context.Context, namespace string, summary map[string]any) error
 	GetUser(ctx context.Context, userID string) (store.UserRecord, error)
 }
@@ -180,7 +183,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /deployments/{id}/loadgen", routeAuthExpensive(auth, rl, http.HandlerFunc(h.handleStartLoadGen)))
 	mux.Handle("PATCH /deployments/{id}/loadgen", routeAuth(auth, rl, http.HandlerFunc(h.handleUpdateLoadGen)))
 	mux.Handle("DELETE /deployments/{id}/loadgen", routeAuth(auth, rl, http.HandlerFunc(h.handleStopLoadGen)))
-	mux.Handle("POST /deployments/{id}/chaos", routeAuthExpensive(auth, rl, http.HandlerFunc(h.handleChaos)))
+	mux.Handle("POST /deployments/{id}/chaos", routeAuthExpensive(auth, rl, http.HandlerFunc(h.handleChaosApply)))
+	mux.Handle("DELETE /deployments/{id}/chaos", routeAuth(auth, rl, http.HandlerFunc(h.handleChaosHeal)))
+	mux.Handle("GET /deployments/{id}/chaos", routeAuth(auth, rl, http.HandlerFunc(h.handleChaosList)))
 	mux.Handle("GET /health", routePublic(rl, http.HandlerFunc(h.handleHealth)))
 	mux.Handle("GET /templates", routePublic(rl, http.HandlerFunc(h.handleGetTemplates)))
 	mux.Handle("GET /templates/{id}/loadgen", routePublic(rl, http.HandlerFunc(h.handleGetTemplateLoadgen)))

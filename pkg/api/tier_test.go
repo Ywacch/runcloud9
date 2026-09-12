@@ -48,6 +48,9 @@ func (s *stubUserStore) UpdateMetricsSummary(context.Context, string, map[string
 func (s *stubUserStore) GetDeployment(context.Context, string) (store.DeploymentRow, error) {
 	return store.DeploymentRow{}, errors.New("not found")
 }
+func (s *stubUserStore) GetStaleDeployments(context.Context) ([]store.DeploymentRow, error) {
+	return nil, nil
+}
 func (s *stubUserStore) SetMetricsSummary(context.Context, string, map[string]any) error {
 	return nil
 }

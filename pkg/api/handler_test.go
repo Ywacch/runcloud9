@@ -2220,6 +2220,18 @@ func (f *fakeDeploymentStore) GetDeployment(_ context.Context, namespace string)
 	return row, nil
 }
 
+func (f *fakeDeploymentStore) GetStaleDeployments(_ context.Context) ([]store.DeploymentRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var rows []store.DeploymentRow
+	for _, row := range f.byNS {
+		if row.Status == "running" || row.Status == "provisioning" {
+			rows = append(rows, row)
+		}
+	}
+	return rows, nil
+}
+
 func cloneStringAnyMap(in map[string]any) map[string]any {
 	if in == nil {
 		return nil
