@@ -26,4 +26,6 @@ type TopologyFlags struct {
 	ReplicationMode string
 	// SyncCommitLevel is remote_write, on, or remote_apply when replication waits on standbys.
 	SyncCommitLevel string
+	// SyncStandbyNames is ANY 1 (*) or FIRST N (*) when semi-sync/sync is configured.
+	SyncStandbyNames string
 }

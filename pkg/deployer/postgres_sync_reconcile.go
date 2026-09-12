@@ -1,0 +1,72 @@
+package deployer
+
+import (
+	"context"
+	"fmt"
+
+	"k8s.io/client-go/kubernetes"
+)
+
+const reconcilePostgresSyncTimeout = 3 * enablePostgresSyncTimeout
+
+// RequiresPostgresSynchronousReplication reports whether the db node design enables
+// semi-sync or sync replication with at least one read replica.
+func RequiresPostgresSynchronousReplication(nodeConfig map[string]any) bool {
+	_, ok := postgresSyncGUCsFromConfig(nodeConfig)
+	return ok
+}
+
+// DatabaseNodeConfig returns the single db node config from a deployment design.
+func DatabaseNodeConfig(design DeploymentDesign) (map[string]any, bool) {
+	for _, n := range design.Nodes {
+		if n.Type == "db" {
+			return n.Config, true
+		}
+	}
+	return nil, false
+}
+
+// ReconcilePostgresSynchronousReplication re-applies synchronous replication GUCs after
+// primary pod recreation. emptyDir PGDATA wipes postgresql.auto.conf; the primary boots
+// async until this runs. Call after chaos pod_kill on the database or Autopilot reschedule.
+func ReconcilePostgresSynchronousReplication(ctx context.Context, clientset kubernetes.Interface, namespace string, nodeConfig map[string]any) error {
+	mode, err := parseReplicationMode(nodeConfig)
+	if err != nil {
+		return err
+	}
+	rr := parseReadReplicaCount(nodeConfig)
+	minReady := seedReplicaReadyBeforeRestore(mode, rr)
+	if minReady == 0 {
+		return nil
+	}
+	if _, ok := postgresSyncGUCsFromConfig(nodeConfig); !ok {
+		return nil
+	}
+
+	if clientset == nil {
+		return fmt.Errorf("kubernetes client is required")
+	}
+	if namespace == "" {
+		return fmt.Errorf("namespace is required")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, reconcilePostgresSyncTimeout)
+	defer cancel()
+
+	d := &K8sDeployer{clientset: clientset}
+	cfg := DeployConfig{Namespace: namespace}
+
+	if err := d.waitForReady(ctx, cfg, postgresPrimaryAppLabel, 1, waitProgressOpts{}); err != nil {
+		return fmt.Errorf("wait for postgres primary after recreate: %w", err)
+	}
+	prefix := []PodWaitProgress{{Ordinal: 1, Ready: true, WaitCode: WaitCodeReady}}
+	if err := d.waitForReady(ctx, cfg, dbReplicaAppLabel, minReady, waitProgressOpts{prefix: prefix}); err != nil {
+		return fmt.Errorf("wait for postgres replicas after recreate: %w", err)
+	}
+
+	admin := d.newPostgresAdmin(namespace)
+	if err := enablePostgresSynchronousReplication(ctx, admin, nodeConfig, minReady); err != nil {
+		return fmt.Errorf("re-enable postgres synchronous replication: %w", err)
+	}
+	return nil
+}

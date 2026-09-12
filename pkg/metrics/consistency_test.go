@@ -117,10 +117,11 @@ func TestConsistencyDetector_GuaranteeHeldByDB_remoteApply(t *testing.T) {
 	cd := NewConsistencyDetector(&stubConsistencyProbeReader{ok: false})
 	ns := "ns-db-ryw"
 	topo := TopologyFlags{
-		HasDB:           true,
-		DBReadReplicas:  2,
-		ReplicationMode: "semi-sync",
-		SyncCommitLevel: "remote_apply",
+		HasDB:            true,
+		DBReadReplicas:   2,
+		ReplicationMode:  "semi-sync",
+		SyncCommitLevel:  "remote_apply",
+		SyncStandbyNames: "ANY 1 (*)",
 	}
 	dm := &DeploymentMetrics{Components: map[string]ComponentMetrics{"db": {Component: "db"}}}
 
@@ -129,6 +130,7 @@ func TestConsistencyDetector_GuaranteeHeldByDB_remoteApply(t *testing.T) {
 		LeaderReads:     3,
 		LeaderRedirects: 3,
 	})
+	cd.NotePostgresSyncActive(ns, true)
 	cd.Eval(ns, dm, topo, nil)
 
 	cons := dm.Components["db"].Consistency

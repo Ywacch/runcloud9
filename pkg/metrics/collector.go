@@ -1170,6 +1170,9 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		}
 		if topo.HasDB {
 			c.consistency.NoteAppTrafficConsistency(namespace, c.scrapeAppTrafficConsistency(ctx, nsSel))
+			if topologyRequiresPostgresSyncGUCs(topo) {
+				c.consistency.NotePostgresSyncActive(namespace, c.postgresSyncGUCsActive(ctx, ns, topo))
+			}
 		}
 		ev = append(ev, c.consistency.Eval(namespace, dm, topo, tmpl)...)
 	}
