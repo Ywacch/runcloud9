@@ -71,6 +71,9 @@ func TestStorytellingTopologyFromDesign_SyncCommitLevel(t *testing.T) {
 	if got.SyncCommitLevel != "remote_apply" {
 		t.Fatalf("SyncCommitLevel: want remote_apply, got %q", got.SyncCommitLevel)
 	}
+	if got.SyncStandbyNames != "ANY 1 (*)" {
+		t.Fatalf("SyncStandbyNames: want ANY 1 (*), got %q", got.SyncStandbyNames)
+	}
 }
 
 func TestStorytellingTopologyFromDesign_ReadReplicas(t *testing.T) {

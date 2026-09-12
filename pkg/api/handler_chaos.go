@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -13,8 +15,8 @@ import (
 )
 
 type chaosRequest struct {
-	Scenario          string `json:"scenario"`
-	TargetComponent   string `json:"targetComponent"`
+	Scenario        string `json:"scenario"`
+	TargetComponent string `json:"targetComponent"`
 }
 
 // handleChaos applies a one-shot chaos scenario to a running deployment.
@@ -94,6 +96,12 @@ func (h *Handler) handleChaos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Scenario == "pod_kill" && req.TargetComponent == "db" {
+		if dbCfg, ok := deployer.DatabaseNodeConfig(*design); ok && deployer.RequiresPostgresSynchronousReplication(dbCfg) {
+			h.reconcilePostgresSyncAfterChaos(namespace, dbCfg)
+		}
+	}
+
 	if h.eventBus != nil {
 		h.eventBus.Emit(namespace, metrics.Event{
 			Timestamp:   time.Now(),
@@ -118,4 +126,48 @@ func (h *Handler) handleChaos(w http.ResponseWriter, r *http.Request) {
 		"scenario":        req.Scenario,
 		"targetComponent": req.TargetComponent,
 	})
+}
+
+// reconcilePostgresSyncAfterChaos re-applies synchronous replication GUCs when a primary
+// pod recreate wipes postgresql.auto.conf from emptyDir PGDATA.
+func (h *Handler) reconcilePostgresSyncAfterChaos(namespace string, dbConfig map[string]any) {
+	if h == nil || h.clientset == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+		defer cancel()
+
+		err := deployer.ReconcilePostgresSynchronousReplication(ctx, h.clientset, namespace, dbConfig)
+		if h.eventBus == nil {
+			if err != nil {
+				slog.Warn("postgres sync reconcile failed", "namespace", namespace, "error", err)
+			}
+			return
+		}
+		if err != nil {
+			h.eventBus.Emit(namespace, metrics.Event{
+				Timestamp:   time.Now(),
+				Type:        "action",
+				Source:      "chaos",
+				Component:   "db",
+				Kind:        "postgres_sync_reconcile_failed",
+				Audience:    "both",
+				Title:       "Postgres sync settings not restored",
+				Description: err.Error(),
+			})
+			slog.Warn("postgres sync reconcile failed", "namespace", namespace, "error", err)
+			return
+		}
+		h.eventBus.Emit(namespace, metrics.Event{
+			Timestamp:   time.Now(),
+			Type:        "action",
+			Source:      "chaos",
+			Component:   "db",
+			Kind:        "postgres_sync_reconcile_ok",
+			Audience:    "both",
+			Title:       "Postgres synchronous replication restored",
+			Description: "Re-applied synchronous_standby_names after primary pod recreate",
+		})
+	}()
 }

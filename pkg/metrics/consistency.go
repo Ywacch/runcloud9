@@ -48,20 +48,23 @@ type ConsistencyDetector struct {
 	appTraffic  map[string]appTrafficConsistency
 	appRYWSeen  map[string]float64
 	appMonoSeen map[string]float64
+
+	postgresSyncActive map[string]bool
 }
 
 // NewConsistencyDetector creates a detector backed by the given probe reader.
 func NewConsistencyDetector(reader consistencyProbeReader) *ConsistencyDetector {
 	return &ConsistencyDetector{
-		reader:        reader,
-		suppressed:    make(map[string]map[string]bool),
-		violations:    make(map[string]map[string]int64),
-		appStaleTotal: make(map[string]float64),
-		appStaleSeen:  make(map[string]float64),
-		lastSample:    make(map[string]cacheStaleSample),
-		appTraffic:    make(map[string]appTrafficConsistency),
-		appRYWSeen:    make(map[string]float64),
-		appMonoSeen:   make(map[string]float64),
+		reader:             reader,
+		suppressed:         make(map[string]map[string]bool),
+		violations:         make(map[string]map[string]int64),
+		appStaleTotal:      make(map[string]float64),
+		appStaleSeen:       make(map[string]float64),
+		lastSample:         make(map[string]cacheStaleSample),
+		appTraffic:         make(map[string]appTrafficConsistency),
+		appRYWSeen:         make(map[string]float64),
+		appMonoSeen:        make(map[string]float64),
+		postgresSyncActive: make(map[string]bool),
 	}
 }
 
@@ -77,6 +80,17 @@ func (cd *ConsistencyDetector) NoteAppCacheStale(namespace string, total float64
 	if sample.Key != "" {
 		cd.lastSample[namespace] = sample
 	}
+}
+
+// NotePostgresSyncActive records whether live pg_settings match the design synchronous replication GUCs.
+// Call once per Collect tick before Eval when the topology expects semi-sync or sync.
+func (cd *ConsistencyDetector) NotePostgresSyncActive(namespace string, active bool) {
+	if cd == nil || namespace == "" {
+		return
+	}
+	cd.mu.Lock()
+	defer cd.mu.Unlock()
+	cd.postgresSyncActive[namespace] = active
 }
 
 // NoteAppTrafficConsistency records scraped readrouter counters for RYW/monotonic and read offload.
@@ -137,6 +151,7 @@ func (cd *ConsistencyDetector) Cleanup(namespace string) {
 	delete(cd.appTraffic, namespace)
 	delete(cd.appRYWSeen, namespace)
 	delete(cd.appMonoSeen, namespace)
+	delete(cd.postgresSyncActive, namespace)
 }
 
 func (cd *ConsistencyDetector) evalAppCacheStale(namespace string, now time.Time) []Event {
@@ -203,6 +218,7 @@ func (cd *ConsistencyDetector) evalAppMonotonic(namespace string, now time.Time)
 func (cd *ConsistencyDetector) statusFor(namespace string, result probes.ProbeResult, ok bool, topo TopologyFlags) *ConsistencyStatus {
 	cd.mu.Lock()
 	traffic := cd.appTraffic[namespace]
+	postgresSync := cd.postgresSyncActive[namespace]
 	cd.mu.Unlock()
 
 	status := &ConsistencyStatus{
@@ -212,7 +228,7 @@ func (cd *ConsistencyDetector) statusFor(namespace string, result probes.ProbeRe
 		LeaderReads:         traffic.LeaderReads,
 		ReplicaReads:        traffic.ReplicaReads,
 		ReplicaStaleReads:   int64(traffic.ReplicaStaleTotal + 0.5),
-		GuaranteeHeldBy:     guaranteeHeldByFrom(traffic, topo),
+		GuaranteeHeldBy:     guaranteeHeldByFrom(traffic, topo, postgresSync),
 	}
 	if sample, has := cd.sampleFor(namespace); has {
 		status.LastCacheKey = sample.Key
@@ -229,11 +245,14 @@ func (cd *ConsistencyDetector) statusFor(namespace string, result probes.ProbeRe
 	return status
 }
 
-func guaranteeHeldByFrom(traffic appTrafficConsistency, topo TopologyFlags) string {
+func guaranteeHeldByFrom(traffic appTrafficConsistency, topo TopologyFlags, postgresSyncActive bool) string {
 	if topo.HasDB && topo.DBReadReplicas > 0 && topo.SyncCommitLevel == "remote_apply" {
 		switch topo.ReplicationMode {
 		case "semi-sync", "sync":
-			return guaranteeHeldByDB
+			if postgresSyncActive {
+				return guaranteeHeldByDB
+			}
+			return guaranteeHeldByNone
 		}
 	}
 	if traffic.LeaderRedirects > 0 {

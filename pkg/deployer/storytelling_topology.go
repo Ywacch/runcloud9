@@ -19,6 +19,8 @@ type StorytellingTopology struct {
 	ReadReplicaCount int
 	ReplicationMode  string
 	SyncCommitLevel  string
+	// SyncStandbyNames is ANY 1 (*) or FIRST N (*) when semi-sync/sync is configured.
+	SyncStandbyNames string
 	CacheEngine      string
 	CacheRole        string
 	HasProxyCache    bool
@@ -54,6 +56,9 @@ func StorytellingTopologyFromDesign(d *DeploymentDesign, template string) Storyt
 				t.ReplicationMode = "async"
 			}
 			t.SyncCommitLevel = parseSyncCommitLevel(n.Config)
+			if gucs, ok := postgresSyncGUCsFromConfig(n.Config); ok {
+				t.SyncStandbyNames = gucs.StandbyNames
+			}
 			t.DBRole = "primary"
 		case "cache":
 			t.HasCache = true
