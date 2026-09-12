@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ywacch/cloud9/pkg/chaos"
 	"github.com/ywacch/cloud9/pkg/loadgen"
 	"github.com/ywacch/cloud9/pkg/probes"
 	"github.com/ywacch/cloud9/pkg/templates"
@@ -614,6 +615,26 @@ func annotateCacheForTemplate(cm *ComponentMetrics, template string) {
 	}
 }
 
+func (c *MetricsCollector) noteActiveChaosPartition(ctx context.Context, namespace string) {
+	if c == nil || c.consistency == nil {
+		return
+	}
+	if c.clientset == nil {
+		c.consistency.NoteActivePartition(namespace, nil)
+		return
+	}
+	partitions, err := chaos.ListActivePartitions(ctx, c.clientset, namespace)
+	if err != nil || len(partitions) == 0 {
+		c.consistency.NoteActivePartition(namespace, nil)
+		return
+	}
+	part := partitions[0]
+	c.consistency.NoteActivePartition(namespace, &PartitionContext{
+		Scenario:        part.Scenario,
+		TargetComponent: part.TargetComponent,
+	})
+}
+
 // Collect queries all metrics for a deployment namespace and returns a snapshot.
 // template is the deployment template id (e.g. social-feed); empty skips template-specific PromQL.
 // topo is derived from the saved deployment design (may be zero); used for narratives and cache-strategy overlay.
@@ -1169,6 +1190,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 			c.consistency.NoteAppCacheStale(namespace, staleTotal, c.scrapeConsistencySample(ctx, namespace))
 		}
 		if topo.HasDB {
+			c.noteActiveChaosPartition(ctx, namespace)
 			c.consistency.NoteAppTrafficConsistency(namespace, c.scrapeAppTrafficConsistency(ctx, nsSel))
 			if topologyRequiresPostgresSyncGUCs(topo) {
 				c.consistency.NotePostgresSyncActive(namespace, c.postgresSyncGUCsActive(ctx, ns, topo))

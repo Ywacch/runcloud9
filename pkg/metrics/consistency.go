@@ -50,6 +50,10 @@ type ConsistencyDetector struct {
 	appMonoSeen map[string]float64
 
 	postgresSyncActive map[string]bool
+
+	activePartition    map[string]PartitionContext
+	partitionRYWSeen   map[string]float64
+	partitionStaleSeen map[string]float64
 }
 
 // NewConsistencyDetector creates a detector backed by the given probe reader.
@@ -65,6 +69,9 @@ func NewConsistencyDetector(reader consistencyProbeReader) *ConsistencyDetector 
 		appRYWSeen:         make(map[string]float64),
 		appMonoSeen:        make(map[string]float64),
 		postgresSyncActive: make(map[string]bool),
+		activePartition:    make(map[string]PartitionContext),
+		partitionRYWSeen:   make(map[string]float64),
+		partitionStaleSeen: make(map[string]float64),
 	}
 }
 
@@ -121,6 +128,7 @@ func (cd *ConsistencyDetector) Eval(namespace string, dm *DeploymentMetrics, top
 	}
 	out = append(out, cd.evalAppRYW(namespace, now)...)
 	out = append(out, cd.evalAppMonotonic(namespace, now)...)
+	out = append(out, cd.evalPartitionCAP(namespace, now, dm, topo, nil)...)
 
 	var result probes.ProbeResult
 	probeOK := false
@@ -152,6 +160,9 @@ func (cd *ConsistencyDetector) Cleanup(namespace string) {
 	delete(cd.appRYWSeen, namespace)
 	delete(cd.appMonoSeen, namespace)
 	delete(cd.postgresSyncActive, namespace)
+	delete(cd.activePartition, namespace)
+	delete(cd.partitionRYWSeen, namespace)
+	delete(cd.partitionStaleSeen, namespace)
 }
 
 func (cd *ConsistencyDetector) evalAppCacheStale(namespace string, now time.Time) []Event {
