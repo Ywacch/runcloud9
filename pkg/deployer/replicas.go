@@ -204,6 +204,11 @@ func seedReplicaReadyBeforeRestore(mode string, replicaCount int32) int32 {
 	}
 }
 
+// DBEngineSupportsStreamingReplicas reports whether the db engine can use physical streaming replicas.
+func DBEngineSupportsStreamingReplicas(engine string) bool {
+	return dbEngineSupportsStreamingReplicas(engine)
+}
+
 // dbEngineSupportsStreamingReplicas reports whether the db engine can use physical streaming replicas.
 func dbEngineSupportsStreamingReplicas(engine string) bool {
 	switch strings.ToLower(strings.TrimSpace(engine)) {

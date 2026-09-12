@@ -32,6 +32,38 @@ var scenarioRegistry = []scenarioRegistration{
 			return &CacheFlushScenario{Client: client}
 		},
 	},
+	{
+		scenario: scenarioStallReplica,
+		engine:   "postgresql",
+		targets:  []string{"db"},
+		new: func(client kubernetes.Interface) ChaosScenario {
+			return &PartitionScenario{Client: client, Scenario: scenarioStallReplica}
+		},
+	},
+	{
+		scenario: scenarioSplitPrimaryReplica,
+		engine:   "postgresql",
+		targets:  []string{"db"},
+		new: func(client kubernetes.Interface) ChaosScenario {
+			return &PartitionScenario{Client: client, Scenario: scenarioSplitPrimaryReplica}
+		},
+	},
+	{
+		scenario: scenarioSplitAppStore,
+		engine:   "postgresql",
+		targets:  []string{"db"},
+		new: func(client kubernetes.Interface) ChaosScenario {
+			return &PartitionScenario{Client: client, Scenario: scenarioSplitAppStore}
+		},
+	},
+	{
+		scenario: scenarioSplitAppStore,
+		engine:   "redis",
+		targets:  []string{"cache"},
+		new: func(client kubernetes.Interface) ChaosScenario {
+			return &PartitionScenario{Client: client, Scenario: scenarioSplitAppStore}
+		},
+	},
 }
 
 // Resolve constructs a scenario for the given name, target component, and deployment design.
@@ -94,7 +126,7 @@ func engineForTarget(targetComponent string, design deployer.DeploymentDesign) s
 	topo := deployer.StorytellingTopologyFromDesign(&design, design.Template)
 	switch targetComponent {
 	case "db":
-		return topo.DBEngine
+		return normalizeDBEngine(topo.DBEngine)
 	case "cache":
 		return topo.CacheEngine
 	default:

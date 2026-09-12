@@ -47,8 +47,26 @@ func TestResolve(t *testing.T) {
 			design:   designWithCache,
 		},
 		{
+			name:     "stall_replica postgresql db",
+			scenario: scenarioStallReplica,
+			target:   "db",
+			design:   designWithCache,
+		},
+		{
+			name:     "split_primary_replica postgresql db",
+			scenario: scenarioSplitPrimaryReplica,
+			target:   "db",
+			design:   designWithCache,
+		},
+		{
+			name:     "split_app_store redis cache",
+			scenario: scenarioSplitAppStore,
+			target:   "cache",
+			design:   designWithCache,
+		},
+		{
 			name:      "unknown scenario",
-			scenario:  "stall_replica",
+			scenario:  "network_blackhole",
 			target:    "db",
 			design:    designWithCache,
 			wantErr:   true,
