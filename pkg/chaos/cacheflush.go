@@ -10,15 +10,21 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// CacheFlushScenario runs redis-cli FLUSHALL in the deployment's Redis pod.
+// CacheFlushScenario flushes the deployment cache via the engine-specific admin command.
 type CacheFlushScenario struct {
 	Client kubernetes.Interface
 }
 
-// Apply execs FLUSHALL against the resolved Redis pod.
+// Apply execs the cache flush command against the resolved cache pod.
 func (s *CacheFlushScenario) Apply(ctx context.Context, namespace string, design deployer.DeploymentDesign, targetComponent string) error {
 	if targetComponent != "cache" {
 		return fmt.Errorf("cache_flush only supports targetComponent \"cache\", got %q", targetComponent)
+	}
+
+	topo := deployer.StorytellingTopologyFromDesign(&design, design.Template)
+	cmd, err := cacheFlushCommand(topo.CacheEngine)
+	if err != nil {
+		return err
 	}
 
 	resolved, err := resolveTarget(targetComponent, design)
@@ -31,7 +37,7 @@ func (s *CacheFlushScenario) Apply(ctx context.Context, namespace string, design
 		return fmt.Errorf("no running cache pod: %w", err)
 	}
 
-	stdout, stderr, err := execInPod(ctx, s.Client, namespace, podName, resolved.Container, []string{"redis-cli", "FLUSHALL"})
+	stdout, stderr, err := execInPod(ctx, s.Client, namespace, podName, resolved.Container, cmd)
 	if err != nil {
 		return err
 	}
@@ -43,6 +49,14 @@ func (s *CacheFlushScenario) Apply(ctx context.Context, namespace string, design
 	slog.Info("chaos cache flush", "namespace", namespace, "pod", podName, "app", resolved.AppLabel, "result", out)
 	return nil
 }
+
+// Revert is a no-op for cache_flush.
+func (s *CacheFlushScenario) Revert(context.Context, string, deployer.DeploymentDesign, string) error {
+	return nil
+}
+
+// Stateful reports that cache_flush does not leave reversible cluster state.
+func (s *CacheFlushScenario) Stateful() bool { return false }
 
 // Description returns UI copy for the scenario.
 func (s *CacheFlushScenario) Description(targetComponent string) string {

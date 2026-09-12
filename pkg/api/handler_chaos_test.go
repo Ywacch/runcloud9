@@ -201,14 +201,14 @@ func TestHandleChaos_CacheFlushRequiresCache(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status: want 500, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	var er struct {
 		Error string `json:"error"`
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &er)
-	if !strings.Contains(er.Error, "cache_flush only supports") {
+	if !strings.Contains(er.Error, "supported:") {
 		t.Fatalf("error: %q", er.Error)
 	}
 }

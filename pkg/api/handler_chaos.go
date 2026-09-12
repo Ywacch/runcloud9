@@ -85,7 +85,7 @@ func (h *Handler) handleChaos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scenario, err := chaos.NewScenario(req.Scenario, h.clientset)
+	scenario, err := chaos.Resolve(req.Scenario, req.TargetComponent, *design, h.clientset)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
