@@ -55,7 +55,7 @@ func TestPartitionScenario_ApplyAndRevert(t *testing.T) {
 	if err := scenario.Apply(context.Background(), ns, design, "db"); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	policy, err := client.NetworkingV1().NetworkPolicies(ns).Get(context.Background(), "c9-chaos-stall_replica", metav1.GetOptions{})
+	policy, err := client.NetworkingV1().NetworkPolicies(ns).Get(context.Background(), "c9-chaos-stall-replica", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Get policy: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestPartitionScenario_ApplyAndRevert(t *testing.T) {
 	if err := scenario.Revert(context.Background(), ns, design, "db"); err != nil {
 		t.Fatalf("Revert: %v", err)
 	}
-	_, err = client.NetworkingV1().NetworkPolicies(ns).Get(context.Background(), "c9-chaos-stall_replica", metav1.GetOptions{})
+	_, err = client.NetworkingV1().NetworkPolicies(ns).Get(context.Background(), "c9-chaos-stall-replica", metav1.GetOptions{})
 	if err == nil {
 		t.Fatal("expected policy deleted")
 	}
@@ -164,7 +164,7 @@ func TestPartitionScenario_splitAppStore_cache(t *testing.T) {
 	if err := scenario.Apply(context.Background(), ns, design, "cache"); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	policy, err := client.NetworkingV1().NetworkPolicies(ns).Get(context.Background(), "c9-chaos-split_app_store", metav1.GetOptions{})
+	policy, err := client.NetworkingV1().NetworkPolicies(ns).Get(context.Background(), "c9-chaos-split-app-store", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
