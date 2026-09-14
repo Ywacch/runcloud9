@@ -75,7 +75,7 @@ func BuildPartitionNetworkPolicy(in PartitionPolicyInput) (*networkingv1.Network
 	port := intstr.FromInt32(in.Port)
 	return &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      chaosPolicyNamePrefix + in.Scenario,
+			Name:      partitionPolicyName(in.Scenario),
 			Namespace: in.Namespace,
 			Labels: map[string]string{
 				ChaosLabelScenario: in.Scenario,

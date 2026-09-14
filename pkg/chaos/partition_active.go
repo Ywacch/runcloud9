@@ -3,6 +3,7 @@ package chaos
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"k8s.io/client-go/kubernetes"
@@ -43,6 +44,7 @@ func ensurePartitionSlot(ctx context.Context, client kubernetes.Interface, names
 	return nil
 }
 
+// partitionPolicyName returns a RFC 1123 subdomain-safe NetworkPolicy name for a scenario id.
 func partitionPolicyName(scenario string) string {
-	return chaosPolicyNamePrefix + scenario
+	return chaosPolicyNamePrefix + strings.ReplaceAll(scenario, "_", "-")
 }
