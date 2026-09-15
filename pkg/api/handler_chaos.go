@@ -129,15 +129,19 @@ func (h *Handler) handleChaosApply(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.eventBus != nil {
+		now := time.Now()
 		detail := map[string]string{
 			"scenario":        req.Scenario,
 			"targetComponent": req.TargetComponent,
 		}
 		if ps, ok := scenario.(*chaos.PromoteScenario); ok {
 			mergePromotionChaosDetail(detail, ps.Result, dbCfg)
+			if ev := failoverWriteLossEvent(now, req.Scenario, ps.Result, dbCfg); ev != nil {
+				h.eventBus.Emit(namespace, *ev)
+			}
 		}
 		h.eventBus.Emit(namespace, metrics.Event{
-			Timestamp:   time.Now(),
+			Timestamp:   now,
 			Type:        "action",
 			Source:      "chaos",
 			Component:   req.TargetComponent,
@@ -233,6 +237,24 @@ func (h *Handler) handleChaosList(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"partitions": resp,
 	})
+}
+
+func failoverWriteLossEvent(now time.Time, scenario string, result deployer.PromotionResult, dbCfg map[string]any) *metrics.Event {
+	replicationMode := ""
+	syncCommitLevel := ""
+	if dbCfg != nil {
+		replicationMode = deployer.ReplicationModeLabel(dbCfg)
+		syncCommitLevel = deployer.SyncCommitLevelLabel(dbCfg)
+	}
+	return metrics.FailoverWriteLossEvent(
+		now,
+		scenario,
+		result.PromotedPod,
+		result.SyncState,
+		result.WalBytesLost,
+		replicationMode,
+		syncCommitLevel,
+	)
 }
 
 func mergePromotionChaosDetail(detail map[string]string, result deployer.PromotionResult, dbCfg map[string]any) {

@@ -186,12 +186,57 @@ func TestPromoteStandby_success(t *testing.T) {
 func TestWalBytesLost(t *testing.T) {
 	t.Parallel()
 
-	got, err := WalBytesLost("0/1000", "0/2000")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	tests := []struct {
+		name     string
+		preFence string
+		promoted string
+		want     int64
+		wantErr  bool
+	}{
+		{
+			name:     "zero loss same lsn",
+			preFence: "0/2000",
+			promoted: "0/2000",
+			want:     0,
+		},
+		{
+			name:     "positive diff",
+			preFence: "0/1000",
+			promoted: "0/2000",
+			want:     4096,
+		},
+		{
+			name:     "larger segment diff",
+			preFence: "0/3000",
+			promoted: "0/5000",
+			want:     8192,
+		},
+		{
+			name:     "invalid pre-fence",
+			preFence: "bad",
+			promoted: "0/2000",
+			wantErr:  true,
+		},
 	}
-	if got != 4096 {
-		t.Fatalf("got %d want 4096", got)
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := WalBytesLost(tc.preFence, tc.promoted)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("got %d want %d", got, tc.want)
+			}
+		})
 	}
 }
 
