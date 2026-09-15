@@ -69,7 +69,9 @@ func TestPostgresExporterQueriesConfigMap_content(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing key %q", postgresExporterQueriesFileName)
 	}
-	for _, want := range []string{"replay_lag", "application_name", "replay_lag_seconds", "master: true"} {
+	for _, want := range []string{
+		"replay_lag", "application_name", "sync_state", "replay_lag_seconds", "replay_lag_bytes", "master: true",
+	} {
 		if !strings.Contains(yaml, want) {
 			t.Fatalf("queries yaml missing %q:\n%s", want, yaml)
 		}
