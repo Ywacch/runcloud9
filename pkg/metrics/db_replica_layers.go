@@ -30,11 +30,12 @@ const (
 
 // dbReplicaLayerSplit holds per-instance Postgres layers when read replicas are deployed.
 type dbReplicaLayerSplit struct {
-	replicaPods []string
-	ready       map[string]bool
-	counts      BackendReplicas
-	primary     ComponentLayerMetrics
-	replicas    []ComponentLayerMetrics
+	replicaPods        []string
+	ready              map[string]bool
+	connectedOnPrimary map[string]bool
+	counts             BackendReplicas
+	primary            ComponentLayerMetrics
+	replicas           []ComponentLayerMetrics
 }
 
 // listDBReplicaPods returns replica pod names, readiness, and StatefulSet desired/ready counts.
@@ -258,6 +259,24 @@ func (c *MetricsCollector) replicaLagByPod(ctx context.Context, ns string, repli
 	return out
 }
 
+// replicaConnectedOnPrimaryByPod reports which replica pods have a pg_stat_replication row
+// on the primary (application_name = pod hostname). Fallback standby-side lag is ignored.
+func (c *MetricsCollector) replicaConnectedOnPrimaryByPod(ctx context.Context, ns string, replicaPods []string) map[string]bool {
+	out := make(map[string]bool, len(replicaPods))
+	for _, podName := range replicaPods {
+		out[podName] = false
+	}
+	if c == nil || c.prometheusURL == "" || len(replicaPods) == 0 {
+		return out
+	}
+	for appName := range c.queryMultiResult(ctx, postgresPrimaryReplayLagByAppQuery(ns), "application_name") {
+		if _, ok := out[appName]; ok {
+			out[appName] = true
+		}
+	}
+	return out
+}
+
 func (c *MetricsCollector) buildDBPrimaryLayer(ctx context.Context, ns string) ComponentLayerMetrics {
 	layer := ComponentLayerMetrics{
 		ID:     dbLayerIDPostgresPrimary,
@@ -325,6 +344,7 @@ func (c *MetricsCollector) collectDBReplicaLayers(ctx context.Context, ns string
 
 	out.primary = c.buildDBPrimaryLayer(ctx, ns)
 	lagByPod := c.replicaLagByPod(ctx, ns, names)
+	out.connectedOnPrimary = c.replicaConnectedOnPrimaryByPod(ctx, ns, names)
 	rpsByLayer := c.dbLayerRequestRateByPod(ctx, ns)
 	out.primary.RequestRate = rpsByLayer[dbLayerIDPostgresPrimary]
 	out.replicas = make([]ComponentLayerMetrics, 0, len(names))

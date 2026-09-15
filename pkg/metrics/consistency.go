@@ -54,24 +54,29 @@ type ConsistencyDetector struct {
 	activePartition    map[string]PartitionContext
 	partitionRYWSeen   map[string]float64
 	partitionStaleSeen map[string]float64
+
+	replicaReady              map[string]map[string]bool
+	replicaConnectedOnPrimary map[string]map[string]bool
 }
 
 // NewConsistencyDetector creates a detector backed by the given probe reader.
 func NewConsistencyDetector(reader consistencyProbeReader) *ConsistencyDetector {
 	return &ConsistencyDetector{
-		reader:             reader,
-		suppressed:         make(map[string]map[string]bool),
-		violations:         make(map[string]map[string]int64),
-		appStaleTotal:      make(map[string]float64),
-		appStaleSeen:       make(map[string]float64),
-		lastSample:         make(map[string]cacheStaleSample),
-		appTraffic:         make(map[string]appTrafficConsistency),
-		appRYWSeen:         make(map[string]float64),
-		appMonoSeen:        make(map[string]float64),
-		postgresSyncActive: make(map[string]bool),
-		activePartition:    make(map[string]PartitionContext),
-		partitionRYWSeen:   make(map[string]float64),
-		partitionStaleSeen: make(map[string]float64),
+		reader:                    reader,
+		suppressed:                make(map[string]map[string]bool),
+		violations:                make(map[string]map[string]int64),
+		appStaleTotal:             make(map[string]float64),
+		appStaleSeen:              make(map[string]float64),
+		lastSample:                make(map[string]cacheStaleSample),
+		appTraffic:                make(map[string]appTrafficConsistency),
+		appRYWSeen:                make(map[string]float64),
+		appMonoSeen:               make(map[string]float64),
+		postgresSyncActive:        make(map[string]bool),
+		activePartition:           make(map[string]PartitionContext),
+		partitionRYWSeen:          make(map[string]float64),
+		partitionStaleSeen:        make(map[string]float64),
+		replicaReady:              make(map[string]map[string]bool),
+		replicaConnectedOnPrimary: make(map[string]map[string]bool),
 	}
 }
 
@@ -129,6 +134,7 @@ func (cd *ConsistencyDetector) Eval(namespace string, dm *DeploymentMetrics, top
 	out = append(out, cd.evalAppRYW(namespace, now)...)
 	out = append(out, cd.evalAppMonotonic(namespace, now)...)
 	out = append(out, cd.evalPartitionCAP(namespace, now, dm, topo, nil)...)
+	out = append(out, cd.evalReplicaCannotCatchUp(namespace, now, topo)...)
 
 	var result probes.ProbeResult
 	probeOK := false
@@ -163,6 +169,8 @@ func (cd *ConsistencyDetector) Cleanup(namespace string) {
 	delete(cd.activePartition, namespace)
 	delete(cd.partitionRYWSeen, namespace)
 	delete(cd.partitionStaleSeen, namespace)
+	delete(cd.replicaReady, namespace)
+	delete(cd.replicaConnectedOnPrimary, namespace)
 }
 
 func (cd *ConsistencyDetector) evalAppCacheStale(namespace string, now time.Time) []Event {

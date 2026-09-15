@@ -20,6 +20,7 @@ func TestComponentRegistryDB_replicationReady(t *testing.T) {
 		"max_replication_slots=10",
 		"wal_level=replica",
 		"max_wal_senders=10",
+		"wal_keep_size=64MB",
 		"hot_standby=on",
 	} {
 		if !strings.Contains(cmd, want) {

@@ -40,6 +40,16 @@ func dbReadReplicaCount(cfg DeployConfig) int32 {
 }
 
 func dbReplicaResources(base corev1.ResourceRequirements) corev1.ResourceRequirements {
+	return dbPostgresEphemeralResources(base)
+}
+
+// dbPrimaryResources raises ephemeral-storage on the postgres primary Deployment.
+// PGDATA lives on the container filesystem; wal_keep_size needs headroom beyond the catalog default.
+func dbPrimaryResources(base corev1.ResourceRequirements) corev1.ResourceRequirements {
+	return dbPostgresEphemeralResources(base)
+}
+
+func dbPostgresEphemeralResources(base corev1.ResourceRequirements) corev1.ResourceRequirements {
 	out := *base.DeepCopy()
 	qty := resource.MustParse(dbReplicaEphemeralSize)
 	if out.Limits == nil {

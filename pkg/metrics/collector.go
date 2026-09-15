@@ -1114,6 +1114,9 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 			}
 			dbLayerSplit := c.collectDBReplicaLayers(ctx, ns, cm.StorageIO)
 			applyDBReplicaLayers(&cm, dbLayerSplit)
+			if c.consistency != nil {
+				c.consistency.NoteDBReplicaPrimaryConnectivity(namespace, dbLayerSplit.ready, dbLayerSplit.connectedOnPrimary)
+			}
 			needReplica := len(dbLayerSplit.replicaPods) > 0
 			needCache := topo.HasCache
 			if c.observer != nil && (needReplica || needCache) {
