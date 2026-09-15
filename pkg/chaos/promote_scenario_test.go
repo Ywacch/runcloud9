@@ -9,6 +9,19 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
+func TestIsPromotionScenario(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{ScenarioPromoteReplica, ScenarioPromoteLaggingReplica} {
+		if !IsPromotionScenario(name) {
+			t.Fatalf("IsPromotionScenario(%q) = false", name)
+		}
+	}
+	if IsPromotionScenario("pod_kill") {
+		t.Fatal("pod_kill should not be a promotion scenario")
+	}
+}
+
 func TestPromoteScenario_Stateful(t *testing.T) {
 	t.Parallel()
 

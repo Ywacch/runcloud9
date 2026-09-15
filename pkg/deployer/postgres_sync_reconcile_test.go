@@ -96,3 +96,60 @@ func TestReconcilePostgresSynchronousReplication_requiresClient(t *testing.T) {
 		t.Fatal("expected error without kubernetes client")
 	}
 }
+
+func TestReconcilePostgresSynchronousReplicationOnPod_asyncNoOp(t *testing.T) {
+	t.Parallel()
+
+	err := ReconcilePostgresSynchronousReplicationOnPod(context.Background(), nil, "ns", "postgres-replica-0", map[string]any{
+		"replicationMode": "async",
+		"readReplicas":    2,
+	})
+	if err != nil {
+		t.Fatalf("async reconcile should no-op: %v", err)
+	}
+}
+
+func TestReconcilePostgresSynchronousReplicationOnPod_requiresClient(t *testing.T) {
+	t.Parallel()
+
+	err := ReconcilePostgresSynchronousReplicationOnPod(context.Background(), nil, "ns", "postgres-replica-0", map[string]any{
+		"replicationMode": "semi-sync",
+		"readReplicas":    2,
+		"syncCommitLevel": "remote_apply",
+	})
+	if err == nil {
+		t.Fatal("expected error without kubernetes client")
+	}
+}
+
+func TestReconcilePostgresSynchronousReplicationOnPod_requiresPodName(t *testing.T) {
+	t.Parallel()
+
+	err := ReconcilePostgresSynchronousReplicationOnPod(context.Background(), nil, "ns", "", map[string]any{
+		"replicationMode": "semi-sync",
+		"readReplicas":    2,
+		"syncCommitLevel": "remote_apply",
+	})
+	if err == nil {
+		t.Fatal("expected error without primary pod name")
+	}
+}
+
+func TestReplicationModeLabel(t *testing.T) {
+	t.Parallel()
+
+	if got := ReplicationModeLabel(map[string]any{"replicationMode": "semi-sync"}); got != "semi-sync" {
+		t.Fatalf("ReplicationModeLabel: got %q", got)
+	}
+	if got := ReplicationModeLabel(nil); got != "async" {
+		t.Fatalf("nil config: got %q", got)
+	}
+}
+
+func TestSyncCommitLevelLabel(t *testing.T) {
+	t.Parallel()
+
+	if got := SyncCommitLevelLabel(map[string]any{"syncCommitLevel": "remote_apply"}); got != "remote_apply" {
+		t.Fatalf("SyncCommitLevelLabel: got %q", got)
+	}
+}
