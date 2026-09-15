@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/chaos"
@@ -112,8 +113,13 @@ func (h *Handler) handleChaosApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Scenario == "pod_kill" && req.TargetComponent == "db" {
-		if dbCfg, ok := deployer.DatabaseNodeConfig(*design); ok && deployer.RequiresPostgresSynchronousReplication(dbCfg) {
+	dbCfg, _ := deployer.DatabaseNodeConfig(*design)
+	if ps, ok := scenario.(*chaos.PromoteScenario); ok {
+		if deployer.RequiresPostgresSynchronousReplication(dbCfg) {
+			h.reconcilePostgresSyncAfterPromotion(namespace, dbCfg, ps.Result.PromotedPod)
+		}
+	} else if req.Scenario == "pod_kill" && req.TargetComponent == "db" {
+		if deployer.RequiresPostgresSynchronousReplication(dbCfg) {
 			h.reconcilePostgresSyncAfterChaos(namespace, dbCfg)
 		}
 	}
@@ -123,6 +129,13 @@ func (h *Handler) handleChaosApply(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.eventBus != nil {
+		detail := map[string]string{
+			"scenario":        req.Scenario,
+			"targetComponent": req.TargetComponent,
+		}
+		if ps, ok := scenario.(*chaos.PromoteScenario); ok {
+			mergePromotionChaosDetail(detail, ps.Result, dbCfg)
+		}
 		h.eventBus.Emit(namespace, metrics.Event{
 			Timestamp:   time.Now(),
 			Type:        "action",
@@ -132,10 +145,7 @@ func (h *Handler) handleChaosApply(w http.ResponseWriter, r *http.Request) {
 			Audience:    "both",
 			Title:       scenario.Description(req.TargetComponent),
 			Description: req.Scenario,
-			Detail: map[string]string{
-				"scenario":        req.Scenario,
-				"targetComponent": req.TargetComponent,
-			},
+			Detail:      detail,
 		})
 	}
 
@@ -223,6 +233,60 @@ func (h *Handler) handleChaosList(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"partitions": resp,
 	})
+}
+
+func mergePromotionChaosDetail(detail map[string]string, result deployer.PromotionResult, dbCfg map[string]any) {
+	detail["promotedPod"] = result.PromotedPod
+	detail["candidateSyncState"] = result.SyncState
+	detail["candidateLagBytes"] = strconv.FormatInt(result.LagBytes, 10)
+	detail["walBytesLost"] = strconv.FormatInt(result.WalBytesLost, 10)
+	if dbCfg != nil {
+		detail["replicationMode"] = deployer.ReplicationModeLabel(dbCfg)
+		detail["syncCommitLevel"] = deployer.SyncCommitLevelLabel(dbCfg)
+	}
+}
+
+// reconcilePostgresSyncAfterPromotion re-applies sync GUCs on the promoted replica pod.
+func (h *Handler) reconcilePostgresSyncAfterPromotion(namespace string, dbConfig map[string]any, primaryPodName string) {
+	if h == nil || h.clientset == nil || primaryPodName == "" {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+		defer cancel()
+
+		err := deployer.ReconcilePostgresSynchronousReplicationOnPod(ctx, h.clientset, namespace, primaryPodName, dbConfig)
+		if h.eventBus == nil {
+			if err != nil {
+				slog.Warn("postgres sync reconcile after promotion failed", "namespace", namespace, "error", err)
+			}
+			return
+		}
+		if err != nil {
+			h.eventBus.Emit(namespace, metrics.Event{
+				Timestamp:   time.Now(),
+				Type:        "action",
+				Source:      "chaos",
+				Component:   "db",
+				Kind:        "postgres_sync_reconcile_failed",
+				Audience:    "both",
+				Title:       "Postgres sync settings not restored",
+				Description: err.Error(),
+			})
+			slog.Warn("postgres sync reconcile after promotion failed", "namespace", namespace, "error", err)
+			return
+		}
+		h.eventBus.Emit(namespace, metrics.Event{
+			Timestamp:   time.Now(),
+			Type:        "action",
+			Source:      "chaos",
+			Component:   "db",
+			Kind:        "postgres_sync_reconcile_ok",
+			Audience:    "both",
+			Title:       "Postgres synchronous replication restored",
+			Description: "Re-applied synchronous_standby_names after replica promotion",
+		})
+	}()
 }
 
 // reconcilePostgresSyncAfterChaos re-applies synchronous replication GUCs when a primary

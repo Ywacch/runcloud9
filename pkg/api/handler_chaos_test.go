@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/store"
 	corev1 "k8s.io/api/core/v1"
@@ -322,6 +323,88 @@ func TestHandleChaosHeal_noActive(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMergePromotionChaosDetail(t *testing.T) {
+	t.Parallel()
+
+	detail := map[string]string{
+		"scenario":        "promote_replica",
+		"targetComponent": "db",
+	}
+	mergePromotionChaosDetail(detail, deployer.PromotionResult{
+		PromotedPod:  "postgres-replica-1",
+		SyncState:    "streaming",
+		LagBytes:     4096,
+		WalBytesLost: 0,
+	}, map[string]any{
+		"replicationMode": "semi-sync",
+		"syncCommitLevel": "remote_apply",
+		"readReplicas":    2,
+	})
+
+	if detail["promotedPod"] != "postgres-replica-1" {
+		t.Fatalf("promotedPod: %q", detail["promotedPod"])
+	}
+	if detail["candidateSyncState"] != "streaming" {
+		t.Fatalf("candidateSyncState: %q", detail["candidateSyncState"])
+	}
+	if detail["candidateLagBytes"] != "4096" {
+		t.Fatalf("candidateLagBytes: %q", detail["candidateLagBytes"])
+	}
+	if detail["walBytesLost"] != "0" {
+		t.Fatalf("walBytesLost: %q", detail["walBytesLost"])
+	}
+	if detail["replicationMode"] != "semi-sync" {
+		t.Fatalf("replicationMode: %q", detail["replicationMode"])
+	}
+	if detail["syncCommitLevel"] != "remote_apply" {
+		t.Fatalf("syncCommitLevel: %q", detail["syncCommitLevel"])
+	}
+}
+
+func TestHandleChaos_promoteSecondPartitionConflict(t *testing.T) {
+	t.Parallel()
+	ns := "ns-promote-conflict"
+	replica := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "postgres-replica-0",
+			Namespace: ns,
+			Labels:    map[string]string{"app": "postgres-replica"},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	client := fake.NewClientset(replica)
+	st := &fakeDeploymentStore{
+		byNS: map[string]store.DeploymentRow{
+			ns: {
+				Namespace: ns,
+				Status:    "running",
+				Design:    chaosDBDesign(),
+			},
+		},
+	}
+	h := NewHandler(nil, st, nil, nil, nil, nil, client, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	first := `{"scenario":"stall_replica","targetComponent":"db"}`
+	req1 := httptest.NewRequest(http.MethodPost, "/deployments/"+ns+"/chaos", strings.NewReader(first))
+	req1.Header.Set("Content-Type", "application/json")
+	rec1 := httptest.NewRecorder()
+	mux.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first apply: want 200, got %d body=%s", rec1.Code, rec1.Body.String())
+	}
+
+	second := `{"scenario":"promote_replica","targetComponent":"db"}`
+	req2 := httptest.NewRequest(http.MethodPost, "/deployments/"+ns+"/chaos", strings.NewReader(second))
+	req2.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+	mux.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusConflict {
+		t.Fatalf("promote during partition: want 409, got %d body=%s", rec2.Code, rec2.Body.String())
 	}
 }
 

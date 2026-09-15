@@ -70,3 +70,59 @@ func ReconcilePostgresSynchronousReplication(ctx context.Context, clientset kube
 	}
 	return nil
 }
+
+// ReconcilePostgresSynchronousReplicationOnPod re-applies synchronous replication GUCs on a
+// promoted standby pod acting as the write primary. The postgres Deployment is scaled to
+// zero after promotion, so reconciliation cannot use the app=postgres pod lookup.
+func ReconcilePostgresSynchronousReplicationOnPod(ctx context.Context, clientset kubernetes.Interface, namespace, primaryPodName string, nodeConfig map[string]any) error {
+	mode, err := parseReplicationMode(nodeConfig)
+	if err != nil {
+		return err
+	}
+	rr := parseReadReplicaCount(nodeConfig)
+	minReady := seedReplicaReadyBeforeRestore(mode, rr)
+	if minReady == 0 {
+		return nil
+	}
+	if _, ok := postgresSyncGUCsFromConfig(nodeConfig); !ok {
+		return nil
+	}
+	if clientset == nil {
+		return fmt.Errorf("kubernetes client is required")
+	}
+	if namespace == "" {
+		return fmt.Errorf("namespace is required")
+	}
+	if primaryPodName == "" {
+		return fmt.Errorf("primary pod name is required")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, reconcilePostgresSyncTimeout)
+	defer cancel()
+
+	d := &K8sDeployer{clientset: clientset}
+	cfg := DeployConfig{Namespace: namespace}
+	if err := d.waitForReady(ctx, cfg, dbReplicaAppLabel, minReady, waitProgressOpts{}); err != nil {
+		return fmt.Errorf("wait for postgres replicas after promotion: %w", err)
+	}
+
+	admin := NewPostgresPodAdmin(clientset, namespace, primaryPodName, dbReplicaAppLabel)
+	if err := enablePostgresSynchronousReplication(ctx, admin, nodeConfig, minReady); err != nil {
+		return fmt.Errorf("re-enable postgres synchronous replication: %w", err)
+	}
+	return nil
+}
+
+// ReplicationModeLabel returns the normalized replication mode from db node config.
+func ReplicationModeLabel(nodeConfig map[string]any) string {
+	mode, err := parseReplicationMode(nodeConfig)
+	if err != nil {
+		return replicationModeAsync
+	}
+	return mode
+}
+
+// SyncCommitLevelLabel returns synchronous_commit level from db node config.
+func SyncCommitLevelLabel(nodeConfig map[string]any) string {
+	return parseSyncCommitLevel(nodeConfig)
+}

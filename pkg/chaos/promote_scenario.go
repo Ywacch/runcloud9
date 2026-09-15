@@ -9,9 +9,17 @@ import (
 )
 
 const (
-	scenarioPromoteReplica        = "promote_replica"
-	scenarioPromoteLaggingReplica = "promote_lagging_replica"
+	ScenarioPromoteReplica        = "promote_replica"
+	ScenarioPromoteLaggingReplica = "promote_lagging_replica"
+
+	scenarioPromoteReplica        = ScenarioPromoteReplica
+	scenarioPromoteLaggingReplica = ScenarioPromoteLaggingReplica
 )
+
+// IsPromotionScenario reports whether name is a postgres promotion chaos action.
+func IsPromotionScenario(name string) bool {
+	return name == ScenarioPromoteReplica || name == ScenarioPromoteLaggingReplica
+}
 
 // PromoteScenario promotes a postgres standby to primary. Terminal: Revert is a no-op.
 type PromoteScenario struct {
