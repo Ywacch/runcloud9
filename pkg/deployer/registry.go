@@ -54,6 +54,7 @@ var componentRegistry = map[string]ComponentSpec{
 			"-c", "max_replication_slots=10",
 			"-c", "wal_level=replica",
 			"-c", "max_wal_senders=10",
+			"-c", "wal_keep_size=64MB",
 			"-c", "hot_standby=on",
 		},
 		DefaultEnv: map[string]string{

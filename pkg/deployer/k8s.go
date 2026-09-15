@@ -117,7 +117,7 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 		}
 		total := 1 + int(rr)
 		sizes := instanceSizesFromConfig(cfg.Node.Config, total)
-		primaryResources := dbResourcesForSize(sizes[0])
+		primaryResources := dbPrimaryResources(dbResourcesForSize(sizes[0]))
 		if err := k.deployFromRegistry(ctx, cfg, primaryResources, replicas); err != nil {
 			return err
 		}

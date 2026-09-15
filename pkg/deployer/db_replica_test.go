@@ -102,6 +102,15 @@ func TestDBReplicaStatefulSetSpec_readReplicaShape(t *testing.T) {
 	assertEphemeralStorage(t, podSpec.Containers[0].Resources, wantEphemeral)
 }
 
+func TestDBPrimaryResources_ephemeralStorage(t *testing.T) {
+	t.Parallel()
+
+	base := dbResourcesForSize("small")
+	got := dbPrimaryResources(base)
+	wantEphemeral := resource.MustParse(dbReplicaEphemeralSize)
+	assertEphemeralStorage(t, got, wantEphemeral)
+}
+
 func TestDBReplicaHeadlessServiceSpec_clusterIPNone(t *testing.T) {
 	t.Parallel()
 
