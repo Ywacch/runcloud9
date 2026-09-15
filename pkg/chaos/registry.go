@@ -80,6 +80,14 @@ var scenarioRegistry = []scenarioRegistration{
 			return &PromoteScenario{Client: client, Prefer: deployer.PreferMostLagging}
 		},
 	},
+	{
+		scenario: ScenarioKillReplica,
+		engine:   "postgresql",
+		targets:  []string{"db"},
+		new: func(client kubernetes.Interface) ChaosScenario {
+			return &KillReplicaScenario{Client: client}
+		},
+	},
 }
 
 // Resolve constructs a scenario for the given name, target component, and deployment design.

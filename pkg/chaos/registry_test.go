@@ -59,6 +59,21 @@ func TestResolve(t *testing.T) {
 			design:   designWithCache,
 		},
 		{
+			name:     "kill_replica postgresql db",
+			scenario: ScenarioKillReplica,
+			target:   "db",
+			design: deployer.DeploymentDesign{
+				Template: "url-shortener",
+				Nodes: []deployer.DeploymentNode{
+					{Type: "app-server", Name: "App"},
+					{Type: "db", Name: "DB", Config: map[string]any{
+						"engine":       "postgresql",
+						"readReplicas": 1,
+					}},
+				},
+			},
+		},
+		{
 			name:     "split_app_store redis cache",
 			scenario: scenarioSplitAppStore,
 			target:   "cache",
@@ -163,5 +178,20 @@ func TestOneShotScenarios_revertNoOp(t *testing.T) {
 	}
 	if err := cacheFlush.Revert(context.Background(), "ns", design, "cache"); err != nil {
 		t.Fatalf("Revert cache_flush: %v", err)
+	}
+
+	killReplica, err := Resolve(ScenarioKillReplica, "db", deployer.DeploymentDesign{
+		Nodes: []deployer.DeploymentNode{
+			{Type: "db", Config: map[string]any{"engine": "postgresql", "readReplicas": 1}},
+		},
+	}, client)
+	if err != nil {
+		t.Fatalf("Resolve kill_replica: %v", err)
+	}
+	if killReplica.Stateful() {
+		t.Fatal("kill_replica should not be stateful")
+	}
+	if err := killReplica.Revert(context.Background(), "ns", design, "db"); err != nil {
+		t.Fatalf("Revert kill_replica: %v", err)
 	}
 }
