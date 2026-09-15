@@ -64,6 +64,22 @@ var scenarioRegistry = []scenarioRegistration{
 			return &PartitionScenario{Client: client, Scenario: scenarioSplitAppStore}
 		},
 	},
+	{
+		scenario: scenarioPromoteReplica,
+		engine:   "postgresql",
+		targets:  []string{"db"},
+		new: func(client kubernetes.Interface) ChaosScenario {
+			return &PromoteScenario{Client: client, Prefer: deployer.PreferMostCurrent}
+		},
+	},
+	{
+		scenario: scenarioPromoteLaggingReplica,
+		engine:   "postgresql",
+		targets:  []string{"db"},
+		new: func(client kubernetes.Interface) ChaosScenario {
+			return &PromoteScenario{Client: client, Prefer: deployer.PreferMostLagging}
+		},
+	},
 }
 
 // Resolve constructs a scenario for the given name, target component, and deployment design.

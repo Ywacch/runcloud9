@@ -37,9 +37,9 @@ type postgresSyncGUCs struct {
 	CommitLevel  string
 }
 
-// postgresAdmin runs SQL against the postgres primary (test seam; production uses pod exec).
-type postgresAdmin interface {
-	execSQL(ctx context.Context, query string) (stdout string, err error)
+// PostgresAdmin runs SQL against a postgres pod (test seam; production uses pod exec).
+type PostgresAdmin interface {
+	ExecSQL(ctx context.Context, query string) (stdout string, err error)
 }
 
 // postgresSyncGUCsFromConfig derives standby names and commit level for semi-sync/sync modes.
@@ -112,12 +112,12 @@ func gucsMatchReadBack(want postgresSyncGUCs, standbyNames, commitLevel string) 
 		normalizeShowGUC(commitLevel) == want.CommitLevel
 }
 
-func waitForReplicationCount(ctx context.Context, admin postgresAdmin, query string, minCount int) error {
+func waitForReplicationCount(ctx context.Context, admin PostgresAdmin, query string, minCount int) error {
 	ticker := time.NewTicker(postgresSyncPollInterval)
 	defer ticker.Stop()
 
 	for {
-		stdout, err := admin.execSQL(ctx, query)
+		stdout, err := admin.ExecSQL(ctx, query)
 		if err != nil {
 			return fmt.Errorf("poll replication: %w", err)
 		}
@@ -137,7 +137,7 @@ func waitForReplicationCount(ctx context.Context, admin postgresAdmin, query str
 	}
 }
 
-func enablePostgresSynchronousReplication(ctx context.Context, admin postgresAdmin, nodeConfig map[string]any, minReady int32) error {
+func enablePostgresSynchronousReplication(ctx context.Context, admin PostgresAdmin, nodeConfig map[string]any, minReady int32) error {
 	if minReady <= 0 {
 		return nil
 	}
@@ -154,7 +154,7 @@ func enablePostgresSynchronousReplication(ctx context.Context, admin postgresAdm
 	}
 
 	for _, stmt := range enableSynchronousReplicationStatements(gucs) {
-		if _, err := admin.execSQL(ctx, stmt); err != nil {
+		if _, err := admin.ExecSQL(ctx, stmt); err != nil {
 			return fmt.Errorf("apply synchronous replication GUCs (%s): %w", stmt, err)
 		}
 	}
@@ -163,11 +163,11 @@ func enablePostgresSynchronousReplication(ctx context.Context, admin postgresAdm
 		return fmt.Errorf("wait for sync/quorum standbys: %w", err)
 	}
 
-	gotStandby, err := admin.execSQL(ctx, "SHOW synchronous_standby_names")
+	gotStandby, err := admin.ExecSQL(ctx, "SHOW synchronous_standby_names")
 	if err != nil {
 		return fmt.Errorf("read back synchronous_standby_names: %w", err)
 	}
-	gotCommit, err := admin.execSQL(ctx, "SHOW synchronous_commit")
+	gotCommit, err := admin.ExecSQL(ctx, "SHOW synchronous_commit")
 	if err != nil {
 		return fmt.Errorf("read back synchronous_commit: %w", err)
 	}
@@ -187,16 +187,21 @@ type k8sPostgresAdmin struct {
 	container string // if empty, use postgresPrimaryContainer
 }
 
-func (k *K8sDeployer) newPostgresAdmin(namespace string) *k8sPostgresAdmin {
+func (k *K8sDeployer) newPostgresAdmin(namespace string) PostgresAdmin {
+	return NewPostgresPrimaryAdmin(k.clientset, namespace)
+}
+
+// NewPostgresPrimaryAdmin targets the postgres primary Deployment pod.
+func NewPostgresPrimaryAdmin(client kubernetes.Interface, namespace string) PostgresAdmin {
 	return &k8sPostgresAdmin{
-		client:    k.clientset,
+		client:    client,
 		namespace: namespace,
 		container: postgresPrimaryContainer,
 	}
 }
 
-// newPostgresPodAdmin targets one pod+container directly, bypassing the app=postgres lookup.
-func newPostgresPodAdmin(client kubernetes.Interface, namespace, podName, container string) *k8sPostgresAdmin {
+// NewPostgresPodAdmin targets one pod+container directly, bypassing the app=postgres lookup.
+func NewPostgresPodAdmin(client kubernetes.Interface, namespace, podName, container string) PostgresAdmin {
 	return &k8sPostgresAdmin{
 		client:    client,
 		namespace: namespace,
@@ -205,7 +210,7 @@ func newPostgresPodAdmin(client kubernetes.Interface, namespace, podName, contai
 	}
 }
 
-func (a *k8sPostgresAdmin) execSQL(ctx context.Context, query string) (string, error) {
+func (a *k8sPostgresAdmin) ExecSQL(ctx context.Context, query string) (string, error) {
 	podName := a.podName
 	if podName == "" {
 		resolved, err := a.primaryPodName(ctx)
