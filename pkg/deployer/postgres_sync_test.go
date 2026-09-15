@@ -225,7 +225,7 @@ type fakePostgresAdmin struct {
 	execCalls   []string
 }
 
-func (f *fakePostgresAdmin) execSQL(_ context.Context, query string) (string, error) {
+func (f *fakePostgresAdmin) ExecSQL(_ context.Context, query string) (string, error) {
 	f.execCalls = append(f.execCalls, query)
 	switch {
 	case query == sqlCountStreamingReplicas || query == sqlCountSyncQuorumReplicas:

@@ -25,8 +25,19 @@ WHERE state = 'streaming'`
 
 	sqlPromoteStandby     = "SELECT pg_promote(wait => true, wait_seconds => 30)"
 	sqlCheckNotInRecovery = "SELECT pg_is_in_recovery()"
+	sqlCurrentWalLSN      = "SELECT pg_current_wal_lsn()::text"
 	postgresRecoveryFalse = "f"
 )
+
+// PromotionResult records what a promotion chose and destroyed.
+type PromotionResult struct {
+	PromotedPod  string
+	SyncState    string
+	LagBytes     int64
+	PreFenceLSN  string
+	PromotedLSN  string
+	WalBytesLost int64
+}
 
 // CandidatePreference selects which streaming standby to promote.
 type CandidatePreference string
@@ -59,8 +70,8 @@ func PickCandidate(candidates []PromotionCandidate, prefer CandidatePreference) 
 }
 
 // SelectPromotionCandidate queries the live primary and picks a standby.
-func SelectPromotionCandidate(ctx context.Context, admin postgresAdmin, prefer CandidatePreference) (PromotionCandidate, error) {
-	stdout, err := admin.execSQL(ctx, sqlSelectStreamingStandbys)
+func SelectPromotionCandidate(ctx context.Context, admin PostgresAdmin, prefer CandidatePreference) (PromotionCandidate, error) {
+	stdout, err := admin.ExecSQL(ctx, sqlSelectStreamingStandbys)
 	if err != nil {
 		return PromotionCandidate{}, fmt.Errorf("list streaming standbys: %w", err)
 	}
@@ -89,11 +100,37 @@ func FencePrimary(ctx context.Context, clientset kubernetes.Interface, namespace
 }
 
 // PromoteStandby runs pg_promote on the target pod and confirms it is no longer in recovery.
-func PromoteStandby(ctx context.Context, admin postgresAdmin) error {
-	if _, err := admin.execSQL(ctx, sqlPromoteStandby); err != nil {
+// CurrentWalLSN reads pg_current_wal_lsn() from the target admin pod.
+func CurrentWalLSN(ctx context.Context, admin PostgresAdmin) (string, error) {
+	stdout, err := admin.ExecSQL(ctx, sqlCurrentWalLSN)
+	if err != nil {
+		return "", fmt.Errorf("read current wal lsn: %w", err)
+	}
+	lsn := strings.TrimSpace(stdout)
+	if lsn == "" {
+		return "", fmt.Errorf("empty wal lsn")
+	}
+	return lsn, nil
+}
+
+// WalBytesLost returns promoted minus pre-fence WAL position in bytes.
+func WalBytesLost(preFenceLSN, promotedLSN string) (int64, error) {
+	pre, err := parseWalLSN(preFenceLSN)
+	if err != nil {
+		return 0, fmt.Errorf("parse pre-fence lsn: %w", err)
+	}
+	post, err := parseWalLSN(promotedLSN)
+	if err != nil {
+		return 0, fmt.Errorf("parse promoted lsn: %w", err)
+	}
+	return post - pre, nil
+}
+
+func PromoteStandby(ctx context.Context, admin PostgresAdmin) error {
+	if _, err := admin.ExecSQL(ctx, sqlPromoteStandby); err != nil {
 		return fmt.Errorf("pg_promote: %w", err)
 	}
-	stdout, err := admin.execSQL(ctx, sqlCheckNotInRecovery)
+	stdout, err := admin.ExecSQL(ctx, sqlCheckNotInRecovery)
 	if err != nil {
 		return fmt.Errorf("check recovery state: %w", err)
 	}
@@ -176,6 +213,23 @@ func isSyncedReplicationState(syncState string) bool {
 	default:
 		return false
 	}
+}
+
+func parseWalLSN(raw string) (int64, error) {
+	raw = strings.TrimSpace(raw)
+	parts := strings.SplitN(raw, "/", 2)
+	if len(parts) != 2 {
+		return 0, fmt.Errorf("invalid lsn %q", raw)
+	}
+	hi, err := strconv.ParseUint(strings.TrimSpace(parts[0]), 16, 32)
+	if err != nil {
+		return 0, fmt.Errorf("invalid lsn high %q: %w", parts[0], err)
+	}
+	lo, err := strconv.ParseUint(strings.TrimSpace(parts[1]), 16, 32)
+	if err != nil {
+		return 0, fmt.Errorf("invalid lsn low %q: %w", parts[1], err)
+	}
+	return int64(hi<<32 | lo), nil
 }
 
 func parsePromotionCandidates(stdout string) ([]PromotionCandidate, error) {

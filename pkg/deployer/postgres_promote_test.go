@@ -183,6 +183,18 @@ func TestPromoteStandby_success(t *testing.T) {
 	}
 }
 
+func TestWalBytesLost(t *testing.T) {
+	t.Parallel()
+
+	got, err := WalBytesLost("0/1000", "0/2000")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 4096 {
+		t.Fatalf("got %d want 4096", got)
+	}
+}
+
 func TestPromoteStandby_stillInRecovery(t *testing.T) {
 	t.Parallel()
 
@@ -203,7 +215,7 @@ type fakePromoteAdmin struct {
 	queries   []string
 }
 
-func (f *fakePromoteAdmin) execSQL(_ context.Context, query string) (string, error) {
+func (f *fakePromoteAdmin) ExecSQL(_ context.Context, query string) (string, error) {
 	f.lastQuery = query
 	f.queries = append(f.queries, query)
 	switch {
