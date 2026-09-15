@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ywacch/cloud9/pkg/deployer"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -23,7 +24,8 @@ const (
 	dbReplicaContainerName   = "postgres-replica"
 	// postgresExporterReplayLagMetric is from deployer custom query block replication_replay_lag.
 	// postgres-exporter v0.16.0 names custom metrics {block}_{column} without a pg_ prefix.
-	postgresExporterReplayLagMetric = "replication_replay_lag_replay_lag_seconds"
+	postgresExporterReplayLagMetric      = "replication_replay_lag_replay_lag_seconds"
+	postgresExporterReplayLagBytesMetric = "replication_replay_lag_replay_lag_bytes"
 	// postgresExporterReplicaLagFallbackMetric is the built-in replica lag gauge on standby pods.
 	postgresExporterReplicaLagFallbackMetric = "pg_replication_lag_seconds"
 )
@@ -75,8 +77,23 @@ func (c *MetricsCollector) listDBReplicaPods(ctx context.Context, ns string) (na
 // postgresPrimaryReplayLagByAppQuery reads replay lag seconds from the primary postgres-exporter
 // custom query (pg_stat_replication.replay_lag), keyed by application_name (= replica pod hostname).
 func postgresPrimaryReplayLagByAppQuery(ns string) string {
+	return postgresPrimaryReplicationMetricByAppQuery(ns, postgresExporterReplayLagMetric)
+}
+
+func postgresPrimaryReplayLagBytesByAppQuery(ns string) string {
+	return postgresPrimaryReplicationMetricByAppQuery(ns, postgresExporterReplayLagBytesMetric)
+}
+
+func postgresPrimaryReplicationMetricByAppQuery(ns, metric string) string {
 	return fmt.Sprintf(
 		`max by (application_name) (%s{namespace=%q,pod=~%q,pod!~%q})`,
+		metric, ns, dbPrimaryPodSelector, dbReplicaPodSelector,
+	)
+}
+
+func postgresPrimarySyncStateByAppQuery(ns string) string {
+	return fmt.Sprintf(
+		`max by (application_name, sync_state) (%s{namespace=%q,pod=~%q,pod!~%q})`,
 		postgresExporterReplayLagMetric, ns, dbPrimaryPodSelector, dbReplicaPodSelector,
 	)
 }
@@ -239,6 +256,61 @@ func (c *MetricsCollector) enrichDBLayerEngineMetrics(ctx context.Context, ns st
 	}
 }
 
+func (c *MetricsCollector) replicaLagBytesByPod(ctx context.Context, ns string, replicaPods []string) map[string]int64 {
+	out := make(map[string]int64, len(replicaPods))
+	if c == nil || c.prometheusURL == "" || len(replicaPods) == 0 {
+		return out
+	}
+	for appName, lag := range c.queryMultiResult(ctx, postgresPrimaryReplayLagBytesByAppQuery(ns), "application_name") {
+		out[appName] = int64(lag)
+	}
+	return out
+}
+
+func (c *MetricsCollector) replicaSyncStateByPod(ctx context.Context, ns string, replicaPods []string) map[string]string {
+	out := make(map[string]string, len(replicaPods))
+	if c == nil || c.prometheusURL == "" || len(replicaPods) == 0 {
+		return out
+	}
+	return c.queryMultiLabel(ctx, postgresPrimarySyncStateByAppQuery(ns), "application_name", "sync_state")
+}
+
+func applyReplicaPromotionPreview(layers []ComponentLayerMetrics, connected map[string]bool, syncByPod map[string]string, lagBytesByPod map[string]int64) {
+	var candidates []deployer.PromotionCandidate
+	for i := range layers {
+		if layers[i].Role != dbLayerRoleReplica {
+			continue
+		}
+		podName := layers[i].ID
+		if !connected[podName] {
+			layers[i].SyncState = "async"
+			continue
+		}
+		syncState := syncByPod[podName]
+		if syncState == "" {
+			syncState = "async"
+		}
+		layers[i].SyncState = syncState
+		if lagBytes, ok := lagBytesByPod[podName]; ok {
+			layers[i].LagBytes = &lagBytes
+		}
+		candidates = append(candidates, deployer.PromotionCandidate{
+			PodName:   podName,
+			SyncState: syncState,
+			LagBytes:  lagBytesByPod[podName],
+		})
+	}
+	picked, err := deployer.PickCandidate(candidates, deployer.PreferMostCurrent)
+	if err != nil {
+		return
+	}
+	for i := range layers {
+		if layers[i].Role == dbLayerRoleReplica && layers[i].ID == picked.PodName {
+			layers[i].PromotionCandidate = true
+		}
+	}
+}
+
 func (c *MetricsCollector) replicaLagByPod(ctx context.Context, ns string, replicaPods []string) map[string]float64 {
 	out := make(map[string]float64, len(replicaPods))
 	if c == nil || c.prometheusURL == "" || len(replicaPods) == 0 {
@@ -344,6 +416,8 @@ func (c *MetricsCollector) collectDBReplicaLayers(ctx context.Context, ns string
 
 	out.primary = c.buildDBPrimaryLayer(ctx, ns)
 	lagByPod := c.replicaLagByPod(ctx, ns, names)
+	lagBytesByPod := c.replicaLagBytesByPod(ctx, ns, names)
+	syncByPod := c.replicaSyncStateByPod(ctx, ns, names)
 	out.connectedOnPrimary = c.replicaConnectedOnPrimaryByPod(ctx, ns, names)
 	rpsByLayer := c.dbLayerRequestRateByPod(ctx, ns)
 	out.primary.RequestRate = rpsByLayer[dbLayerIDPostgresPrimary]
@@ -357,6 +431,7 @@ func (c *MetricsCollector) collectDBReplicaLayers(ctx context.Context, ns string
 		replicaLayer.RequestRate = rpsByLayer[podName]
 		out.replicas = append(out.replicas, replicaLayer)
 	}
+	applyReplicaPromotionPreview(out.replicas, out.connectedOnPrimary, syncByPod, lagBytesByPod)
 	c.enrichDBLayerEngineMetrics(ctx, ns, &out, clusterStorageIO)
 	c.enrichDBLayerAppSQL(ctx, ns, &out)
 	return out

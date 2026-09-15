@@ -341,6 +341,43 @@ func (c *MetricsCollector) queryMultiResult(ctx context.Context, promql, labelKe
 	return out
 }
 
+// queryMultiLabel runs an instant query and returns valueLabel per series keyed by keyLabel.
+func (c *MetricsCollector) queryMultiLabel(ctx context.Context, promql, keyLabel, valueLabel string) map[string]string {
+	out := make(map[string]string)
+	if c.prometheusURL == "" || keyLabel == "" || valueLabel == "" {
+		return out
+	}
+	endpoint := fmt.Sprintf("%s/api/v1/query", c.prometheusURL)
+	params := url.Values{"query": {promql}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?"+params.Encode(), nil)
+	if err != nil {
+		return out
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return out
+	}
+	defer resp.Body.Close()
+
+	var pr prometheusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+		return out
+	}
+	if pr.Status != "success" {
+		return out
+	}
+	for i := range pr.Data.Result {
+		r := &pr.Data.Result[i]
+		key := r.Metric[keyLabel]
+		val := r.Metric[valueLabel]
+		if key == "" || val == "" {
+			continue
+		}
+		out[key] = val
+	}
+	return out
+}
+
 // queryWithFallback tries the primary PromQL first. If it errors, uses fallback.
 // If primary returns 0, tries fallback; if fallback is >0, assumes primary metrics
 // are unavailable (e.g. cAdvisor not scraped) and returns fallback.

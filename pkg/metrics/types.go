@@ -275,6 +275,12 @@ type ComponentLayerMetrics struct {
 	// ReplicationLagSeconds is primary-side replay lag on replica layers (seconds).
 	// Pointer so a successful query of 0 serializes; nil when the series is absent.
 	ReplicationLagSeconds *float64 `json:"replicationLagSeconds,omitempty"`
+	// SyncState is pg_stat_replication.sync_state from the primary exporter ("async" when absent).
+	SyncState string `json:"syncState,omitempty"`
+	// LagBytes is primary-side WAL bytes behind (pg_wal_lsn_diff); nil when not streaming on primary.
+	LagBytes *int64 `json:"lagBytes,omitempty"`
+	// PromotionCandidate marks the standby PickCandidate(mostCurrent) would promote.
+	PromotionCandidate bool `json:"promotionCandidate,omitempty"`
 	// RequestRate is per-layer PostgreSQL transaction throughput (xact/s) when known.
 	RequestRate float64 `json:"requestRate,omitempty"`
 	// TotalRequests is the session sum of pg_stat_database xact commit+rollback for this layer.

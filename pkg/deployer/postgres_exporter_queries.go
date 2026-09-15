@@ -18,15 +18,21 @@ const (
 const postgresExporterQueriesYAML = `replication_replay_lag:
   master: true
   query: |
-    SELECT application_name,
-           COALESCE(EXTRACT(EPOCH FROM replay_lag), 0)::double precision AS replay_lag_seconds
+    SELECT application_name, sync_state,
+           COALESCE(EXTRACT(EPOCH FROM replay_lag), 0)::double precision AS replay_lag_seconds,
+           COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn), 0)::double precision AS replay_lag_bytes
     FROM pg_stat_replication
   metrics:
     - application_name:
         usage: LABEL
+    - sync_state:
+        usage: LABEL
     - replay_lag_seconds:
         usage: GAUGE
         description: "Primary-side replay lag in seconds per connected standby"
+    - replay_lag_bytes:
+        usage: GAUGE
+        description: "Primary-side WAL bytes behind per connected standby"
 `
 
 func postgresExporterQueriesEnabled(cfg DeployConfig) bool {
