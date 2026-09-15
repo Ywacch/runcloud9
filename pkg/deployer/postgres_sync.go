@@ -183,16 +183,40 @@ func enablePostgresSynchronousReplication(ctx context.Context, admin postgresAdm
 type k8sPostgresAdmin struct {
 	client    kubernetes.Interface
 	namespace string
+	podName   string // if empty, resolve via primaryPodName
+	container string // if empty, use postgresPrimaryContainer
 }
 
 func (k *K8sDeployer) newPostgresAdmin(namespace string) *k8sPostgresAdmin {
-	return &k8sPostgresAdmin{client: k.clientset, namespace: namespace}
+	return &k8sPostgresAdmin{
+		client:    k.clientset,
+		namespace: namespace,
+		container: postgresPrimaryContainer,
+	}
+}
+
+// newPostgresPodAdmin targets one pod+container directly, bypassing the app=postgres lookup.
+func newPostgresPodAdmin(client kubernetes.Interface, namespace, podName, container string) *k8sPostgresAdmin {
+	return &k8sPostgresAdmin{
+		client:    client,
+		namespace: namespace,
+		podName:   podName,
+		container: container,
+	}
 }
 
 func (a *k8sPostgresAdmin) execSQL(ctx context.Context, query string) (string, error) {
-	podName, err := a.primaryPodName(ctx)
-	if err != nil {
-		return "", err
+	podName := a.podName
+	if podName == "" {
+		resolved, err := a.primaryPodName(ctx)
+		if err != nil {
+			return "", err
+		}
+		podName = resolved
+	}
+	container := a.container
+	if container == "" {
+		container = postgresPrimaryContainer
 	}
 	cmd := []string{
 		"psql",
@@ -202,7 +226,7 @@ func (a *k8sPostgresAdmin) execSQL(ctx context.Context, query string) (string, e
 		"-A", "-t",
 		"-c", query,
 	}
-	return execInPod(ctx, a.client, a.namespace, podName, postgresPrimaryContainer, cmd)
+	return execInPod(ctx, a.client, a.namespace, podName, container, cmd)
 }
 
 func (a *k8sPostgresAdmin) primaryPodName(ctx context.Context) (string, error) {
