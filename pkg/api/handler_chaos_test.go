@@ -326,6 +326,43 @@ func TestHandleChaosHeal_noActive(t *testing.T) {
 	}
 }
 
+func TestFailoverWriteLossEvent_zeroLoss(t *testing.T) {
+	t.Parallel()
+
+	ev := failoverWriteLossEvent(time.Now(), "promote_replica", deployer.PromotionResult{
+		PromotedPod:  "postgres-replica-0",
+		SyncState:    "sync",
+		WalBytesLost: 0,
+	}, map[string]any{
+		"replicationMode": "semi-sync",
+		"syncCommitLevel": "remote_apply",
+	})
+	if ev != nil {
+		t.Fatalf("expected nil event for zero loss, got %+v", ev)
+	}
+}
+
+func TestFailoverWriteLossEvent_lossy(t *testing.T) {
+	t.Parallel()
+
+	ev := failoverWriteLossEvent(time.Now(), "promote_lagging_replica", deployer.PromotionResult{
+		PromotedPod:  "postgres-replica-1",
+		SyncState:    "async",
+		WalBytesLost: 4096,
+	}, map[string]any{
+		"replicationMode": "async",
+	})
+	if ev == nil {
+		t.Fatal("expected invariant event")
+	}
+	if ev.RuleID != metrics.RuleFailoverWriteLoss {
+		t.Fatalf("ruleId: %q", ev.RuleID)
+	}
+	if ev.Detail["walBytesLost"] != "4096" {
+		t.Fatalf("detail: %+v", ev.Detail)
+	}
+}
+
 func TestMergePromotionChaosDetail(t *testing.T) {
 	t.Parallel()
 
