@@ -689,17 +689,19 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	appServerSel := appServerPromSelector(ns)
 
 	// DB (postgres) — CPU/memory: container cAdvisor → Metrics API → kube requests.
+	// Include postgres-replica containers so a promoted writer still contributes
+	// after FencePrimary scales the postgres Deployment to zero.
 	cmDB := ComponentMetrics{Component: "db"}
-	dbCPURes := c.queryContainerResourceCPU(ctx, ns, "postgres.*", "postgres")
-	dbMemRes := c.queryContainerResourceMemory(ctx, ns, "postgres.*", "postgres")
+	dbCPURes := c.queryPostgresClusterCPU(ctx, ns)
+	dbMemRes := c.queryPostgresClusterMemory(ctx, ns)
 	cmDB.CPUUsage = dbCPURes.Usage
 	cmDB.CPUIsEstimated = dbCPURes.Estimated
 	cmDB.CPUSource = dbCPURes.Source
 	cmDB.MemoryBytes = int64(dbMemRes.Usage)
 	cmDB.MemIsEstimated = dbMemRes.Estimated
 	cmDB.MemSource = dbMemRes.Source
-	cmDB.CPULimit = c.kubeLimitCPU(ctx, ns, "postgres.*", "postgres")
-	cmDB.MemoryLimit = c.kubeLimitMem(ctx, ns, "postgres.*", "postgres")
+	cmDB.CPULimit = c.kubeLimitPostgresClusterCPU(ctx, ns)
+	cmDB.MemoryLimit = c.kubeLimitPostgresClusterMem(ctx, ns)
 
 	dbQPS, dbQPSPresent, _ := c.queryScalar(ctx, fmt.Sprintf(
 		`sum(rate(db_query_duration_seconds_count{%s}%s))`,

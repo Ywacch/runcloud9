@@ -108,6 +108,67 @@ func (c *MetricsCollector) queryContainerResourceMemoryExcluding(ctx context.Con
 	return containerResource{Estimated: true, Source: ResourceSourceRequests}
 }
 
+// mergeContainerResources sums usage across containers. Live (non-estimated)
+// sources win Estimated/Source so a missing Deployment postgres container
+// does not hide a live postgres-replica writer after promote.
+func mergeContainerResources(parts ...containerResource) containerResource {
+	out := containerResource{Estimated: true, Source: ResourceSourceRequests}
+	liveSource := ""
+	for _, p := range parts {
+		out.Usage += p.Usage
+		if p.Estimated {
+			continue
+		}
+		out.Estimated = false
+		switch {
+		case p.Source == ResourceSourceCadvisor:
+			liveSource = ResourceSourceCadvisor
+		case liveSource != ResourceSourceCadvisor && p.Source != "":
+			liveSource = p.Source
+		}
+	}
+	if !out.Estimated && liveSource != "" {
+		out.Source = liveSource
+	}
+	return out
+}
+
+func (c *MetricsCollector) queryPostgresClusterCPU(ctx context.Context, ns string) containerResource {
+	if c == nil {
+		return containerResource{Estimated: true, Source: ResourceSourceRequests}
+	}
+	return mergeContainerResources(
+		c.queryContainerResourceCPU(ctx, ns, dbPrimaryPodSelector, dbPrimaryContainerName),
+		c.queryContainerResourceCPU(ctx, ns, dbReplicaPodSelector, dbReplicaContainerName),
+	)
+}
+
+func (c *MetricsCollector) queryPostgresClusterMemory(ctx context.Context, ns string) containerResource {
+	if c == nil {
+		return containerResource{Estimated: true, Source: ResourceSourceRequests}
+	}
+	return mergeContainerResources(
+		c.queryContainerResourceMemory(ctx, ns, dbPrimaryPodSelector, dbPrimaryContainerName),
+		c.queryContainerResourceMemory(ctx, ns, dbReplicaPodSelector, dbReplicaContainerName),
+	)
+}
+
+func (c *MetricsCollector) kubeLimitPostgresClusterCPU(ctx context.Context, ns string) float64 {
+	if c == nil {
+		return 0
+	}
+	return c.kubeLimitCPU(ctx, ns, dbPrimaryPodSelector, dbPrimaryContainerName) +
+		c.kubeLimitCPU(ctx, ns, dbReplicaPodSelector, dbReplicaContainerName)
+}
+
+func (c *MetricsCollector) kubeLimitPostgresClusterMem(ctx context.Context, ns string) int64 {
+	if c == nil {
+		return 0
+	}
+	return c.kubeLimitMem(ctx, ns, dbPrimaryPodSelector, dbPrimaryContainerName) +
+		c.kubeLimitMem(ctx, ns, dbReplicaPodSelector, dbReplicaContainerName)
+}
+
 func compilePodRE(podRe string) (*regexp.Regexp, error) {
 	return regexp.Compile("^" + podRe + "$")
 }

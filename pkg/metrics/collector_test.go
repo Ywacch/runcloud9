@@ -827,6 +827,39 @@ func TestCollect_DBCPUUsesContainerMetricWhenPresent(t *testing.T) {
 	}
 }
 
+func TestCollect_DBCPUUsesReplicaContainerWhenPrimaryGone(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "container_cpu_usage_seconds_total") && strings.Contains(q, `container="postgres-replica"`):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.11"))
+		case strings.Contains(q, "kube_pod_container_resource_limits") && strings.Contains(q, `container="postgres-replica"`) && strings.Contains(q, `resource="cpu"`):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.5"))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
+	dm, err := c.Collect(context.Background(), "ns1", "", TopologyFlags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := dm.Components["db"]
+	if db.CPUUsage != 0.11 {
+		t.Fatalf("db CPU: want 0.11 from postgres-replica container, got %v", db.CPUUsage)
+	}
+	if db.CPUIsEstimated {
+		t.Fatal("db CPUIsEstimated: want false for replica cAdvisor series")
+	}
+	if db.CPULimit != 0.5 {
+		t.Fatalf("db CPULimit: want 0.5 from replica limits, got %v", db.CPULimit)
+	}
+}
+
 func TestCollect_DBCPUUsesMetricsAPIWhenCadvisorEmpty(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
