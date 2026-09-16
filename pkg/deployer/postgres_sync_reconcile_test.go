@@ -135,6 +135,26 @@ func TestReconcilePostgresSynchronousReplicationOnPod_requiresPodName(t *testing
 	}
 }
 
+func TestReconcilePostgresSynchronousReplicationOnPodWithMinReady_zeroMinReadyNoOp(t *testing.T) {
+	t.Parallel()
+
+	err := ReconcilePostgresSynchronousReplicationOnPodWithMinReady(
+		context.Background(),
+		nil,
+		"ns",
+		"postgres-replica-0",
+		map[string]any{
+			"replicationMode": "semi-sync",
+			"readReplicas":    2,
+			"syncCommitLevel": "remote_apply",
+		},
+		0,
+	)
+	if err != nil {
+		t.Fatalf("minReady=0 should skip sync GUC reconcile after promote cap: %v", err)
+	}
+}
+
 func TestReplicationModeLabel(t *testing.T) {
 	t.Parallel()
 

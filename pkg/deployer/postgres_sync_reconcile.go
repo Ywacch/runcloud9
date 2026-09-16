@@ -80,8 +80,17 @@ func ReconcilePostgresSynchronousReplicationOnPod(ctx context.Context, clientset
 		return err
 	}
 	rr := parseReadReplicaCount(nodeConfig)
-	minReady := seedReplicaReadyBeforeRestore(mode, rr)
-	if minReady == 0 {
+	return reconcilePostgresSynchronousReplicationOnPod(ctx, clientset, namespace, primaryPodName, nodeConfig, seedReplicaReadyBeforeRestore(mode, rr))
+}
+
+// ReconcilePostgresSynchronousReplicationOnPodWithMinReady re-applies sync GUCs after
+// promotion using an explicit streaming standby count (post-promote leftovers only).
+func ReconcilePostgresSynchronousReplicationOnPodWithMinReady(ctx context.Context, clientset kubernetes.Interface, namespace, primaryPodName string, nodeConfig map[string]any, minReady int32) error {
+	return reconcilePostgresSynchronousReplicationOnPod(ctx, clientset, namespace, primaryPodName, nodeConfig, minReady)
+}
+
+func reconcilePostgresSynchronousReplicationOnPod(ctx context.Context, clientset kubernetes.Interface, namespace, primaryPodName string, nodeConfig map[string]any, minReady int32) error {
+	if minReady <= 0 {
 		return nil
 	}
 	if _, ok := postgresSyncGUCsFromConfig(nodeConfig); !ok {
