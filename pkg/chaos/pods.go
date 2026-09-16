@@ -15,6 +15,10 @@ func labelSelector(appLabel string) string {
 }
 
 func findRunningPod(ctx context.Context, client kubernetes.Interface, namespace, appLabel string) (string, error) {
+	return findRunningPodExcluding(ctx, client, namespace, appLabel, "")
+}
+
+func findRunningPodExcluding(ctx context.Context, client kubernetes.Interface, namespace, appLabel, excludePod string) (string, error) {
 	pods, err := client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector(appLabel),
 	})
@@ -23,6 +27,9 @@ func findRunningPod(ctx context.Context, client kubernetes.Interface, namespace,
 	}
 
 	for _, pod := range pods.Items {
+		if pod.Name == excludePod {
+			continue
+		}
 		if pod.DeletionTimestamp != nil {
 			continue
 		}
@@ -32,6 +39,9 @@ func findRunningPod(ctx context.Context, client kubernetes.Interface, namespace,
 		return pod.Name, nil
 	}
 
+	if excludePod != "" {
+		return "", fmt.Errorf("only write pod %s remains", excludePod)
+	}
 	return "", fmt.Errorf("no running pod for component with app=%s", appLabel)
 }
 

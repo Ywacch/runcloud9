@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
-	"strings"
 
 	"github.com/ywacch/cloud9/pkg/deployer"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,6 +31,7 @@ const (
 
 // dbReplicaLayerSplit holds per-instance Postgres layers when read replicas are deployed.
 type dbReplicaLayerSplit struct {
+	writerPod          string
 	replicaPods        []string
 	ready              map[string]bool
 	connectedOnPrimary map[string]bool
@@ -76,25 +76,25 @@ func (c *MetricsCollector) listDBReplicaPods(ctx context.Context, ns string) (na
 
 // postgresPrimaryReplayLagByAppQuery reads replay lag seconds from the primary postgres-exporter
 // custom query (pg_stat_replication.replay_lag), keyed by application_name (= replica pod hostname).
-func postgresPrimaryReplayLagByAppQuery(ns string) string {
-	return postgresPrimaryReplicationMetricByAppQuery(ns, postgresExporterReplayLagMetric)
+func postgresPrimaryReplayLagByAppQuery(ns, writerPod string) string {
+	return postgresPrimaryReplicationMetricByAppQuery(ns, postgresExporterReplayLagMetric, writerPod)
 }
 
-func postgresPrimaryReplayLagBytesByAppQuery(ns string) string {
-	return postgresPrimaryReplicationMetricByAppQuery(ns, postgresExporterReplayLagBytesMetric)
+func postgresPrimaryReplayLagBytesByAppQuery(ns, writerPod string) string {
+	return postgresPrimaryReplicationMetricByAppQuery(ns, postgresExporterReplayLagBytesMetric, writerPod)
 }
 
-func postgresPrimaryReplicationMetricByAppQuery(ns, metric string) string {
+func postgresPrimaryReplicationMetricByAppQuery(ns, metric, writerPod string) string {
 	return fmt.Sprintf(
-		`max by (application_name) (%s{namespace=%q,pod=~%q,pod!~%q})`,
-		metric, ns, dbPrimaryPodSelector, dbReplicaPodSelector,
+		`max by (application_name) (%s{namespace=%q,pod="%s"})`,
+		metric, ns, writerPod,
 	)
 }
 
-func postgresPrimarySyncStateByAppQuery(ns string) string {
+func postgresPrimarySyncStateByAppQuery(ns, writerPod string) string {
 	return fmt.Sprintf(
-		`max by (application_name, sync_state) (%s{namespace=%q,pod=~%q,pod!~%q})`,
-		postgresExporterReplayLagMetric, ns, dbPrimaryPodSelector, dbReplicaPodSelector,
+		`max by (application_name, sync_state) (%s{namespace=%q,pod="%s"})`,
+		postgresExporterReplayLagMetric, ns, writerPod,
 	)
 }
 
@@ -138,13 +138,17 @@ func dbLayerSessionSeries(baseSeries, layerID string) string {
 	return baseSeries + "." + layerID
 }
 
-func mapPostgresLayerPodValues(byPod map[string]float64) map[string]float64 {
+func mapPostgresLayerPodValues(byPod map[string]float64, writerPod string) map[string]float64 {
 	out := make(map[string]float64)
 	replicaRE, err := regexp.Compile("^" + dbReplicaPodSelector + "$")
 	if err != nil {
 		return out
 	}
 	for pod, v := range byPod {
+		if writerPod != "" && pod == writerPod {
+			out[dbLayerIDPostgresPrimary] += v
+			continue
+		}
 		if replicaRE.MatchString(pod) {
 			out[pod] = v
 			continue
@@ -154,15 +158,15 @@ func mapPostgresLayerPodValues(byPod map[string]float64) map[string]float64 {
 	return out
 }
 
-func mapPostgresLayerRequestRates(rpsByPod map[string]float64) map[string]float64 {
-	return mapPostgresLayerPodValues(rpsByPod)
+func mapPostgresLayerRequestRates(rpsByPod map[string]float64, writerPod string) map[string]float64 {
+	return mapPostgresLayerPodValues(rpsByPod, writerPod)
 }
 
-func (c *MetricsCollector) dbLayerRequestRateByPod(ctx context.Context, ns string) map[string]float64 {
+func (c *MetricsCollector) dbLayerRequestRateByPod(ctx context.Context, ns, writerPod string) map[string]float64 {
 	if c == nil || c.prometheusURL == "" {
 		return nil
 	}
-	return mapPostgresLayerRequestRates(c.queryMultiResult(ctx, postgresXactRateByPodQuery(ns), "pod"))
+	return mapPostgresLayerRequestRates(c.queryMultiResult(ctx, postgresXactRateByPodQuery(ns), "pod"), writerPod)
 }
 
 func (c *MetricsCollector) postgresConnectionsByPod(ctx context.Context, ns string) map[string]float64 {
@@ -200,15 +204,15 @@ func replicaReadOnlyStorageIO(cluster *StorageIO, readRate, readTotal9m float64)
 }
 
 func (c *MetricsCollector) enrichDBLayerEngineMetrics(ctx context.Context, ns string, split *dbReplicaLayerSplit, clusterStorageIO *StorageIO) {
-	if c == nil || split == nil || len(split.replicaPods) == 0 {
+	if c == nil || split == nil || (split.writerPod == "" && len(split.replicaPods) == 0) {
 		return
 	}
 	held := c.postgresSessionHeld(ns)
 
 	xactByPod := c.queryMultiResult(ctx, postgresXactTotalByPodQuery(ns), "pod")
-	xactByLayer := mapPostgresLayerPodValues(xactByPod)
+	xactByLayer := mapPostgresLayerPodValues(xactByPod, split.writerPod)
 	connByPod := c.postgresConnectionsByPod(ctx, ns)
-	connByLayer := mapPostgresLayerPodValues(connByPod)
+	connByLayer := mapPostgresLayerPodValues(connByPod, split.writerPod)
 
 	if !held {
 		if count, ok := xactByLayer[dbLayerIDPostgresPrimary]; ok {
@@ -256,23 +260,23 @@ func (c *MetricsCollector) enrichDBLayerEngineMetrics(ctx context.Context, ns st
 	}
 }
 
-func (c *MetricsCollector) replicaLagBytesByPod(ctx context.Context, ns string, replicaPods []string) map[string]int64 {
+func (c *MetricsCollector) replicaLagBytesByPod(ctx context.Context, ns, writerPod string, replicaPods []string) map[string]int64 {
 	out := make(map[string]int64, len(replicaPods))
-	if c == nil || c.prometheusURL == "" || len(replicaPods) == 0 {
+	if c == nil || c.prometheusURL == "" || writerPod == "" || len(replicaPods) == 0 {
 		return out
 	}
-	for appName, lag := range c.queryMultiResult(ctx, postgresPrimaryReplayLagBytesByAppQuery(ns), "application_name") {
+	for appName, lag := range c.queryMultiResult(ctx, postgresPrimaryReplayLagBytesByAppQuery(ns, writerPod), "application_name") {
 		out[appName] = int64(lag)
 	}
 	return out
 }
 
-func (c *MetricsCollector) replicaSyncStateByPod(ctx context.Context, ns string, replicaPods []string) map[string]string {
+func (c *MetricsCollector) replicaSyncStateByPod(ctx context.Context, ns, writerPod string, replicaPods []string) map[string]string {
 	out := make(map[string]string, len(replicaPods))
-	if c == nil || c.prometheusURL == "" || len(replicaPods) == 0 {
+	if c == nil || c.prometheusURL == "" || writerPod == "" || len(replicaPods) == 0 {
 		return out
 	}
-	return c.queryMultiLabel(ctx, postgresPrimarySyncStateByAppQuery(ns), "application_name", "sync_state")
+	return c.queryMultiLabel(ctx, postgresPrimarySyncStateByAppQuery(ns, writerPod), "application_name", "sync_state")
 }
 
 func applyReplicaPromotionPreview(layers []ComponentLayerMetrics, connected map[string]bool, syncByPod map[string]string, lagBytesByPod map[string]int64) {
@@ -311,13 +315,15 @@ func applyReplicaPromotionPreview(layers []ComponentLayerMetrics, connected map[
 	}
 }
 
-func (c *MetricsCollector) replicaLagByPod(ctx context.Context, ns string, replicaPods []string) map[string]float64 {
+func (c *MetricsCollector) replicaLagByPod(ctx context.Context, ns, writerPod string, replicaPods []string) map[string]float64 {
 	out := make(map[string]float64, len(replicaPods))
 	if c == nil || c.prometheusURL == "" || len(replicaPods) == 0 {
 		return out
 	}
-	for appName, lag := range c.queryMultiResult(ctx, postgresPrimaryReplayLagByAppQuery(ns), "application_name") {
-		out[appName] = lag
+	if writerPod != "" {
+		for appName, lag := range c.queryMultiResult(ctx, postgresPrimaryReplayLagByAppQuery(ns, writerPod), "application_name") {
+			out[appName] = lag
+		}
 	}
 	fallback := c.queryMultiResult(ctx, postgresReplicaLagFallbackByPodQuery(ns), "pod")
 	for _, podName := range replicaPods {
@@ -333,15 +339,15 @@ func (c *MetricsCollector) replicaLagByPod(ctx context.Context, ns string, repli
 
 // replicaConnectedOnPrimaryByPod reports which replica pods have a pg_stat_replication row
 // on the primary (application_name = pod hostname). Fallback standby-side lag is ignored.
-func (c *MetricsCollector) replicaConnectedOnPrimaryByPod(ctx context.Context, ns string, replicaPods []string) map[string]bool {
+func (c *MetricsCollector) replicaConnectedOnPrimaryByPod(ctx context.Context, ns, writerPod string, replicaPods []string) map[string]bool {
 	out := make(map[string]bool, len(replicaPods))
 	for _, podName := range replicaPods {
 		out[podName] = false
 	}
-	if c == nil || c.prometheusURL == "" || len(replicaPods) == 0 {
+	if c == nil || c.prometheusURL == "" || writerPod == "" || len(replicaPods) == 0 {
 		return out
 	}
-	for appName := range c.queryMultiResult(ctx, postgresPrimaryReplayLagByAppQuery(ns), "application_name") {
+	for appName := range c.queryMultiResult(ctx, postgresPrimaryReplayLagByAppQuery(ns, writerPod), "application_name") {
 		if _, ok := out[appName]; ok {
 			out[appName] = true
 		}
@@ -349,7 +355,21 @@ func (c *MetricsCollector) replicaConnectedOnPrimaryByPod(ctx context.Context, n
 	return out
 }
 
-func (c *MetricsCollector) buildDBPrimaryLayer(ctx context.Context, ns string) ComponentLayerMetrics {
+func (c *MetricsCollector) postgresWriterContainer(ctx context.Context, ns, writerPod string) string {
+	if c == nil || c.clientset == nil || writerPod == "" {
+		return dbPrimaryContainerName
+	}
+	pod, err := c.clientset.CoreV1().Pods(ns).Get(ctx, writerPod, metav1.GetOptions{})
+	if err != nil {
+		return dbPrimaryContainerName
+	}
+	if pod.Labels["app"] == dbReplicaAppLabel {
+		return dbReplicaContainerName
+	}
+	return dbPrimaryContainerName
+}
+
+func (c *MetricsCollector) buildDBPrimaryLayer(ctx context.Context, ns, writerPod string) ComponentLayerMetrics {
 	layer := ComponentLayerMetrics{
 		ID:     dbLayerIDPostgresPrimary,
 		Role:   dbLayerRolePrimary,
@@ -358,16 +378,24 @@ func (c *MetricsCollector) buildDBPrimaryLayer(ctx context.Context, ns string) C
 	if c == nil {
 		return layer
 	}
-	cpuRes := c.queryContainerResourceCPUExcluding(ctx, ns, dbPrimaryPodSelector, dbReplicaPodSelector, dbPrimaryContainerName)
-	memRes := c.queryContainerResourceMemoryExcluding(ctx, ns, dbPrimaryPodSelector, dbReplicaPodSelector, dbPrimaryContainerName)
+	podRe := dbPrimaryPodSelector
+	excludePodRe := dbReplicaPodSelector
+	container := dbPrimaryContainerName
+	if writerPod != "" {
+		podRe = fmt.Sprintf("^%s$", writerPod)
+		excludePodRe = ""
+		container = c.postgresWriterContainer(ctx, ns, writerPod)
+	}
+	cpuRes := c.queryContainerResourceCPUExcluding(ctx, ns, podRe, excludePodRe, container)
+	memRes := c.queryContainerResourceMemoryExcluding(ctx, ns, podRe, excludePodRe, container)
 	layer.CPUUsage = cpuRes.Usage
 	layer.CPUIsEstimated = cpuRes.Estimated
 	layer.CPUSource = cpuRes.Source
 	layer.MemoryBytes = int64(memRes.Usage)
 	layer.MemIsEstimated = memRes.Estimated
 	layer.MemSource = memRes.Source
-	layer.CPULimit = c.kubeLimitCPUExcluding(ctx, ns, dbPrimaryPodSelector, dbReplicaPodSelector, dbPrimaryContainerName)
-	layer.MemoryLimit = c.kubeLimitMemExcluding(ctx, ns, dbPrimaryPodSelector, dbReplicaPodSelector, dbPrimaryContainerName)
+	layer.CPULimit = c.kubeLimitCPUExcluding(ctx, ns, podRe, excludePodRe, container)
+	layer.MemoryLimit = c.kubeLimitMemExcluding(ctx, ns, podRe, excludePodRe, container)
 	return layer
 }
 
@@ -400,29 +428,51 @@ func (c *MetricsCollector) buildDBReplicaLayer(ctx context.Context, ns, podName 
 	return layer
 }
 
-// collectDBReplicaLayers builds primary + per-replica instance layers when postgres-replica pods exist.
+// collectDBReplicaLayers builds primary + per-standby instance layers from live write routing.
 func (c *MetricsCollector) collectDBReplicaLayers(ctx context.Context, ns string, clusterStorageIO *StorageIO) dbReplicaLayerSplit {
 	out := dbReplicaLayerSplit{ready: make(map[string]bool)}
 	if c == nil {
 		return out
 	}
+
+	writerPod := ""
+	if c.clientset != nil {
+		writerPod, _ = deployer.PostgresWritePod(ctx, c.clientset, ns)
+	}
+	out.writerPod = writerPod
+
 	names, ready, counts := c.listDBReplicaPods(ctx, ns)
-	out.replicaPods = names
-	out.ready = ready
+	var standbys []string
+	standbyReady := make(map[string]bool)
+	var readyCount int32
+	for _, name := range names {
+		if name == writerPod {
+			continue
+		}
+		standbys = append(standbys, name)
+		standbyReady[name] = ready[name]
+		if ready[name] {
+			readyCount++
+		}
+	}
+	out.replicaPods = standbys
+	out.ready = standbyReady
 	out.counts = counts
-	if len(names) == 0 {
+	out.counts.Ready = readyCount
+
+	if writerPod == "" && len(standbys) == 0 {
 		return out
 	}
 
-	out.primary = c.buildDBPrimaryLayer(ctx, ns)
-	lagByPod := c.replicaLagByPod(ctx, ns, names)
-	lagBytesByPod := c.replicaLagBytesByPod(ctx, ns, names)
-	syncByPod := c.replicaSyncStateByPod(ctx, ns, names)
-	out.connectedOnPrimary = c.replicaConnectedOnPrimaryByPod(ctx, ns, names)
-	rpsByLayer := c.dbLayerRequestRateByPod(ctx, ns)
+	out.primary = c.buildDBPrimaryLayer(ctx, ns, writerPod)
+	lagByPod := c.replicaLagByPod(ctx, ns, writerPod, standbys)
+	lagBytesByPod := c.replicaLagBytesByPod(ctx, ns, writerPod, standbys)
+	syncByPod := c.replicaSyncStateByPod(ctx, ns, writerPod, standbys)
+	out.connectedOnPrimary = c.replicaConnectedOnPrimaryByPod(ctx, ns, writerPod, standbys)
+	rpsByLayer := c.dbLayerRequestRateByPod(ctx, ns, writerPod)
 	out.primary.RequestRate = rpsByLayer[dbLayerIDPostgresPrimary]
-	out.replicas = make([]ComponentLayerMetrics, 0, len(names))
-	for _, podName := range names {
+	out.replicas = make([]ComponentLayerMetrics, 0, len(standbys))
+	for _, podName := range standbys {
 		var lag *float64
 		if seconds, ok := lagByPod[podName]; ok {
 			lag = replicationLagSecondsPtr(seconds)
@@ -439,7 +489,7 @@ func (c *MetricsCollector) collectDBReplicaLayers(ctx context.Context, ns string
 
 // applyDBReplicaLayers attaches db instance layers and replica StatefulSet rollout counts.
 func applyDBReplicaLayers(cm *ComponentMetrics, split dbReplicaLayerSplit) {
-	if cm == nil || len(split.replicaPods) == 0 {
+	if cm == nil || (split.writerPod == "" && len(split.replicaPods) == 0) {
 		return
 	}
 	layers := make([]ComponentLayerMetrics, 0, 1+len(split.replicas))
@@ -448,6 +498,7 @@ func applyDBReplicaLayers(cm *ComponentMetrics, split dbReplicaLayerSplit) {
 	cm.Layers = layers
 	br := split.counts
 	cm.BackendReplicas = &br
+	cm.dbWriterPod = split.writerPod
 }
 
 // syncDBReplicaLayerRestarts copies restart counts from runtimeHealth pod rows onto matching layers.
@@ -457,12 +508,12 @@ func syncDBReplicaLayerRestarts(cm *ComponentMetrics) {
 	}
 	for i := range cm.Layers {
 		layer := &cm.Layers[i]
-		prefix := "postgres"
-		if layer.Role == dbLayerRoleReplica {
-			prefix = layer.ID
+		matchName := layer.ID
+		if layer.Role == dbLayerRolePrimary && cm.dbWriterPod != "" {
+			matchName = cm.dbWriterPod
 		}
 		for _, pod := range cm.RuntimeHealth.Pods {
-			if !strings.HasPrefix(pod.Name, prefix) {
+			if pod.Name != matchName {
 				continue
 			}
 			if pod.RestartCount > layer.RestartCount {

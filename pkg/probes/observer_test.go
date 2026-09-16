@@ -7,6 +7,10 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 type scriptedProbe struct {
@@ -65,33 +69,72 @@ func (p *scriptedProbe) isClosed() bool {
 	return p.closed
 }
 
+func fakeReplicaTopologyClient(ns, writer, standby string) *fake.Clientset {
+	return fake.NewClientset(
+		&corev1.Endpoints{
+			ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: ns},
+			Subsets: []corev1.EndpointSubset{{
+				Addresses: []corev1.EndpointAddress{{
+					TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: writer},
+				}},
+			}},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      writer,
+				Namespace: ns,
+				Labels:    map[string]string{"app": "postgres-replica", "deployment": ns},
+			},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      standby,
+				Namespace: ns,
+				Labels:    map[string]string{"app": "postgres-replica", "deployment": ns},
+			},
+		},
+	)
+}
+
+func replicaObserverDial(ns string, primary, replica *scriptedProbe) probeDialFunc {
+	standbyHost := fmt.Sprintf("%s.postgres-replica.%s.svc.cluster.local", "postgres-replica-1", ns)
+	return func(ctx context.Context, host string) (ConsistencyProbe, error) {
+		if host == primaryHost(ns) {
+			return primary, nil
+		}
+		if host == standbyHost {
+			return replica, nil
+		}
+		return nil, fmt.Errorf("unexpected host %q", host)
+	}
+}
+
 func TestObserver_StartStop_idempotent(t *testing.T) {
 	t.Parallel()
+	ns := "ns-idem"
 	primary := &scriptedProbe{readOK: true}
 	replica := &scriptedProbe{readOK: true, readVer: 1}
 	var dialCount atomic.Int32
 	o := NewObserver(
+		WithKubeClient(fakeReplicaTopologyClient(ns, "postgres-replica-0", "postgres-replica-1")),
 		WithTickInterval(50*time.Millisecond),
 		WithProbeDial(func(ctx context.Context, host string) (ConsistencyProbe, error) {
 			dialCount.Add(1)
-			if host == primaryHost("ns-idem") {
-				return primary, nil
-			}
-			return replica, nil
+			return replicaObserverDial(ns, primary, replica)(ctx, host)
 		}),
 	)
 
-	o.Start("ns-idem", ObserverConfig{NeedReplica: true})
-	o.Start("ns-idem", ObserverConfig{NeedReplica: true})
-	waitForProbe(t, o, "ns-idem", func(r ProbeResult) bool {
+	o.Start(ns, ObserverConfig{NeedReplica: true})
+	o.Start(ns, ObserverConfig{NeedReplica: true})
+	waitForProbe(t, o, ns, func(r ProbeResult) bool {
 		return r.WrittenVersion > 0
 	})
 	if dialCount.Load() != 2 {
 		t.Fatalf("dial count = %d, want 2 (primary+replica once)", dialCount.Load())
 	}
 
-	o.Stop("ns-idem")
-	o.Stop("ns-idem")
+	o.Stop(ns)
+	o.Stop(ns)
 
 	if !primary.isClosed() || !replica.isClosed() {
 		t.Fatalf("probes not closed: primary=%v replica=%v", primary.isClosed(), replica.isClosed())
@@ -100,24 +143,21 @@ func TestObserver_StartStop_idempotent(t *testing.T) {
 
 func TestObserver_loopUpdatesLatest(t *testing.T) {
 	t.Parallel()
+	ns := "ns-loop"
 	primary := &scriptedProbe{}
 	replica := &scriptedProbe{readOK: true}
 	o := NewObserver(
+		WithKubeClient(fakeReplicaTopologyClient(ns, "postgres-replica-0", "postgres-replica-1")),
 		WithTickInterval(20*time.Millisecond),
-		WithProbeDial(func(ctx context.Context, host string) (ConsistencyProbe, error) {
-			if host == primaryHost("ns-loop") {
-				return primary, nil
-			}
-			return replica, nil
-		}),
+		WithProbeDial(replicaObserverDial(ns, primary, replica)),
 	)
 
-	o.Start("ns-loop", ObserverConfig{NeedReplica: true})
-	t.Cleanup(func() { o.Stop("ns-loop") })
+	o.Start(ns, ObserverConfig{NeedReplica: true})
+	t.Cleanup(func() { o.Stop(ns) })
 
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		if result, ok := o.Latest("ns-loop"); ok && result.WrittenVersion > 0 {
+		if result, ok := o.Latest(ns); ok && result.WrittenVersion > 0 {
 			if result.ReplicaVersion != replica.readVersion() {
 				t.Fatalf("replica version: got %d want %d", result.ReplicaVersion, replica.readVersion())
 			}
@@ -133,51 +173,89 @@ func TestObserver_loopUpdatesLatest(t *testing.T) {
 
 func TestObserver_monotonicViolation(t *testing.T) {
 	t.Parallel()
+	ns := "ns-mono"
 	primary := &scriptedProbe{}
 	replica := &scriptedProbe{readOK: true, readVer: 5}
 	o := NewObserver(
+		WithKubeClient(fakeReplicaTopologyClient(ns, "postgres-replica-0", "postgres-replica-1")),
 		WithTickInterval(15*time.Millisecond),
-		WithProbeDial(func(ctx context.Context, host string) (ConsistencyProbe, error) {
-			if host == primaryHost("ns-mono") {
-				return primary, nil
-			}
-			return replica, nil
-		}),
+		WithProbeDial(replicaObserverDial(ns, primary, replica)),
 	)
 
-	o.Start("ns-mono", ObserverConfig{NeedReplica: true})
-	t.Cleanup(func() { o.Stop("ns-mono") })
+	o.Start(ns, ObserverConfig{NeedReplica: true})
+	t.Cleanup(func() { o.Stop(ns) })
 
-	waitForProbe(t, o, "ns-mono", func(r ProbeResult) bool {
+	waitForProbe(t, o, ns, func(r ProbeResult) bool {
 		return r.WrittenVersion > 0 && !r.MonotonicViolation
 	})
 
 	replica.setReadVer(3)
-	waitForProbe(t, o, "ns-mono", func(r ProbeResult) bool {
+	waitForProbe(t, o, ns, func(r ProbeResult) bool {
 		return r.MonotonicViolation
 	})
 }
 
 func TestObserver_probeErrorRecorded(t *testing.T) {
 	t.Parallel()
+	ns := "ns-err"
 	primary := &scriptedProbe{writeErr: fmt.Errorf("write failed")}
 	replica := &scriptedProbe{readOK: true}
 	o := NewObserver(
+		WithKubeClient(fakeReplicaTopologyClient(ns, "postgres-replica-0", "postgres-replica-1")),
 		WithTickInterval(15*time.Millisecond),
-		WithProbeDial(func(ctx context.Context, host string) (ConsistencyProbe, error) {
-			if host == primaryHost("ns-err") {
-				return primary, nil
-			}
-			return replica, nil
-		}),
+		WithProbeDial(replicaObserverDial(ns, primary, replica)),
 	)
 
-	o.Start("ns-err", ObserverConfig{NeedReplica: true})
-	t.Cleanup(func() { o.Stop("ns-err") })
+	o.Start(ns, ObserverConfig{NeedReplica: true})
+	t.Cleanup(func() { o.Stop(ns) })
 
-	waitForProbe(t, o, "ns-err", func(r ProbeResult) bool {
+	waitForProbe(t, o, ns, func(r ProbeResult) bool {
 		return r.LastErr != ""
 	})
+}
+
+func TestObserver_writeVersionRedialsPrimary(t *testing.T) {
+	t.Parallel()
+	ns := "ns-redial"
+	primary := &scriptedProbe{readOK: true}
+	primary.writeErr = fmt.Errorf("transient write failure")
+	replica := &scriptedProbe{readOK: true}
+	var primaryDials atomic.Int32
+	o := NewObserver(
+		WithKubeClient(fakeReplicaTopologyClient(ns, "postgres-replica-0", "postgres-replica-1")),
+		WithTickInterval(50*time.Millisecond),
+		WithProbeDial(func(ctx context.Context, host string) (ConsistencyProbe, error) {
+			if host == primaryHost(ns) {
+				primaryDials.Add(1)
+				if primaryDials.Load() == 1 {
+					return primary, nil
+				}
+				primary.writeErr = nil
+				return &scriptedProbe{readOK: true}, nil
+			}
+			return replicaObserverDial(ns, primary, replica)(ctx, host)
+		}),
+	)
+	o.Start(ns, ObserverConfig{NeedReplica: true})
+	t.Cleanup(func() { o.Stop(ns) })
+
+	waitForProbe(t, o, ns, func(r ProbeResult) bool {
+		return r.WrittenVersion > 0 && r.LastErr == ""
+	})
+}
+
+func TestStandbyReplicaHost(t *testing.T) {
+	t.Parallel()
+	ns := "ns-standby"
+	client := fakeReplicaTopologyClient(ns, "postgres-replica-0", "postgres-replica-1")
+	got, err := standbyReplicaHost(context.Background(), client, ns)
+	if err != nil {
+		t.Fatalf("standbyReplicaHost: %v", err)
+	}
+	want := "postgres-replica-1.postgres-replica.ns-standby.svc.cluster.local"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
 }
 
 func waitForProbe(t *testing.T, o *Observer, namespace string, ok func(ProbeResult) bool) {
@@ -192,13 +270,10 @@ func waitForProbe(t *testing.T, o *Observer, namespace string, ok func(ProbeResu
 	t.Fatal("timed out waiting for probe condition")
 }
 
-func TestPrimaryReplicaHost(t *testing.T) {
+func TestPrimaryHost(t *testing.T) {
 	t.Parallel()
 	if got := primaryHost("ns1"); got != "db.ns1.svc.cluster.local" {
 		t.Fatalf("primaryHost: %q", got)
-	}
-	if got := replicaHost("ns1"); got != "db-replica.ns1.svc.cluster.local" {
-		t.Fatalf("replicaHost: %q", got)
 	}
 }
 

@@ -135,6 +135,67 @@ func TestFencePrimary_scalesDeploymentToZero(t *testing.T) {
 	}
 }
 
+func TestPostgresWritePod_fromEndpoints(t *testing.T) {
+	t.Parallel()
+
+	ns := "cloud9-write-endpoints"
+	writer := "postgres-replica-0"
+	client := fake.NewSimpleClientset(&corev1.Endpoints{
+		ObjectMeta: metav1.ObjectMeta{Name: postgresWriteServiceName, Namespace: ns},
+		Subsets: []corev1.EndpointSubset{{
+			Addresses: []corev1.EndpointAddress{{
+				TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: writer},
+			}},
+		}},
+	})
+
+	got, err := PostgresWritePod(context.Background(), client, ns)
+	if err != nil {
+		t.Fatalf("PostgresWritePod: %v", err)
+	}
+	if got != writer {
+		t.Fatalf("got %q want %q", got, writer)
+	}
+}
+
+func TestPostgresWritePod_fallbackPrimaryDeployment(t *testing.T) {
+	t.Parallel()
+
+	ns := "cloud9-write-fallback"
+	primary := "postgres-abc123"
+	client := fake.NewSimpleClientset(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      primary,
+			Namespace: ns,
+			Labels:    map[string]string{"app": postgresPrimaryAppLabel, "deployment": ns},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{
+				Type:   corev1.PodReady,
+				Status: corev1.ConditionTrue,
+			}},
+		},
+	})
+
+	got, err := PostgresWritePod(context.Background(), client, ns)
+	if err != nil {
+		t.Fatalf("PostgresWritePod: %v", err)
+	}
+	if got != primary {
+		t.Fatalf("got %q want %q", got, primary)
+	}
+}
+
+func TestPostgresWritePod_noneFound(t *testing.T) {
+	t.Parallel()
+
+	_, err := PostgresWritePod(context.Background(), fake.NewSimpleClientset(), "cloud9-empty")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestRetargetWriteService_patchesSelector(t *testing.T) {
 	t.Parallel()
 

@@ -68,7 +68,7 @@ type MetricsCollector struct {
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
 // metricsClient may be nil; DB/MQ/LB container usage then falls back to kube requests when cAdvisor is empty.
 func NewMetricsCollector(prometheusURL string, lg loadgen.LoadGenerator, clientset kubernetes.Interface, metricsClient PodMetricsProvider, eventBus *EventBus) *MetricsCollector {
-	observer := probes.NewObserver()
+	observer := probes.NewObserver(probes.WithKubeClient(clientset))
 	return &MetricsCollector{
 		prometheusURL: prometheusURL,
 		httpClient:    &http.Client{Timeout: 5 * time.Second},

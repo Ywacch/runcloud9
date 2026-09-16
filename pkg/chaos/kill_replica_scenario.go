@@ -28,7 +28,8 @@ func (s *KillReplicaScenario) Apply(ctx context.Context, namespace string, desig
 		return err
 	}
 
-	podName, err := findRunningPod(ctx, s.Client, namespace, postgresReplicaAppLabel)
+	writerPod, _ := deployer.PostgresWritePod(ctx, s.Client, namespace)
+	podName, err := findRunningPodExcluding(ctx, s.Client, namespace, postgresReplicaAppLabel, writerPod)
 	if err != nil {
 		return fmt.Errorf("no running postgres replica pod: %w", err)
 	}

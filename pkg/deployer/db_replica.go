@@ -18,8 +18,17 @@ const (
 	dbReplicaStatefulSetName     = "postgres-replica"
 	dbReplicaHeadlessServiceName = "postgres-replica"
 	DBReplicaServiceName         = "db-replica"
-	dbReplicaDataVolumeName      = "pgdata"
-	dbReplicaEphemeralSize       = "500Mi"
+)
+
+// DBReplicaAppLabel returns the K8s app label for postgres read-replica pods.
+func DBReplicaAppLabel() string { return dbReplicaAppLabel }
+
+// DBReplicaHeadlessServiceName returns the headless Service name for replica pod DNS.
+func DBReplicaHeadlessServiceName() string { return dbReplicaHeadlessServiceName }
+
+const (
+	dbReplicaDataVolumeName = "pgdata"
+	dbReplicaEphemeralSize  = "500Mi"
 	// --checkpoint=fast: after pg_restore the primary is dirty; default spread
 	// checkpoint left replica inits on "waiting for checkpoint" until the 5m deploy deadline.
 	dbReplicaBasebackupScript = `until pg_isready -h db -U syscrack; do sleep 1; done; pg_basebackup -h db -U syscrack -D $PGDATA -Fp -Xs -R -P --checkpoint=fast; echo "primary_conninfo = 'host=db port=5432 user=syscrack application_name=${HOSTNAME} sslmode=disable'" >> "$PGDATA/postgresql.auto.conf"`
