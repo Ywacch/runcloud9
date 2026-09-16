@@ -221,6 +221,8 @@ type ComponentMetrics struct {
 	RuntimeHealth *RuntimeHealth `json:"runtimeHealth,omitempty"`
 	// Consistency carries observer probe status and cumulative violation counters (Wave 3 Phase 2).
 	Consistency *ConsistencyStatus `json:"consistency,omitempty"`
+	// dbWriterPod is the live postgres writer (Service db endpoints); not serialized.
+	dbWriterPod string `json:"-"`
 	// Layers splits cache proxy/backing-store or Postgres primary/replica instances by role.
 	Layers []ComponentLayerMetrics `json:"layers,omitempty"`
 	// Freshness tags signal groups (throughput, containerCpu, containerMem, connections,

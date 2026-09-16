@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/deployer"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 const defaultObserverInterval = 10 * time.Second
@@ -59,6 +62,7 @@ type observerSession struct {
 type Observer struct {
 	mu           sync.Mutex
 	sessions     map[string]*observerSession
+	kubeClient   kubernetes.Interface
 	dial         probeDialFunc
 	dialCache    cacheDialFunc
 	tickInterval time.Duration
@@ -66,6 +70,13 @@ type Observer struct {
 
 // ObserverOption configures a new Observer.
 type ObserverOption func(*Observer)
+
+// WithKubeClient supplies the Kubernetes client for live postgres topology resolution.
+func WithKubeClient(client kubernetes.Interface) ObserverOption {
+	return func(o *Observer) {
+		o.kubeClient = client
+	}
+}
 
 // WithProbeDial overrides the default Postgres dialer (tests).
 func WithProbeDial(fn probeDialFunc) ObserverOption {
@@ -116,8 +127,32 @@ func primaryHost(namespace string) string {
 	return fmt.Sprintf("db.%s.svc.cluster.local", namespace)
 }
 
-func replicaHost(namespace string) string {
-	return fmt.Sprintf("%s.%s.svc.cluster.local", deployer.DBReplicaServiceName, namespace)
+func standbyReplicaHost(ctx context.Context, client kubernetes.Interface, namespace string) (string, error) {
+	if client == nil {
+		return "", fmt.Errorf("kubernetes client is required")
+	}
+	writerPod, err := deployer.PostgresWritePod(ctx, client, namespace)
+	if err != nil {
+		return "", err
+	}
+	pods, err := client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app=%s,deployment=%s", deployer.DBReplicaAppLabel(), namespace),
+	})
+	if err != nil {
+		return "", fmt.Errorf("list postgres-replica pods: %w", err)
+	}
+	var standbys []string
+	for _, pod := range pods.Items {
+		if pod.Name == writerPod {
+			continue
+		}
+		standbys = append(standbys, pod.Name)
+	}
+	if len(standbys) == 0 {
+		return "", fmt.Errorf("no standby replica pod in namespace %s", namespace)
+	}
+	sort.Strings(standbys)
+	return fmt.Sprintf("%s.%s.%s.svc.cluster.local", standbys[0], deployer.DBReplicaHeadlessServiceName(), namespace), nil
 }
 
 // Start launches the observer loop for namespace. Idempotent.
@@ -228,7 +263,24 @@ func (o *Observer) runProbeTick(ctx context.Context, namespace string, sess *obs
 
 	written, err := sess.primary.WriteVersion(ctx)
 	if err != nil {
-		return ProbeResult{}, err
+		if sess.primary != nil {
+			_ = sess.primary.Close()
+			sess.primary = nil
+		}
+		primary, dialErr := o.dial(ctx, primaryHost(namespace))
+		if dialErr != nil {
+			return ProbeResult{}, err
+		}
+		sess.primary = primary
+		sess.schemaEnsured = false
+		if schemaErr := sess.primary.EnsureSchema(ctx); schemaErr != nil {
+			return ProbeResult{}, schemaErr
+		}
+		sess.schemaEnsured = true
+		written, err = sess.primary.WriteVersion(ctx)
+		if err != nil {
+			return ProbeResult{}, err
+		}
 	}
 
 	out := ProbeResult{WrittenVersion: written}
@@ -298,7 +350,11 @@ func (o *Observer) ensureProbes(ctx context.Context, namespace string, sess *obs
 		sess.primary = primary
 	}
 	if sess.needReplica && sess.replica == nil {
-		replica, err := o.dial(ctx, replicaHost(namespace))
+		host, err := standbyReplicaHost(ctx, o.kubeClient, namespace)
+		if err != nil {
+			return fmt.Errorf("resolve replica host: %w", err)
+		}
+		replica, err := o.dial(ctx, host)
 		if err != nil {
 			return fmt.Errorf("dial replica: %w", err)
 		}

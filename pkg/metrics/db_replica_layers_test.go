@@ -48,11 +48,11 @@ func replicaLagSeconds(layer ComponentLayerMetrics) float64 {
 
 func TestPostgresPrimaryReplayLagByAppQuery(t *testing.T) {
 	t.Parallel()
-	q := postgresPrimaryReplayLagByAppQuery("ns-replica")
+	writer := "postgres-replica-0"
+	q := postgresPrimaryReplayLagByAppQuery("ns-replica", writer)
 	for _, want := range []string{
 		`namespace="ns-replica"`,
-		`pod=~"postgres.*"`,
-		`pod!~"postgres-replica.*"`,
+		`pod="postgres-replica-0"`,
 		postgresExporterReplayLagMetric,
 		"application_name",
 	} {
@@ -98,12 +98,36 @@ func TestMapPostgresLayerRequestRates(t *testing.T) {
 		"postgres-abc":           12,
 		"postgres-replica-roll":  3,
 		"postgres-replica-other": 1,
-	})
+	}, "postgres-abc")
 	if got[dbLayerIDPostgresPrimary] != 12 {
 		t.Fatalf("primary rate: got %v, want 12", got[dbLayerIDPostgresPrimary])
 	}
 	if got["postgres-replica-roll"] != 3 || got["postgres-replica-other"] != 1 {
 		t.Fatalf("replica rates: %+v", got)
+	}
+}
+
+func fakeDBWriteEndpoints(ns, writer string) *corev1.Endpoints {
+	return &corev1.Endpoints{
+		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: ns},
+		Subsets: []corev1.EndpointSubset{{
+			Addresses: []corev1.EndpointAddress{{
+				TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: writer},
+			}},
+		}},
+	}
+}
+
+func fakeReplicaPod(ns, name string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+			Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+		},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+		},
 	}
 }
 
@@ -140,6 +164,7 @@ func TestListDBReplicaPods_statefulSetDesiredCount(t *testing.T) {
 func TestCollectDBReplicaLayers_primaryResourceQueriesExcludeReplicas(t *testing.T) {
 	t.Parallel()
 	ns := "cloud9-primary-only-ns"
+	writerPod := "postgres-primary-live"
 	replicaPod := "postgres-replica-only"
 	desired := int32(1)
 
@@ -158,24 +183,28 @@ func TestCollectDBReplicaLayers_primaryResourceQueriesExcludeReplicas(t *testing
 			},
 		},
 	}
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      replicaPod,
-			Namespace: ns,
-			Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+	clientset := fake.NewSimpleClientset(
+		statefulSet,
+		fakeReplicaPod(ns, replicaPod),
+		fakeDBWriteEndpoints(ns, writerPod),
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      writerPod,
+				Namespace: ns,
+				Labels:    map[string]string{"app": "postgres", "deployment": ns},
+			},
+			Status: corev1.PodStatus{
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			},
 		},
-		Status: corev1.PodStatus{
-			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
-		},
-	}
-	clientset := fake.NewSimpleClientset(statefulSet, pod)
+	)
 
 	var primaryCPUQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case strings.Contains(q, "container_cpu_usage_seconds_total") && strings.Contains(q, `pod=~"postgres.*"`):
+		case strings.Contains(q, "container_cpu_usage_seconds_total") && strings.Contains(q, writerPod):
 			primaryCPUQuery = q
 			_ = json.NewEncoder(w).Encode(promVectorJSON("0.25"))
 		default:
@@ -189,8 +218,8 @@ func TestCollectDBReplicaLayers_primaryResourceQueriesExcludeReplicas(t *testing
 	if primaryCPUQuery == "" {
 		t.Fatal("expected primary CPU PromQL query")
 	}
-	if !strings.Contains(primaryCPUQuery, `pod!~"postgres-replica.*"`) {
-		t.Fatalf("primary CPU query should exclude replica pods: %s", primaryCPUQuery)
+	if !strings.Contains(primaryCPUQuery, `pod=~"^`+writerPod+`$"`) {
+		t.Fatalf("primary CPU query should target writer pod: %s", primaryCPUQuery)
 	}
 }
 
@@ -218,17 +247,22 @@ func TestCollectDBReplicaLayers_replicaResourceQueriesUseReplicaContainer(t *tes
 			},
 		},
 	}
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      replicaPod,
-			Namespace: ns,
-			Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+	writerPod := "postgres-primary-live"
+	clientset := fake.NewSimpleClientset(
+		statefulSet,
+		fakeReplicaPod(ns, replicaPod),
+		fakeDBWriteEndpoints(ns, writerPod),
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      writerPod,
+				Namespace: ns,
+				Labels:    map[string]string{"app": "postgres", "deployment": ns},
+			},
+			Status: corev1.PodStatus{
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			},
 		},
-		Status: corev1.PodStatus{
-			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
-		},
-	}
-	clientset := fake.NewSimpleClientset(statefulSet, pod)
+	)
 
 	var replicaCPUQuery, replicaMemQuery, replicaCPULimitQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -294,17 +328,21 @@ func TestCollectDBReplicaLayers_layerRequestRates(t *testing.T) {
 			},
 		},
 	}
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      replicaPod,
-			Namespace: ns,
-			Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+	clientset := fake.NewSimpleClientset(
+		statefulSet,
+		fakeReplicaPod(ns, replicaPod),
+		fakeDBWriteEndpoints(ns, primaryPod),
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      primaryPod,
+				Namespace: ns,
+				Labels:    map[string]string{"app": "postgres", "deployment": ns},
+			},
+			Status: corev1.PodStatus{
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			},
 		},
-		Status: corev1.PodStatus{
-			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
-		},
-	}
-	clientset := fake.NewSimpleClientset(statefulSet, pod)
+	)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
@@ -347,6 +385,7 @@ func TestApplyDBReplicaLayers_withReplicas(t *testing.T) {
 	t.Parallel()
 	cm := ComponentMetrics{Component: "db", StorageRole: StorageRolePrimary}
 	split := dbReplicaLayerSplit{
+		writerPod:   "postgres-primary",
 		replicaPods: []string{"postgres-replica-0"},
 		counts:      BackendReplicas{Desired: 1, Ready: 1},
 		primary: ComponentLayerMetrics{
@@ -408,20 +447,22 @@ func TestCollectDBReplicaLayers_lagFromPrimaryCustomQuery(t *testing.T) {
 			},
 		},
 	}
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      replicaPod,
-			Namespace: ns,
-			Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+	writerPod := "postgres-primary-live"
+	clientset := fake.NewSimpleClientset(
+		statefulSet,
+		fakeReplicaPod(ns, replicaPod),
+		fakeDBWriteEndpoints(ns, writerPod),
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      writerPod,
+				Namespace: ns,
+				Labels:    map[string]string{"app": "postgres", "deployment": ns},
+			},
+			Status: corev1.PodStatus{
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			},
 		},
-		Status: corev1.PodStatus{
-			Conditions: []corev1.PodCondition{{
-				Type:   corev1.PodReady,
-				Status: corev1.ConditionTrue,
-			}},
-		},
-	}
-	clientset := fake.NewSimpleClientset(statefulSet, pod)
+	)
 
 	var lagQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -450,8 +491,8 @@ func TestCollectDBReplicaLayers_lagFromPrimaryCustomQuery(t *testing.T) {
 	if !strings.Contains(lagQuery, `namespace="cloud9-replica-ns"`) {
 		t.Fatalf("lag query missing namespace: %s", lagQuery)
 	}
-	if !strings.Contains(lagQuery, `pod!~"postgres-replica.*"`) {
-		t.Fatalf("lag query should exclude replica pods on primary scrape: %s", lagQuery)
+	if !strings.Contains(lagQuery, `pod="`+writerPod+`"`) {
+		t.Fatalf("lag query should scrape writer pod: %s", lagQuery)
 	}
 }
 
@@ -476,17 +517,22 @@ func TestCollectDBReplicaLayers_fallbackWhenCustomSeriesMissing(t *testing.T) {
 			},
 		},
 	}
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      replicaPod,
-			Namespace: ns,
-			Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+	writerPod := "postgres-primary-live"
+	clientset := fake.NewSimpleClientset(
+		statefulSet,
+		fakeReplicaPod(ns, replicaPod),
+		fakeDBWriteEndpoints(ns, writerPod),
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      writerPod,
+				Namespace: ns,
+				Labels:    map[string]string{"app": "postgres", "deployment": ns},
+			},
+			Status: corev1.PodStatus{
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			},
 		},
-		Status: corev1.PodStatus{
-			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
-		},
-	}
-	clientset := fake.NewSimpleClientset(statefulSet, pod)
+	)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
@@ -579,17 +625,22 @@ func TestCollect_StorageProfileWithReplicaLayers(t *testing.T) {
 			},
 		},
 	}
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      replicaPod,
-			Namespace: ns,
-			Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+	writerPod := "postgres-primary-live"
+	clientset := fake.NewSimpleClientset(
+		statefulSet,
+		fakeReplicaPod(ns, replicaPod),
+		fakeDBWriteEndpoints(ns, writerPod),
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      writerPod,
+				Namespace: ns,
+				Labels:    map[string]string{"app": "postgres", "deployment": ns},
+			},
+			Status: corev1.PodStatus{
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			},
 		},
-		Status: corev1.PodStatus{
-			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
-		},
-	}
-	clientset := fake.NewSimpleClientset(statefulSet, pod)
+	)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
@@ -691,17 +742,21 @@ func TestCollectDBReplicaLayers_engineMetrics(t *testing.T) {
 			},
 		},
 	}
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      replicaPod,
-			Namespace: ns,
-			Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+	clientset := fake.NewSimpleClientset(
+		statefulSet,
+		fakeReplicaPod(ns, replicaPod),
+		fakeDBWriteEndpoints(ns, primaryPod),
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      primaryPod,
+				Namespace: ns,
+				Labels:    map[string]string{"app": "postgres", "deployment": ns},
+			},
+			Status: corev1.PodStatus{
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			},
 		},
-		Status: corev1.PodStatus{
-			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
-		},
-	}
-	clientset := fake.NewSimpleClientset(statefulSet, pod)
+	)
 
 	var replicaScanQuery string
 	xactTotals := map[string]string{
@@ -811,17 +866,22 @@ func TestCollectDBReplicaLayers_xactSessionRebaselineOnCounterDrop(t *testing.T)
 			},
 		},
 	}
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      replicaPod,
-			Namespace: ns,
-			Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+	writerPod := "postgres-primary-live"
+	clientset := fake.NewSimpleClientset(
+		statefulSet,
+		fakeReplicaPod(ns, replicaPod),
+		fakeDBWriteEndpoints(ns, writerPod),
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      writerPod,
+				Namespace: ns,
+				Labels:    map[string]string{"app": "postgres", "deployment": ns},
+			},
+			Status: corev1.PodStatus{
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			},
 		},
-		Status: corev1.PodStatus{
-			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
-		},
-	}
-	clientset := fake.NewSimpleClientset(statefulSet, pod)
+	)
 
 	xactTotal := "500"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -872,17 +932,22 @@ func TestCollectDBReplicaLayers_postgresSessionHeldSkipsLayerTotals(t *testing.T
 			},
 		},
 	}
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      replicaPod,
-			Namespace: ns,
-			Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+	writerPod := "postgres-primary-live"
+	clientset := fake.NewSimpleClientset(
+		statefulSet,
+		fakeReplicaPod(ns, replicaPod),
+		fakeDBWriteEndpoints(ns, writerPod),
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      writerPod,
+				Namespace: ns,
+				Labels:    map[string]string{"app": "postgres", "deployment": ns},
+			},
+			Status: corev1.PodStatus{
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			},
 		},
-		Status: corev1.PodStatus{
-			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
-		},
-	}
-	clientset := fake.NewSimpleClientset(statefulSet, pod)
+	)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
@@ -910,5 +975,119 @@ func TestCollectDBReplicaLayers_postgresSessionHeldSkipsLayerTotals(t *testing.T
 	}
 	if split.replicas[0].StorageIO == nil || split.replicas[0].StorageIO.ReadTotal9m != 0 {
 		t.Fatalf("held session should skip replica read totals, got %+v", split.replicas[0].StorageIO)
+	}
+}
+
+func TestCollectDBReplicaLayers_postPromoteWriterExcludedFromReplicas(t *testing.T) {
+	t.Parallel()
+	ns := "cloud9-post-promote"
+	writerPod := "postgres-replica-0"
+	standbyPod := "postgres-replica-1"
+	desired := int32(2)
+	zero := int32(0)
+
+	clientset := fake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "postgres", Namespace: ns},
+			Spec:       appsv1.DeploymentSpec{Replicas: &zero},
+		},
+		fakeDBReplicaStatefulSet(ns, desired),
+		fakeReplicaPod(ns, writerPod),
+		fakeReplicaPod(ns, standbyPod),
+		fakeDBWriteEndpoints(ns, writerPod),
+	)
+
+	c := NewMetricsCollector("", nil, clientset, nil, nil)
+	split := c.collectDBReplicaLayers(context.Background(), ns, nil)
+	if split.writerPod != writerPod {
+		t.Fatalf("writerPod: got %q want %q", split.writerPod, writerPod)
+	}
+	if len(split.replicaPods) != 1 || split.replicaPods[0] != standbyPod {
+		t.Fatalf("standbys: got %v want [%s]", split.replicaPods, standbyPod)
+	}
+	if split.counts.Ready != 1 {
+		t.Fatalf("ready standbys: got %d want 1", split.counts.Ready)
+	}
+
+	cm := ComponentMetrics{Component: "db"}
+	applyDBReplicaLayers(&cm, split)
+	if len(cm.Layers) != 2 {
+		t.Fatalf("layers: got %d want 2", len(cm.Layers))
+	}
+	if cm.Layers[0].ID != dbLayerIDPostgresPrimary {
+		t.Fatalf("primary layer id: %+v", cm.Layers[0])
+	}
+	if cm.Layers[1].ID != standbyPod {
+		t.Fatalf("standby layer id: %+v", cm.Layers[1])
+	}
+}
+
+func TestCollectDBReplicaLayers_prePromoteThreeLayers(t *testing.T) {
+	t.Parallel()
+	ns := "cloud9-pre-promote"
+	writerPod := "postgres-abc123"
+	standby0 := "postgres-replica-0"
+	standby1 := "postgres-replica-1"
+	desired := int32(2)
+	one := int32(1)
+
+	clientset := fake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "postgres", Namespace: ns},
+			Spec:       appsv1.DeploymentSpec{Replicas: &one},
+		},
+		fakeDBReplicaStatefulSet(ns, desired),
+		fakeReplicaPod(ns, standby0),
+		fakeReplicaPod(ns, standby1),
+		fakeDBWriteEndpoints(ns, writerPod),
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      writerPod,
+				Namespace: ns,
+				Labels:    map[string]string{"app": "postgres", "deployment": ns},
+			},
+			Status: corev1.PodStatus{
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			},
+		},
+	)
+
+	c := NewMetricsCollector("", nil, clientset, nil, nil)
+	split := c.collectDBReplicaLayers(context.Background(), ns, nil)
+	if len(split.replicaPods) != 2 {
+		t.Fatalf("standbys: got %v want two", split.replicaPods)
+	}
+	if split.counts.Ready != 2 {
+		t.Fatalf("ready standbys: got %d want 2", split.counts.Ready)
+	}
+
+	cm := ComponentMetrics{Component: "db"}
+	applyDBReplicaLayers(&cm, split)
+	if len(cm.Layers) != 3 {
+		t.Fatalf("layers: got %d want 3", len(cm.Layers))
+	}
+	if cm.Layers[0].ID != dbLayerIDPostgresPrimary {
+		t.Fatalf("primary layer: %+v", cm.Layers[0])
+	}
+}
+
+func TestApplyDBReplicaLayers_primaryOnlyAfterSecondPromote(t *testing.T) {
+	t.Parallel()
+	cm := ComponentMetrics{Component: "db"}
+	split := dbReplicaLayerSplit{
+		writerPod: "postgres-replica-0",
+		primary: ComponentLayerMetrics{
+			ID:     dbLayerIDPostgresPrimary,
+			Role:   dbLayerRolePrimary,
+			Engine: dbLayerEnginePostgreSQL,
+		},
+		counts: BackendReplicas{Desired: 2, Ready: 0},
+	}
+	applyDBReplicaLayers(&cm, split)
+	if len(cm.Layers) != 1 {
+		t.Fatalf("layers: got %d want 1", len(cm.Layers))
+	}
+	if cm.BackendReplicas == nil || cm.BackendReplicas.Ready != 0 {
+		t.Fatalf("backendReplicas: %+v", cm.BackendReplicas)
 	}
 }

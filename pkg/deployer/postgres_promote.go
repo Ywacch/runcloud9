@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -138,6 +139,52 @@ func PromoteStandby(ctx context.Context, admin PostgresAdmin) error {
 		return fmt.Errorf("standby still in recovery after pg_promote: got %q", strings.TrimSpace(stdout))
 	}
 	return nil
+}
+
+// PostgresWritePod returns the pod currently receiving writes via Service db.
+// It reads ready Endpoints addresses (TargetRef.Name), then falls back to a ready
+// app=postgres pod in the namespace.
+func PostgresWritePod(ctx context.Context, clientset kubernetes.Interface, ns string) (podName string, err error) {
+	if clientset == nil {
+		return "", fmt.Errorf("kubernetes client is required")
+	}
+	ep, err := clientset.CoreV1().Endpoints(ns).Get(ctx, postgresWriteServiceName, metav1.GetOptions{})
+	if err == nil {
+		for _, subset := range ep.Subsets {
+			for _, addr := range subset.Addresses {
+				if addr.TargetRef != nil && addr.TargetRef.Name != "" {
+					return addr.TargetRef.Name, nil
+				}
+			}
+		}
+	}
+	pods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app=%s,deployment=%s", postgresPrimaryAppLabel, ns),
+	})
+	if err != nil {
+		return "", fmt.Errorf("list postgres pods: %w", err)
+	}
+	for _, pod := range pods.Items {
+		if postgresWritePodReady(pod) {
+			return pod.Name, nil
+		}
+	}
+	return "", fmt.Errorf("no postgres write pod in namespace %s", ns)
+}
+
+func postgresWritePodReady(pod corev1.Pod) bool {
+	if pod.DeletionTimestamp != nil {
+		return false
+	}
+	if pod.Status.Phase != corev1.PodRunning {
+		return false
+	}
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
 }
 
 // RetargetWriteService patches Service db to route writes to the promoted pod.

@@ -20,9 +20,17 @@ func (s *PodKillScenario) Apply(ctx context.Context, namespace string, design de
 		return err
 	}
 
-	podName, err := findRunningPod(ctx, s.Client, namespace, resolved.AppLabel)
-	if err != nil {
-		return fmt.Errorf("no running pod for component %q: %w", targetComponent, err)
+	var podName string
+	if targetComponent == "db" {
+		podName, err = deployer.PostgresWritePod(ctx, s.Client, namespace)
+		if err != nil {
+			return fmt.Errorf("no running pod for component %q: %w", targetComponent, err)
+		}
+	} else {
+		podName, err = findRunningPod(ctx, s.Client, namespace, resolved.AppLabel)
+		if err != nil {
+			return fmt.Errorf("no running pod for component %q: %w", targetComponent, err)
+		}
 	}
 
 	return deletePod(ctx, s.Client, namespace, podName)

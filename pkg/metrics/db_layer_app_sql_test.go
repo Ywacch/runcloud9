@@ -73,23 +73,17 @@ func TestEnrichDBLayerAppSQL_twoTargetsFillLayers(t *testing.T) {
 	replica0 := "postgres-replica-0"
 	replica1 := "postgres-replica-1"
 	desired := int32(2)
+	writerPod := "postgres-primary-live"
 	clientset := fake.NewSimpleClientset(
 		fakeDBReplicaStatefulSet(ns, desired),
+		fakeReplicaPod(ns, replica0),
+		fakeReplicaPod(ns, replica1),
+		fakeDBWriteEndpoints(ns, writerPod),
 		&corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      replica0,
+				Name:      writerPod,
 				Namespace: ns,
-				Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
-			},
-			Status: corev1.PodStatus{
-				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
-			},
-		},
-		&corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      replica1,
-				Namespace: ns,
-				Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+				Labels:    map[string]string{"app": "postgres", "deployment": ns},
 			},
 			Status: corev1.PodStatus{
 				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
@@ -179,13 +173,16 @@ func TestEnrichDBLayerAppSQL_unlabeledTargetMapsToPrimary(t *testing.T) {
 	ns := "cloud9-layer-sql-unlabeled"
 	replicaPod := "postgres-replica-0"
 	desired := int32(1)
+	writerPod := "postgres-primary-live"
 	clientset := fake.NewSimpleClientset(
 		fakeDBReplicaStatefulSet(ns, desired),
+		fakeReplicaPod(ns, replicaPod),
+		fakeDBWriteEndpoints(ns, writerPod),
 		&corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      replicaPod,
+				Name:      writerPod,
 				Namespace: ns,
-				Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+				Labels:    map[string]string{"app": "postgres", "deployment": ns},
 			},
 			Status: corev1.PodStatus{
 				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
@@ -237,17 +234,22 @@ func TestCollect_DBLayerAppSQLDoesNotChangeClusterTotals(t *testing.T) {
 			},
 		},
 	}
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      replicaPod,
-			Namespace: ns,
-			Labels:    map[string]string{"app": dbReplicaAppLabel, "deployment": ns},
+	writerPod := "postgres-primary-live"
+	clientset := fake.NewSimpleClientset(
+		statefulSet,
+		fakeReplicaPod(ns, replicaPod),
+		fakeDBWriteEndpoints(ns, writerPod),
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      writerPod,
+				Namespace: ns,
+				Labels:    map[string]string{"app": "postgres", "deployment": ns},
+			},
+			Status: corev1.PodStatus{
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			},
 		},
-		Status: corev1.PodStatus{
-			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
-		},
-	}
-	clientset := fake.NewSimpleClientset(statefulSet, pod)
+	)
 
 	var clusterRateQ string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
