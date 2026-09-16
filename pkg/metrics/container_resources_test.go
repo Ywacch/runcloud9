@@ -19,6 +19,24 @@ func (f *fakePodMetricsProvider) ListPodMetrics(ctx context.Context, namespace s
 	return f.list, nil
 }
 
+func TestMergeContainerResources_liveReplicaWinsOverMissingPrimary(t *testing.T) {
+	t.Parallel()
+
+	got := mergeContainerResources(
+		containerResource{Estimated: true, Source: ResourceSourceRequests},
+		containerResource{Usage: 0.11, Estimated: false, Source: ResourceSourceCadvisor},
+	)
+	if got.Estimated {
+		t.Fatal("expected live replica CPU to keep cluster CPU non-estimated")
+	}
+	if got.Usage != 0.11 {
+		t.Fatalf("usage: got %v want 0.11", got.Usage)
+	}
+	if got.Source != ResourceSourceCadvisor {
+		t.Fatalf("source: got %q want %q", got.Source, ResourceSourceCadvisor)
+	}
+}
+
 func TestQueryContainerResourceCPU_MetricsAPIExcludesExporter(t *testing.T) {
 	t.Parallel()
 
