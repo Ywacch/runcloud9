@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/chaos"
@@ -114,11 +115,7 @@ func (h *Handler) handleChaosApply(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dbCfg, _ := deployer.DatabaseNodeConfig(*design)
-	if ps, ok := scenario.(*chaos.PromoteScenario); ok {
-		if deployer.RequiresPostgresSynchronousReplication(dbCfg) {
-			h.reconcilePostgresSyncAfterPromotion(namespace, dbCfg, ps.Result.PromotedPod)
-		}
-	} else if req.Scenario == "pod_kill" && req.TargetComponent == "db" {
+	if req.Scenario == "pod_kill" && req.TargetComponent == "db" {
 		if deployer.RequiresPostgresSynchronousReplication(dbCfg) {
 			h.reconcilePostgresSyncAfterChaos(namespace, dbCfg)
 		}
@@ -128,6 +125,7 @@ func (h *Handler) handleChaosApply(w http.ResponseWriter, r *http.Request) {
 		h.refreshChaosPartitionTTL(r.Context(), namespace)
 	}
 
+	var promotedPod string
 	if h.eventBus != nil {
 		now := time.Now()
 		detail := map[string]string{
@@ -135,6 +133,7 @@ func (h *Handler) handleChaosApply(w http.ResponseWriter, r *http.Request) {
 			"targetComponent": req.TargetComponent,
 		}
 		if ps, ok := scenario.(*chaos.PromoteScenario); ok {
+			promotedPod = ps.Result.PromotedPod
 			mergePromotionChaosDetail(detail, ps.Result, dbCfg)
 			if ev := failoverWriteLossEvent(now, req.Scenario, ps.Result, dbCfg); ev != nil {
 				h.eventBus.Emit(namespace, *ev)
@@ -151,6 +150,11 @@ func (h *Handler) handleChaosApply(w http.ResponseWriter, r *http.Request) {
 			Description: req.Scenario,
 			Detail:      detail,
 		})
+	} else if ps, ok := scenario.(*chaos.PromoteScenario); ok {
+		promotedPod = ps.Result.PromotedPod
+	}
+	if promotedPod != "" {
+		h.followOrRecloneThenMaybeSync(namespace, promotedPod, dbCfg)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -268,46 +272,76 @@ func mergePromotionChaosDetail(detail map[string]string, result deployer.Promoti
 	}
 }
 
-// reconcilePostgresSyncAfterPromotion re-applies sync GUCs on the promoted replica pod.
-func (h *Handler) reconcilePostgresSyncAfterPromotion(namespace string, dbConfig map[string]any, primaryPodName string) {
-	if h == nil || h.clientset == nil || primaryPodName == "" {
+func (h *Handler) followOrRecloneThenMaybeSync(namespace, promotedPod string, dbConfig map[string]any) {
+	if h == nil || h.clientset == nil || promotedPod == "" {
 		return
 	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 
-		err := deployer.ReconcilePostgresSynchronousReplicationOnPod(ctx, h.clientset, namespace, primaryPodName, dbConfig)
-		if h.eventBus == nil {
-			if err != nil {
-				slog.Warn("postgres sync reconcile after promotion failed", "namespace", namespace, "error", err)
-			}
-			return
-		}
+		result, err := deployer.FollowOrRecloneStandbys(ctx, h.clientset, namespace, promotedPod, deployer.StandbyFollowOpts{})
 		if err != nil {
+			slog.Warn("standby follow-or-reclone failed", "namespace", namespace, "promotedPod", promotedPod, "error", err)
+		}
+
+		syncRestored := false
+		minReady := int32(result.StreamingLeftovers)
+		if deployer.RequiresPostgresSynchronousReplication(dbConfig) && minReady >= 1 {
+			syncErr := deployer.ReconcilePostgresSynchronousReplicationOnPodWithMinReady(
+				ctx, h.clientset, namespace, promotedPod, dbConfig, minReady,
+			)
+			syncRestored = syncErr == nil
+			if syncErr != nil && h.eventBus != nil {
+				h.eventBus.Emit(namespace, metrics.Event{
+					Timestamp:   time.Now(),
+					Type:        "action",
+					Source:      "chaos",
+					Component:   "db",
+					Kind:        "postgres_sync_reconcile_failed",
+					Audience:    "both",
+					Title:       "Postgres sync settings not restored",
+					Description: syncErr.Error(),
+				})
+				slog.Warn("postgres sync reconcile after promotion failed", "namespace", namespace, "error", syncErr)
+			} else if syncRestored && h.eventBus != nil {
+				h.eventBus.Emit(namespace, metrics.Event{
+					Timestamp:   time.Now(),
+					Type:        "action",
+					Source:      "chaos",
+					Component:   "db",
+					Kind:        "postgres_sync_reconcile_ok",
+					Audience:    "both",
+					Title:       "Postgres synchronous replication restored",
+					Description: "Re-applied synchronous_standby_names after replica promotion",
+				})
+			}
+		}
+
+		if h.eventBus != nil {
+			detail := map[string]string{
+				"status":       result.Status,
+				"promotedPod":  promotedPod,
+				"syncRestored": strconv.FormatBool(syncRestored),
+			}
+			if len(result.ReclonedPods) > 0 {
+				detail["reclonedPods"] = strings.Join(result.ReclonedPods, ",")
+			}
+			if len(result.PendingPods) > 0 {
+				detail["pendingPods"] = strings.Join(result.PendingPods, ",")
+			}
 			h.eventBus.Emit(namespace, metrics.Event{
 				Timestamp:   time.Now(),
 				Type:        "action",
 				Source:      "chaos",
 				Component:   "db",
-				Kind:        "postgres_sync_reconcile_failed",
+				Kind:        "standby_reclone",
 				Audience:    "both",
-				Title:       "Postgres sync settings not restored",
-				Description: err.Error(),
+				Title:       "Standby rebuilt after timeline fork",
+				Description: "standby_reclone",
+				Detail:      detail,
 			})
-			slog.Warn("postgres sync reconcile after promotion failed", "namespace", namespace, "error", err)
-			return
 		}
-		h.eventBus.Emit(namespace, metrics.Event{
-			Timestamp:   time.Now(),
-			Type:        "action",
-			Source:      "chaos",
-			Component:   "db",
-			Kind:        "postgres_sync_reconcile_ok",
-			Audience:    "both",
-			Title:       "Postgres synchronous replication restored",
-			Description: "Re-applied synchronous_standby_names after replica promotion",
-		})
 	}()
 }
 
