@@ -103,7 +103,7 @@ func buildDeployers() (map[string]deployer.ComponentDeployer, kubernetes.Interfa
 // If the server restarts mid-deployment, time.AfterFunc timers are gone.
 // We scan for running/provisioning deployments and either fire teardown now (if expired)
 // or re-register a timer for the remaining duration.
-func recoverDeployments(ctx context.Context, s *store.DeploymentStore, sched *teardown.Scheduler) {
+func recoverDeployments(ctx context.Context, s *store.DeploymentStore, sched *teardown.Scheduler, col *metrics.MetricsCollector) {
 	rows, err := s.GetStaleDeployments(ctx)
 	if err != nil {
 		log.Printf("recovery: failed to fetch stale deployments: %v", err)
@@ -114,6 +114,9 @@ func recoverDeployments(ctx context.Context, s *store.DeploymentStore, sched *te
 			sched.Schedule(row.Namespace, time.Now())
 		} else {
 			sched.Schedule(row.Namespace, row.ExpiresAt)
+		}
+		if col != nil && row.Status == "running" {
+			col.EnsurePublisher(row.Namespace, row.Template, metrics.TopologyFlags{})
 		}
 		log.Printf("recovery: registered timer for %s", row.Namespace)
 	}
@@ -330,7 +333,7 @@ func main() {
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
-	recoverDeployments(context.Background(), deploymentStore, scheduler)
+	recoverDeployments(context.Background(), deploymentStore, scheduler, metricsCollector)
 	handler.StartDeployQueue(context.Background())
 	handler.StartChaosPartitionSweep(context.Background())
 

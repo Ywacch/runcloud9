@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"k8s.io/client-go/kubernetes"
@@ -16,6 +17,8 @@ import (
 // PodLoadGenerator drives load via the per-namespace loadgen pod HTTP API.
 type PodLoadGenerator struct {
 	httpClient *http.Client
+	mu         sync.Mutex
+	last       map[string]LoadStats
 }
 
 var _ LoadGenerator = (*PodLoadGenerator)(nil)
@@ -116,6 +119,12 @@ func (p *PodLoadGenerator) Update(ctx context.Context, namespace string, u LiveU
 
 // Stop sends DELETE /stop on the namespace loadgen pod.
 func (p *PodLoadGenerator) Stop(ctx context.Context, namespace string) error {
+	p.mu.Lock()
+	if p.last != nil {
+		delete(p.last, namespace)
+	}
+	p.mu.Unlock()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, podEndpoint(namespace)+"/stop", nil)
 	if err != nil {
 		return fmt.Errorf("loadgen pod: build stop request: %w", err)
@@ -141,22 +150,22 @@ func (p *PodLoadGenerator) GetStats(namespace string) LoadStats {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, podEndpoint(namespace)+"/metrics", nil)
 	if err != nil {
-		return inactiveLoadStats()
+		return p.staleOrInactive(namespace)
 	}
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		return inactiveLoadStats()
+		return p.staleOrInactive(namespace)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return inactiveLoadStats()
+		return p.staleOrInactive(namespace)
 	}
 
 	var stats LoadStats
 	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
-		return inactiveLoadStats()
+		return p.staleOrInactive(namespace)
 	}
 	if stats.StatusCodes == nil {
 		stats.StatusCodes = map[string]int{}
@@ -164,7 +173,27 @@ func (p *PodLoadGenerator) GetStats(namespace string) LoadStats {
 	if stats.Distribution == nil {
 		stats.Distribution = map[string]int{}
 	}
+	stats.Stale = false
+	p.mu.Lock()
+	if p.last == nil {
+		p.last = make(map[string]LoadStats)
+	}
+	p.last[namespace] = stats
+	p.mu.Unlock()
 	return stats
+}
+
+func (p *PodLoadGenerator) staleOrInactive(namespace string) LoadStats {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.last != nil {
+		if prev, ok := p.last[namespace]; ok {
+			out := prev
+			out.Stale = true
+			return out
+		}
+	}
+	return inactiveLoadStats()
 }
 
 func inactiveLoadStats() LoadStats {
