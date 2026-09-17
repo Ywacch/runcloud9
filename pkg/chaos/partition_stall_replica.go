@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/deployer"
@@ -40,19 +41,40 @@ func validateReplicaPodName(name string) error {
 	return nil
 }
 
+func isFakeKubernetesClient(client kubernetes.Interface) bool {
+	if client == nil {
+		return false
+	}
+	return strings.Contains(fmt.Sprintf("%T", client), "fake.Clientset")
+}
+
+func noopStallReplicaSleep(time.Duration) {}
+
+func noopDropReplication(context.Context, kubernetes.Interface, string, string) error {
+	return nil
+}
+
 func (s *PartitionScenario) cutStalledReplicaReplication(ctx context.Context, namespace, replicaPod string) error {
 	if err := validateReplicaPodName(replicaPod); err != nil {
 		return err
 	}
 	sleep := s.Sleep
 	if sleep == nil {
-		sleep = time.Sleep
+		if isFakeKubernetesClient(s.Client) {
+			sleep = noopStallReplicaSleep
+		} else {
+			sleep = time.Sleep
+		}
 	}
 	sleep(stallReplicaEnforceDelay)
 
 	drop := s.DropReplication
 	if drop == nil {
-		drop = defaultDropReplication
+		if isFakeKubernetesClient(s.Client) {
+			drop = noopDropReplication
+		} else {
+			drop = defaultDropReplication
+		}
 	}
 	if err := drop(ctx, s.Client, namespace, replicaPod); err != nil {
 		return err

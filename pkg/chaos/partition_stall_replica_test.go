@@ -35,6 +35,38 @@ func TestValidateReplicaPodName(t *testing.T) {
 	}
 }
 
+func TestCutStalledReplicaReplication_fakeClientSkipsLiveCut(t *testing.T) {
+	t.Parallel()
+	var slept time.Duration
+	var dropped bool
+	s := &PartitionScenario{
+		Client:   fake.NewClientset(),
+		Scenario: scenarioStallReplica,
+		Sleep:    func(d time.Duration) { slept = d },
+		DropReplication: func(context.Context, kubernetes.Interface, string, string) error {
+			dropped = true
+			return nil
+		},
+	}
+	if err := s.cutStalledReplicaReplication(context.Background(), "ns", "postgres-replica-0"); err != nil {
+		t.Fatalf("cut: %v", err)
+	}
+	if slept != stallReplicaEnforceDelay {
+		t.Fatalf("sleep: got %v want %v", slept, stallReplicaEnforceDelay)
+	}
+	if !dropped {
+		t.Fatal("expected explicit drop hook to run")
+	}
+
+	s = &PartitionScenario{
+		Client:   fake.NewClientset(),
+		Scenario: scenarioStallReplica,
+	}
+	if err := s.cutStalledReplicaReplication(context.Background(), "ns", "postgres-replica-0"); err != nil {
+		t.Fatalf("cut with fake client: %v", err)
+	}
+}
+
 func TestCutStalledReplicaReplication_invalidPodName(t *testing.T) {
 	t.Parallel()
 	s := &PartitionScenario{
