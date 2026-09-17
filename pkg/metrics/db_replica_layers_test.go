@@ -62,6 +62,58 @@ func TestPostgresPrimaryReplayLagByAppQuery(t *testing.T) {
 	}
 }
 
+func TestPostgresPrimaryWalLsnBytesQuery(t *testing.T) {
+	t.Parallel()
+	q := postgresPrimaryWalLsnBytesQuery("ns-lsn", "postgres-primary-live")
+	for _, want := range []string{
+		`namespace="ns-lsn"`,
+		`pod="postgres-primary-live"`,
+		postgresExporterWalLsnBytesMetric,
+	} {
+		if !strings.Contains(q, want) {
+			t.Fatalf("missing %q in query: %s", want, q)
+		}
+	}
+	if strings.Contains(q, postgresExporterReplayLsnBytesMetric) {
+		t.Fatalf("primary LSN query must not scrape replay LSN: %s", q)
+	}
+}
+
+func TestPostgresReplicaReplayLsnBytesByPodQuery(t *testing.T) {
+	t.Parallel()
+	q := postgresReplicaReplayLsnBytesByPodQuery("ns-replay-lsn")
+	for _, want := range []string{
+		`namespace="ns-replay-lsn"`,
+		`pod=~"postgres-replica.*"`,
+		postgresExporterReplayLsnBytesMetric,
+	} {
+		if !strings.Contains(q, want) {
+			t.Fatalf("missing %q in query: %s", want, q)
+		}
+	}
+}
+
+func TestWalLsnDiffBytes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name            string
+		primary, replay float64
+		want            int64
+	}{
+		{name: "climbing", primary: 20000, replay: 4096, want: 15904},
+		{name: "caught up", primary: 100, replay: 100, want: 0},
+		{name: "replica ahead clamps to zero", primary: 10, replay: 50, want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := walLsnDiffBytes(tt.primary, tt.replay); got != tt.want {
+				t.Fatalf("walLsnDiffBytes(%v, %v) = %d, want %d", tt.primary, tt.replay, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPostgresReplicaLagFallbackByPodQuery(t *testing.T) {
 	t.Parallel()
 	q := postgresReplicaLagFallbackByPodQuery("ns-fallback")
@@ -610,6 +662,119 @@ func TestCollectDBReplicaLayers_disconnectedReplicaSkipsFallbackLag(t *testing.T
 	}
 	if !connectedLayer.PromotionCandidate {
 		t.Fatal("connected replica with 0 B lag should be promotion candidate")
+	}
+}
+
+func TestCollectDBReplicaLayers_disconnectedReplicaUsesLsnDiff(t *testing.T) {
+	t.Parallel()
+
+	const (
+		ns           = "cloud9-lsn-ns"
+		writerPod    = "postgres-primary-live"
+		disconnected = "postgres-replica-0"
+		connected    = "postgres-replica-1"
+	)
+	desired := int32(2)
+
+	clientset := fake.NewSimpleClientset(
+		fakeDBReplicaStatefulSet(ns, desired),
+		fakeReplicaPod(ns, disconnected),
+		fakeReplicaPod(ns, connected),
+		fakeDBWriteEndpoints(ns, writerPod),
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      writerPod,
+				Namespace: ns,
+				Labels:    map[string]string{"app": "postgres", "deployment": ns},
+			},
+			Status: corev1.PodStatus{
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			},
+		},
+	)
+
+	var primaryLsnQuery, replayLsnQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, postgresExporterReplayLagMetric) && strings.Contains(q, "sync_state"):
+			_ = json.NewEncoder(w).Encode(promSyncStateVectorJSON(map[string]string{
+				connected: "async",
+			}))
+		case strings.Contains(q, postgresExporterReplayLagMetric):
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("application_name", map[string]string{
+				connected: "0",
+			}))
+		case strings.Contains(q, postgresExporterReplayLagBytesMetric):
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("application_name", map[string]string{
+				connected: "0",
+			}))
+		case strings.Contains(q, postgresExporterReplayLsnBytesMetric):
+			replayLsnQuery = q
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				disconnected: "4096",
+				connected:    "100000",
+			}))
+		case strings.Contains(q, postgresExporterWalLsnBytesMetric):
+			primaryLsnQuery = q
+			_ = json.NewEncoder(w).Encode(promVectorJSON("20000"))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
+	split := c.collectDBReplicaLayers(context.Background(), ns, nil)
+	if len(split.replicas) != 2 {
+		t.Fatalf("replicas: got %d want 2", len(split.replicas))
+	}
+
+	byID := make(map[string]ComponentLayerMetrics, len(split.replicas))
+	for _, layer := range split.replicas {
+		byID[layer.ID] = layer
+	}
+
+	disconnectedLayer := byID[disconnected]
+	if disconnectedLayer.ConnectedOnPrimary {
+		t.Fatal("replica-0 should be disconnected on primary")
+	}
+	if disconnectedLayer.ReplicationLagSeconds != nil {
+		t.Fatalf("disconnected replica must not use fallback lag seconds: %+v", disconnectedLayer.ReplicationLagSeconds)
+	}
+	if disconnectedLayer.LagBytes == nil || *disconnectedLayer.LagBytes != 15904 {
+		t.Fatalf("disconnected replica LSN diff lag: %+v", disconnectedLayer.LagBytes)
+	}
+	if disconnectedLayer.SyncState != "" {
+		t.Fatalf("disconnected replica should not have sync state: %q", disconnectedLayer.SyncState)
+	}
+	if disconnectedLayer.PromotionCandidate {
+		t.Fatal("disconnected replica should not be promotion candidate")
+	}
+
+	connectedLayer := byID[connected]
+	if !connectedLayer.ConnectedOnPrimary {
+		t.Fatal("replica-1 should be connected on primary")
+	}
+	if connectedLayer.LagBytes == nil || *connectedLayer.LagBytes != 0 {
+		t.Fatalf("connected replica must keep primary lag bytes, not LSN diff: %+v", connectedLayer.LagBytes)
+	}
+	if !connectedLayer.PromotionCandidate {
+		t.Fatal("connected replica with 0 B lag should be promotion candidate")
+	}
+
+	if primaryLsnQuery == "" || replayLsnQuery == "" {
+		t.Fatal("expected primary and replica LSN PromQL queries")
+	}
+	if !strings.Contains(primaryLsnQuery, `namespace="cloud9-lsn-ns"`) {
+		t.Fatalf("primary LSN query missing namespace: %s", primaryLsnQuery)
+	}
+	if !strings.Contains(primaryLsnQuery, `pod="`+writerPod+`"`) {
+		t.Fatalf("primary LSN query should scrape writer pod: %s", primaryLsnQuery)
+	}
+	if !strings.Contains(replayLsnQuery, `namespace="cloud9-lsn-ns"`) {
+		t.Fatalf("replay LSN query missing namespace: %s", replayLsnQuery)
 	}
 }
 

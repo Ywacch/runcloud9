@@ -279,7 +279,9 @@ type ComponentLayerMetrics struct {
 	ReplicationLagSeconds *float64 `json:"replicationLagSeconds,omitempty"`
 	// SyncState is pg_stat_replication.sync_state from the primary exporter ("async" when absent).
 	SyncState string `json:"syncState,omitempty"`
-	// LagBytes is primary-side WAL bytes behind (pg_wal_lsn_diff); nil when not streaming on primary.
+	// LagBytes is WAL bytes behind. When ConnectedOnPrimary is true this is
+	// pg_stat_replication replay lag on the writer. When false it is
+	// pg_wal_lsn_diff(primary pg_current_wal_lsn(), standby pg_last_wal_replay_lsn()).
 	LagBytes *int64 `json:"lagBytes,omitempty"`
 	// PromotionCandidate marks the standby PickCandidate(mostCurrent) would promote.
 	PromotionCandidate bool `json:"promotionCandidate,omitempty"`

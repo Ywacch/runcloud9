@@ -13,8 +13,11 @@ const (
 	postgresExporterExtendQueryPathFlag  = "--extend.query-path=" + postgresExporterQueriesMountPath
 )
 
-// postgresExporterQueriesYAML exposes primary-side pg_stat_replication.replay_lag in seconds.
-// Query block replication_replay_lag → metric replication_replay_lag_replay_lag_seconds (no pg_ prefix).
+// postgresExporterQueriesYAML is mounted on primary and replica postgres-exporter sidecars.
+// replication_replay_lag names are frozen (F8 / S7) — do not rename those metrics.
+// wal_lsn / wal_replay_lsn are numeric LSN-from-0/0 gauges so the collector can subtract
+// when a standby drops off pg_stat_replication (stall / partition).
+// postgres-exporter v0.16.0 names custom metrics {block}_{column} without a pg_ prefix.
 const postgresExporterQueriesYAML = `replication_replay_lag:
   master: true
   query: |
@@ -33,6 +36,22 @@ const postgresExporterQueriesYAML = `replication_replay_lag:
     - replay_lag_bytes:
         usage: GAUGE
         description: "Primary-side WAL bytes behind per connected standby"
+wal_lsn:
+  master: true
+  query: |
+    SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0')::double precision AS bytes
+  metrics:
+    - bytes:
+        usage: GAUGE
+        description: "Primary WAL insert LSN as bytes from 0/0"
+wal_replay_lsn:
+  master: false
+  query: |
+    SELECT pg_wal_lsn_diff(COALESCE(pg_last_wal_replay_lsn(), '0/0'), '0/0')::double precision AS bytes
+  metrics:
+    - bytes:
+        usage: GAUGE
+        description: "Standby replay LSN as bytes from 0/0"
 `
 
 func postgresExporterQueriesEnabled(cfg DeployConfig) bool {
