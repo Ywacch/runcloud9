@@ -496,6 +496,123 @@ func TestCollectDBReplicaLayers_lagFromPrimaryCustomQuery(t *testing.T) {
 	}
 }
 
+func promSyncStateVectorJSON(syncByApp map[string]string) map[string]any {
+	result := make([]map[string]any, 0, len(syncByApp))
+	for app, syncState := range syncByApp {
+		result = append(result, map[string]any{
+			"metric": map[string]string{
+				"application_name": app,
+				"sync_state":       syncState,
+			},
+			"value": []any{float64(1), "1"},
+		})
+	}
+	return map[string]any{
+		"status": "success",
+		"data": map[string]any{
+			"resultType": "vector",
+			"result":     result,
+		},
+	}
+}
+
+func TestCollectDBReplicaLayers_disconnectedReplicaSkipsFallbackLag(t *testing.T) {
+	t.Parallel()
+
+	const (
+		ns           = "cloud9-disconnected-ns"
+		writerPod    = "postgres-primary-live"
+		disconnected = "postgres-replica-0"
+		connected    = "postgres-replica-1"
+	)
+	desired := int32(2)
+
+	clientset := fake.NewSimpleClientset(
+		fakeDBReplicaStatefulSet(ns, desired),
+		fakeReplicaPod(ns, disconnected),
+		fakeReplicaPod(ns, connected),
+		fakeDBWriteEndpoints(ns, writerPod),
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      writerPod,
+				Namespace: ns,
+				Labels:    map[string]string{"app": "postgres", "deployment": ns},
+			},
+			Status: corev1.PodStatus{
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			},
+		},
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, postgresExporterReplayLagMetric) && strings.Contains(q, "sync_state"):
+			_ = json.NewEncoder(w).Encode(promSyncStateVectorJSON(map[string]string{
+				connected: "async",
+			}))
+		case strings.Contains(q, postgresExporterReplayLagMetric):
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("application_name", map[string]string{
+				connected: "0",
+			}))
+		case strings.Contains(q, postgresExporterReplayLagBytesMetric):
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("application_name", map[string]string{
+				connected: "0",
+			}))
+		case strings.Contains(q, postgresExporterReplicaLagFallbackMetric):
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				disconnected: "0",
+			}))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
+	split := c.collectDBReplicaLayers(context.Background(), ns, nil)
+	if len(split.replicas) != 2 {
+		t.Fatalf("replicas: got %d want 2", len(split.replicas))
+	}
+
+	byID := make(map[string]ComponentLayerMetrics, len(split.replicas))
+	for _, layer := range split.replicas {
+		byID[layer.ID] = layer
+	}
+
+	disconnectedLayer := byID[disconnected]
+	if disconnectedLayer.ConnectedOnPrimary {
+		t.Fatal("replica-0 should be disconnected on primary")
+	}
+	if disconnectedLayer.ReplicationLagSeconds != nil {
+		t.Fatalf("disconnected replica should not use fallback lag seconds: %+v", disconnectedLayer.ReplicationLagSeconds)
+	}
+	if disconnectedLayer.LagBytes != nil {
+		t.Fatalf("disconnected replica should not have lag bytes: %+v", disconnectedLayer.LagBytes)
+	}
+	if disconnectedLayer.SyncState != "" {
+		t.Fatalf("disconnected replica should not have sync state: %q", disconnectedLayer.SyncState)
+	}
+	if disconnectedLayer.PromotionCandidate {
+		t.Fatal("disconnected replica should not be promotion candidate")
+	}
+
+	connectedLayer := byID[connected]
+	if !connectedLayer.ConnectedOnPrimary {
+		t.Fatal("replica-1 should be connected on primary")
+	}
+	if connectedLayer.ReplicationLagSeconds == nil || *connectedLayer.ReplicationLagSeconds != 0 {
+		t.Fatalf("connected replica lag seconds: %+v", connectedLayer.ReplicationLagSeconds)
+	}
+	if connectedLayer.LagBytes == nil || *connectedLayer.LagBytes != 0 {
+		t.Fatalf("connected replica lag bytes: %+v", connectedLayer.LagBytes)
+	}
+	if !connectedLayer.PromotionCandidate {
+		t.Fatal("connected replica with 0 B lag should be promotion candidate")
+	}
+}
+
 func TestCollectDBReplicaLayers_fallbackWhenCustomSeriesMissing(t *testing.T) {
 	t.Parallel()
 	ns := "cloud9-fallback-ns"
@@ -547,8 +664,11 @@ func TestCollectDBReplicaLayers_fallbackWhenCustomSeriesMissing(t *testing.T) {
 
 	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
 	split := c.collectDBReplicaLayers(context.Background(), ns, nil)
-	if replicaLagSeconds(split.replicas[0]) != 0.75 {
-		t.Fatalf("fallback lag: got %v, want 0.75", replicaLagSeconds(split.replicas[0]))
+	if split.replicas[0].ConnectedOnPrimary {
+		t.Fatal("replica without primary row should be disconnected on primary")
+	}
+	if split.replicas[0].ReplicationLagSeconds != nil {
+		t.Fatalf("disconnected replica should not use standby fallback lag: %+v", split.replicas[0].ReplicationLagSeconds)
 	}
 }
 

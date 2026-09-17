@@ -287,7 +287,6 @@ func applyReplicaPromotionPreview(layers []ComponentLayerMetrics, connected map[
 		}
 		podName := layers[i].ID
 		if !connected[podName] {
-			layers[i].SyncState = "async"
 			continue
 		}
 		syncState := syncByPod[podName]
@@ -474,10 +473,13 @@ func (c *MetricsCollector) collectDBReplicaLayers(ctx context.Context, ns string
 	out.replicas = make([]ComponentLayerMetrics, 0, len(standbys))
 	for _, podName := range standbys {
 		var lag *float64
-		if seconds, ok := lagByPod[podName]; ok {
-			lag = replicationLagSecondsPtr(seconds)
+		if out.connectedOnPrimary[podName] {
+			if seconds, ok := lagByPod[podName]; ok {
+				lag = replicationLagSecondsPtr(seconds)
+			}
 		}
 		replicaLayer := c.buildDBReplicaLayer(ctx, ns, podName, lag)
+		replicaLayer.ConnectedOnPrimary = out.connectedOnPrimary[podName]
 		replicaLayer.RequestRate = rpsByLayer[podName]
 		out.replicas = append(out.replicas, replicaLayer)
 	}
