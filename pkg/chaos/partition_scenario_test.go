@@ -241,6 +241,95 @@ func TestActivePartitionScenarios(t *testing.T) {
 	}
 }
 
+func TestResolveStallReplicaPod(t *testing.T) {
+	t.Parallel()
+	ns := "cloud9-resolve-stall"
+	client := fake.NewClientset(
+		runningReplicaPod(ns, "postgres-replica-0"),
+		runningReplicaPod(ns, "postgres-replica-1"),
+		dbWriteEndpoints(ns, "postgres-6fbdd9c5dc-writer"),
+	)
+
+	tests := []struct {
+		name      string
+		requested string
+		want      string
+		wantErr   error
+	}{
+		{name: "empty picks first", requested: "", want: "postgres-replica-0"},
+		{name: "explicit replica 1", requested: "postgres-replica-1", want: "postgres-replica-1"},
+		{name: "unknown pod", requested: "postgres-replica-9", wantErr: ErrInvalidStallTarget},
+		{name: "invalid name", requested: "postgres_replica_0", wantErr: ErrInvalidStallTarget},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := resolveStallReplicaPod(context.Background(), client, ns, tt.requested)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("err: got %v want %v", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("pod: got %q want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveStallReplicaPod_rejectsWriter(t *testing.T) {
+	t.Parallel()
+	ns := "cloud9-stall-writer"
+	client := fake.NewClientset(
+		runningReplicaPod(ns, "postgres-replica-0"),
+		runningReplicaPod(ns, "postgres-replica-1"),
+		dbWriteEndpoints(ns, "postgres-replica-0"),
+	)
+	_, err := resolveStallReplicaPod(context.Background(), client, ns, "postgres-replica-0")
+	if !errors.Is(err, ErrInvalidStallTarget) {
+		t.Fatalf("err: got %v want ErrInvalidStallTarget", err)
+	}
+	got, err := resolveStallReplicaPod(context.Background(), client, ns, "")
+	if err != nil {
+		t.Fatalf("auto pick: %v", err)
+	}
+	if got != "postgres-replica-1" {
+		t.Fatalf("auto pick: got %q want postgres-replica-1", got)
+	}
+}
+
+func TestPartitionScenario_stallTargetsRequestedPod(t *testing.T) {
+	ns := "cloud9-stall-pick"
+	client := fake.NewClientset(
+		runningReplicaPod(ns, "postgres-replica-0"),
+		runningReplicaPod(ns, "postgres-replica-1"),
+	)
+	design := dbDesignWithReplicas()
+	scenario, _, dropped := testStallScenario(client)
+	scenario.TargetPod = "postgres-replica-1"
+
+	if err := scenario.Apply(context.Background(), ns, design, "db"); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if scenario.TargetPod != "postgres-replica-1" {
+		t.Fatalf("resolved TargetPod: %q", scenario.TargetPod)
+	}
+	cm, err := client.CoreV1().ConfigMaps(ns).Get(context.Background(), "c9-chaos-stall-replica", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get stall state: %v", err)
+	}
+	if cm.Annotations[ChaosAnnotationReplicaPod] != "postgres-replica-1" {
+		t.Fatalf("replica annotation: %q", cm.Annotations[ChaosAnnotationReplicaPod])
+	}
+	if len(*dropped) != 1 || (*dropped)[0] != "postgres-replica-1" {
+		t.Fatalf("dropped: %v", *dropped)
+	}
+}
+
 func TestPartitionScenario_stallDoubleApplyStillDrops(t *testing.T) {
 	ns := "cloud9-stall-double"
 	client := fake.NewClientset(runningReplicaPod(ns, "postgres-replica-0"))

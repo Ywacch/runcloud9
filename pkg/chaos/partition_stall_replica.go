@@ -3,6 +3,7 @@ package chaos
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -23,7 +24,10 @@ const (
 	replicaAutoConfPath = "/var/lib/postgresql/data/postgresql.auto.conf"
 )
 
-var replicaPodNamePattern = regexp.MustCompile(`^postgres-replica-[0-9]+$`)
+// ErrInvalidStallTarget is returned when stall_replica cannot use the requested pod.
+var ErrInvalidStallTarget = errors.New("chaos: invalid stall target")
+
+var replicaPodNamePattern = regexp.MustCompile(`^postgres-replica(?:-[a-z]+)?-[0-9]+$`)
 
 // setReplicaPrimaryHostFunc rewrites overlay primary_conninfo host and reloads the replica.
 type setReplicaPrimaryHostFunc func(ctx context.Context, client kubernetes.Interface, namespace, replicaPod, host string) error
@@ -162,11 +166,12 @@ func (s *PartitionScenario) dropStalledReplica(ctx context.Context, namespace, r
 }
 
 func (s *PartitionScenario) applyStallReplica(ctx context.Context, namespace string, design deployer.DeploymentDesign, targetComponent string) error {
-	in, err := buildStallReplicaInput(ctx, s.Client, namespace, targetComponent, design, time.Now().Add(DefaultPartitionTTL))
+	in, err := buildStallReplicaInput(ctx, s.Client, namespace, targetComponent, design, time.Now().Add(DefaultPartitionTTL), s.TargetPod)
 	if err != nil {
 		return err
 	}
 	replicaPod := in.Exclude.PodName
+	s.TargetPod = replicaPod
 	if err := upsertStallState(ctx, s.Client, namespace, replicaPod, targetComponent, in.ExpiresAt); err != nil {
 		return err
 	}

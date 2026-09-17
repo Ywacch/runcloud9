@@ -33,6 +33,8 @@ type PartitionScenario struct {
 	SetReplicaPrimaryHost setReplicaPrimaryHostFunc
 	// DropReplication terminates the primary walsender for stall_replica. Nil uses live primary admin.
 	DropReplication dropReplicationFunc
+	// TargetPod is the replica to stall. Empty picks the first running standby.
+	TargetPod string
 }
 
 // Apply records partition state when the namespace slot is free.
@@ -120,7 +122,7 @@ func (s *PartitionScenario) Description(targetComponent string) string {
 func (s *PartitionScenario) buildInput(ctx context.Context, namespace, targetComponent string, design deployer.DeploymentDesign, expiresAt time.Time) (PartitionPolicyInput, error) {
 	switch s.Scenario {
 	case scenarioStallReplica:
-		return buildStallReplicaInput(ctx, s.Client, namespace, targetComponent, design, expiresAt)
+		return buildStallReplicaInput(ctx, s.Client, namespace, targetComponent, design, expiresAt, s.TargetPod)
 	case scenarioSplitPrimaryReplica:
 		return buildSplitPrimaryReplicaInput(namespace, targetComponent, design, expiresAt)
 	case scenarioSplitAppStore:
@@ -130,14 +132,14 @@ func (s *PartitionScenario) buildInput(ctx context.Context, namespace, targetCom
 	}
 }
 
-func buildStallReplicaInput(ctx context.Context, client kubernetes.Interface, namespace, targetComponent string, design deployer.DeploymentDesign, expiresAt time.Time) (PartitionPolicyInput, error) {
+func buildStallReplicaInput(ctx context.Context, client kubernetes.Interface, namespace, targetComponent string, design deployer.DeploymentDesign, expiresAt time.Time, requestedPod string) (PartitionPolicyInput, error) {
 	if targetComponent != "db" {
 		return PartitionPolicyInput{}, fmt.Errorf("chaos: %s only supports targetComponent \"db\"", scenarioStallReplica)
 	}
 	if err := requireDBStreamingReplicas(design); err != nil {
 		return PartitionPolicyInput{}, err
 	}
-	podName, err := firstRunningReplicaPod(ctx, client, namespace)
+	podName, err := resolveStallReplicaPod(ctx, client, namespace, requestedPod)
 	if err != nil {
 		return PartitionPolicyInput{}, err
 	}
@@ -238,12 +240,13 @@ func normalizeDBEngine(engine string) string {
 	return engine
 }
 
-func firstRunningReplicaPod(ctx context.Context, client kubernetes.Interface, namespace string) (string, error) {
+func runningStandbyReplicaPods(ctx context.Context, client kubernetes.Interface, namespace string) ([]string, error) {
+	writerPod, _ := deployer.PostgresWritePod(ctx, client, namespace)
 	pods, err := client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector(postgresReplicaAppLabel),
 	})
 	if err != nil {
-		return "", fmt.Errorf("chaos: list replica pods: %w", err)
+		return nil, fmt.Errorf("chaos: list replica pods: %w", err)
 	}
 	var names []string
 	for _, pod := range pods.Items {
@@ -253,11 +256,34 @@ func firstRunningReplicaPod(ctx context.Context, client kubernetes.Interface, na
 		if pod.Status.Phase != corev1.PodRunning {
 			continue
 		}
+		if writerPod != "" && pod.Name == writerPod {
+			continue
+		}
 		names = append(names, pod.Name)
 	}
-	if len(names) == 0 {
-		return "", fmt.Errorf("chaos: no running postgres replica pod")
-	}
 	sort.Strings(names)
-	return names[0], nil
+	return names, nil
+}
+
+func resolveStallReplicaPod(ctx context.Context, client kubernetes.Interface, namespace, requestedPod string) (string, error) {
+	requestedPod = strings.TrimSpace(requestedPod)
+	names, err := runningStandbyReplicaPods(ctx, client, namespace)
+	if err != nil {
+		return "", err
+	}
+	if requestedPod == "" {
+		if len(names) == 0 {
+			return "", fmt.Errorf("chaos: no running postgres replica pod")
+		}
+		return names[0], nil
+	}
+	if err := validateReplicaPodName(requestedPod); err != nil {
+		return "", fmt.Errorf("%w: invalid replica pod name %q", ErrInvalidStallTarget, requestedPod)
+	}
+	for _, name := range names {
+		if name == requestedPod {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("%w: replica pod %q is not a running standby", ErrInvalidStallTarget, requestedPod)
 }

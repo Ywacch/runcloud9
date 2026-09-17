@@ -19,6 +19,7 @@ func TestValidateReplicaPodName(t *testing.T) {
 	}{
 		{name: "valid", pod: "postgres-replica-0", wantErr: false},
 		{name: "valid multi digit", pod: "postgres-replica-12", wantErr: false},
+		{name: "mixed size", pod: "postgres-replica-small-0", wantErr: false},
 		{name: "underscore", pod: "postgres_replica_0", wantErr: true},
 		{name: "empty", pod: "", wantErr: true},
 	}
