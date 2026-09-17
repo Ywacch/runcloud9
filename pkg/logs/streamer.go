@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -17,8 +18,10 @@ import (
 )
 
 const (
-	logBufferSize = 256
-	logTailLines  = int64(100) // send last 100 lines on connect, then follow
+	logBufferSize          = 256
+	logTailLines           = int64(100)
+	logRediscoverInterval  = 5 * time.Second
+	logStreamRetryInterval = 2 * time.Second
 )
 
 type componentLogTarget struct {
@@ -32,6 +35,40 @@ type podLogStream struct {
 	containerName string
 }
 
+func (s podLogStream) key() string {
+	return fmt.Sprintf("%s|%s|%s", s.component, s.podName, s.containerName)
+}
+
+// streamSet records which pod/container streams have already been started.
+type streamSet struct {
+	mu      sync.Mutex
+	started map[string]struct{}
+}
+
+func newStreamSet() *streamSet {
+	return &streamSet{started: make(map[string]struct{})}
+}
+
+// tryAdd reports whether this is the first time the stream has been seen.
+func (s *streamSet) tryAdd(stream podLogStream) bool {
+	key := stream.key()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.started[key]; exists {
+		return false
+	}
+	s.started[key] = struct{}{}
+	return true
+}
+
+func connectTailLines(needTail bool) *int64 {
+	if !needTail {
+		return nil
+	}
+	n := logTailLines
+	return &n
+}
+
 // componentLogTargets maps each logical component to one or more pod/container
 // targets. Cache intentionally supports multiple topologies:
 // - cache-aside: app=redis
@@ -41,7 +78,11 @@ var componentLogTargets = map[string][]componentLogTarget{
 		{labelSelector: "app=postgres", containerName: "postgres"},
 		{labelSelector: "app=postgres-replica", containerName: "postgres-replica"},
 	},
-	"cache":      {{labelSelector: "app=redis", containerName: "redis"}, {labelSelector: "app=cache-proxy", containerName: "cache-proxy"}, {labelSelector: "app=redis-internal", containerName: "redis"}},
+	"cache": {
+		{labelSelector: "app=redis", containerName: "redis"},
+		{labelSelector: "app=cache-proxy", containerName: "cache-proxy"},
+		{labelSelector: "app=redis-internal", containerName: "redis"},
+	},
 	"app-server": {{labelSelector: "app=app-server", containerName: "app-server"}},
 	"mq":         {{labelSelector: "app=rabbitmq", containerName: "rabbitmq"}},
 	"worker":     {{labelSelector: "app=worker", containerName: "worker"}},
@@ -55,10 +96,12 @@ var componentLogTargets = map[string][]componentLogTarget{
 // as there is no "stream all pods in a namespace" call. One goroutine per pod
 // is the natural fit. All goroutines send to a shared channel; a single
 // writer goroutine owns the WebSocket connection.
+//
+// Discovery is repeated while ctx is active so pods that appear after connect
+// (Postgres replicas finishing init, late Redis) still get a follower.
 func StreamLogs(ctx context.Context, conn *websocket.Conn, clientset kubernetes.Interface, namespace string) {
 	writeCh := make(chan LogLine, logBufferSize)
 
-	// Writer goroutine — sole owner of conn.WriteJSON.
 	go func() {
 		ticker := time.NewTicker(wskeepalive.PingPeriod)
 		defer ticker.Stop()
@@ -85,7 +128,6 @@ func StreamLogs(ctx context.Context, conn *websocket.Conn, clientset kubernetes.
 		}
 	}()
 
-	// Reader goroutine — handles pong, detects disconnect.
 	go func() {
 		conn.SetReadLimit(512 * 1024)
 		_ = conn.SetReadDeadline(time.Now().Add(wskeepalive.PongWait))
@@ -100,12 +142,29 @@ func StreamLogs(ctx context.Context, conn *websocket.Conn, clientset kubernetes.
 		}
 	}()
 
-	// Start one log-streaming goroutine per discovered pod stream target.
-	for _, stream := range discoverPodLogStreams(ctx, clientset, namespace) {
-		go streamPodLogs(ctx, clientset, namespace, stream.podName, stream.component, stream.containerName, writeCh)
+	started := newStreamSet()
+	startNew := func(streams []podLogStream) {
+		for _, stream := range streams {
+			if !started.tryAdd(stream) {
+				continue
+			}
+			s := stream
+			go streamPodLogs(ctx, clientset, namespace, s.podName, s.component, s.containerName, writeCh)
+		}
 	}
 
-	<-ctx.Done()
+	startNew(discoverPodLogStreams(ctx, clientset, namespace))
+
+	ticker := time.NewTicker(logRediscoverInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			startNew(discoverPodLogStreams(ctx, clientset, namespace))
+		}
+	}
 }
 
 func discoverPodLogStreams(ctx context.Context, clientset kubernetes.Interface, namespace string) []podLogStream {
@@ -120,16 +179,17 @@ func discoverPodLogStreams(ctx context.Context, clientset kubernetes.Interface, 
 				continue
 			}
 			for _, pod := range pods.Items {
-				key := fmt.Sprintf("%s|%s|%s", component, pod.Name, target.containerName)
+				stream := podLogStream{
+					component:     component,
+					podName:       pod.Name,
+					containerName: target.containerName,
+				}
+				key := stream.key()
 				if _, ok := seen[key]; ok {
 					continue
 				}
 				seen[key] = struct{}{}
-				streams = append(streams, podLogStream{
-					component:     component,
-					podName:       pod.Name,
-					containerName: target.containerName,
-				})
+				streams = append(streams, stream)
 			}
 		}
 	}
@@ -141,35 +201,63 @@ func discoverPodLogStreams(ctx context.Context, clientset kubernetes.Interface, 
 // are written to stdout. TailLines sends the last N lines on connect so the user
 // sees recent history before live streaming begins.
 // containerName specifies which container to stream from in multi-container pods.
+//
+// GetLogs fails while an init container is still running. Retry until ctx is done
+// so db/cache streams start after replicas finish basebackup.
 func streamPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace, podName, component, containerName string, writeCh chan<- LogLine) {
-	tailLines := logTailLines
+	needTail := true
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		opened, err := followPodLogs(ctx, clientset, namespace, podName, component, containerName, connectTailLines(needTail), writeCh)
+		if opened {
+			needTail = false
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			slog.Warn("failed to open log stream", "pod", podName, "container", containerName, "error", err)
+		}
+		timer := time.NewTimer(logStreamRetryInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+func followPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace, podName, component, containerName string, tailLines *int64, writeCh chan<- LogLine) (opened bool, err error) {
 	req := clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
 		Container: containerName,
 		Follow:    true,
-		TailLines: &tailLines,
+		TailLines: tailLines,
 	})
 
 	stream, err := req.Stream(ctx)
 	if err != nil {
-		slog.Warn("failed to open log stream", "pod", podName, "error", err)
-		return
+		return false, fmt.Errorf("open log stream: %w", err)
 	}
-	defer stream.Close()
+	defer func() {
+		_ = stream.Close()
+	}()
 
 	scanner := bufio.NewScanner(stream)
 	for scanner.Scan() {
 		select {
 		case <-ctx.Done():
-			return
+			return true, ctx.Err()
 		default:
 		}
 
 		line := scanner.Text()
 		logLine := parseLine(line, component, podName)
 
-		// Non-blocking send.
-		// UNDERSTAND: if the WebSocket writer is slow (client tab backgrounded),
-		// we drop log lines rather than blocking pod log scanning.
 		select {
 		case writeCh <- logLine:
 		default:
@@ -177,8 +265,9 @@ func streamPodLogs(ctx context.Context, clientset kubernetes.Interface, namespac
 	}
 
 	if err := scanner.Err(); err != nil && ctx.Err() == nil {
-		slog.Warn("log scanner error", "pod", podName, "error", err)
+		return true, fmt.Errorf("log scanner: %w", err)
 	}
+	return true, nil
 }
 
 // parseLine attempts to parse a JSON log line (structured logging).
