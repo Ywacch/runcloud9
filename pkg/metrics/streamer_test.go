@@ -85,6 +85,51 @@ func TestStreamMetrics_SlowCollect_NoBackpressureDrop(t *testing.T) {
 	}
 }
 
+func TestStreamMetrics_ClientClose_CancelsCollect(t *testing.T) {
+	t.Parallel()
+
+	parent := context.Background()
+	collectStarted := make(chan struct{})
+	collectDone := make(chan struct{})
+	collect := func(ctx context.Context) (*DeploymentMetrics, error) {
+		select {
+		case <-collectStarted:
+		default:
+			close(collectStarted)
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	srv, url := newMetricsWSServer(t, func(conn *websocket.Conn) {
+		defer close(collectDone)
+		streamMetrics(parent, conn, "test-ns", collect, streamConfig{
+			emitInterval: 50 * time.Millisecond,
+			collectPause: 50 * time.Millisecond,
+		})
+	})
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+
+	select {
+	case <-collectStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("collect did not start")
+	}
+
+	_ = conn.Close()
+
+	select {
+	case <-collectDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("streamMetrics kept collecting after the client closed the socket")
+	}
+}
+
 func TestStreamMetrics_ContextCancel_CleanShutdown(t *testing.T) {
 	t.Parallel()
 

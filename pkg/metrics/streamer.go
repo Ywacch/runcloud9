@@ -58,10 +58,17 @@ func streamMetrics(ctx context.Context, conn *websocket.Conn, namespace string, 
 		cfg.collectPause = collectInterval
 	}
 
+	// Hijacked request contexts often stay live after the client closes the
+	// socket. Cancel when the reader or writer exits so Collect stops hitting
+	// the Kubernetes API.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	writeCh := make(chan *DeploymentMetrics, 2)
 	var latestSnapshot atomic.Pointer[DeploymentMetrics]
 
 	go func() {
+		defer cancel()
 		ticker := time.NewTicker(wskeepalive.PingPeriod)
 		defer ticker.Stop()
 		defer conn.Close()
@@ -95,6 +102,7 @@ func streamMetrics(ctx context.Context, conn *websocket.Conn, namespace string, 
 	}()
 
 	go func() {
+		defer cancel()
 		conn.SetReadLimit(maxMessageSize)
 		_ = conn.SetReadDeadline(time.Now().Add(wskeepalive.PongWait))
 		conn.SetPongHandler(func(string) error {

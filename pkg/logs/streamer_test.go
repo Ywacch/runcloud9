@@ -2,8 +2,13 @@ package logs
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -235,5 +240,39 @@ func TestConnectTailLines(t *testing.T) {
 				t.Fatalf("got %d want %d", *got, tc.want)
 			}
 		})
+	}
+}
+
+func TestStreamLogs_ClientClose_Stops(t *testing.T) {
+	t.Parallel()
+
+	parent := context.Background()
+	done := make(chan struct{})
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		defer close(done)
+		StreamLogs(parent, conn, fake.NewSimpleClientset(), "ns1")
+	}))
+	defer srv.Close()
+
+	url := "ws" + strings.TrimPrefix(srv.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	_ = conn.Close()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("StreamLogs kept following after the client closed the socket")
 	}
 }

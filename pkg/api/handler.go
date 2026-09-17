@@ -212,7 +212,8 @@ func (h *Handler) handleMetricsStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
+	ctx, cancel := cancelWhenSocketCloses(r.Context(), conn)
+	defer cancel()
 	design, _ := deployer.DesignFromMap(row.Design)
 	topo := MetricsTopologyFromDeploymentDesign(design, row.Template)
 	metrics.StreamMetrics(ctx, conn, h.metricsCollector, namespace, row.Template, topo)
@@ -328,7 +329,8 @@ func (h *Handler) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
+	ctx, cancel := cancelWhenSocketCloses(r.Context(), conn)
+	defer cancel()
 	logs.StreamLogs(ctx, conn, h.clientset, namespace)
 }
 
