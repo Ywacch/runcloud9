@@ -94,7 +94,8 @@ func TestDBReplicaStatefulSetSpec_readReplicaShape(t *testing.T) {
 		"pg_isready -h db -U syscrack",
 		"tr '-' '_'",
 		"pg_create_physical_replication_slot",
-		"primary_slot_name=${SLOT}",
+		"primary_conninfo = 'host=db port=5432 user=syscrack application_name=${HOSTNAME} sslmode=disable'",
+		"primary_slot_name = '${SLOT}'",
 		"pg_basebackup",
 		"-h db",
 		"-U syscrack",
@@ -104,6 +105,9 @@ func TestDBReplicaStatefulSetSpec_readReplicaShape(t *testing.T) {
 		if !strings.Contains(initCmd, want) {
 			t.Fatalf("init command missing %q: %q", want, initCmd)
 		}
+	}
+	if strings.Contains(initCmd, "application_name=${HOSTNAME} primary_slot_name") {
+		t.Fatalf("primary_slot_name must be a GUC, not a libpq conninfo option: %q", initCmd)
 	}
 	if strings.Contains(initCmd, "exec pg_basebackup") {
 		t.Fatalf("init must not exec pg_basebackup so primary_conninfo can be appended: %q", initCmd)
