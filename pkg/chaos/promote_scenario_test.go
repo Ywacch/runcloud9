@@ -96,7 +96,7 @@ func TestPromoteScenario_rejectsActivePartition(t *testing.T) {
 	client := fake.NewClientset(runningReplicaPod(ns, "postgres-replica-0"))
 	design := dbDesignWithReplicas()
 
-	stall := &PartitionScenario{Client: client, Scenario: scenarioStallReplica}
+	stall, _, _ := testStallScenario(client)
 	if err := stall.Apply(context.Background(), ns, design, "db"); err != nil {
 		t.Fatalf("stall Apply: %v", err)
 	}

@@ -67,7 +67,7 @@ func TestPostgresExporterQueriesConfigMap_content(t *testing.T) {
 	if cm.Name != postgresExporterQueriesConfigMapName {
 		t.Fatalf("configmap name: got %q want %q", cm.Name, postgresExporterQueriesConfigMapName)
 	}
-	yaml, ok := cm.Data[postgresExporterQueriesFileName]
+	primaryYAML, ok := cm.Data[postgresExporterQueriesFileName]
 	if !ok {
 		t.Fatalf("missing key %q", postgresExporterQueriesFileName)
 	}
@@ -79,14 +79,31 @@ func TestPostgresExporterQueriesConfigMap_content(t *testing.T) {
 		"sync_state",
 		"master: true",
 		"wal_lsn:",
+		"pg_current_wal_lsn()",
+	} {
+		if !strings.Contains(primaryYAML, want) {
+			t.Fatalf("primary queries yaml missing %q:\n%s", want, primaryYAML)
+		}
+	}
+	if strings.Contains(primaryYAML, "wal_replay_lsn:") {
+		t.Fatalf("primary queries yaml must not include wal_replay_lsn:\n%s", primaryYAML)
+	}
+
+	replicaYAML, ok := cm.Data[postgresExporterReplicaQueriesFileName]
+	if !ok {
+		t.Fatalf("missing key %q", postgresExporterReplicaQueriesFileName)
+	}
+	for _, want := range []string{
 		"wal_replay_lsn:",
 		"master: false",
-		"pg_current_wal_lsn()",
 		"pg_last_wal_replay_lsn()",
 	} {
-		if !strings.Contains(yaml, want) {
-			t.Fatalf("queries yaml missing %q:\n%s", want, yaml)
+		if !strings.Contains(replicaYAML, want) {
+			t.Fatalf("replica queries yaml missing %q:\n%s", want, replicaYAML)
 		}
+	}
+	if strings.Contains(replicaYAML, "pg_current_wal_lsn()") {
+		t.Fatalf("replica queries yaml must not include pg_current_wal_lsn():\n%s", replicaYAML)
 	}
 }
 
@@ -98,6 +115,17 @@ func TestPostgresExporterQueriesVolumeMount(t *testing.T) {
 	}
 	if m.SubPath != postgresExporterQueriesFileName {
 		t.Fatalf("subPath: got %q want %q", m.SubPath, postgresExporterQueriesFileName)
+	}
+}
+
+func TestPostgresExporterReplicaQueriesVolumeMount(t *testing.T) {
+	t.Parallel()
+	m := postgresExporterReplicaQueriesVolumeMount()
+	if m.MountPath != postgresExporterQueriesMountPath {
+		t.Fatalf("mount path: got %q want %q", m.MountPath, postgresExporterQueriesMountPath)
+	}
+	if m.SubPath != postgresExporterReplicaQueriesFileName {
+		t.Fatalf("subPath: got %q want %q", m.SubPath, postgresExporterReplicaQueriesFileName)
 	}
 }
 
@@ -145,15 +173,18 @@ func TestDBReplicaDeploymentSpec_mountsExporterQueriesVolume(t *testing.T) {
 	if len(exporter.Args) != 1 || exporter.Args[0] != postgresExporterExtendQueryPathFlag {
 		t.Fatalf("exporter args: %+v", exporter.Args)
 	}
-	var hasQueriesMount bool
-	for _, m := range exporter.VolumeMounts {
-		if m.Name == postgresExporterQueriesVolumeName {
-			hasQueriesMount = true
+	var queriesMount *corev1.VolumeMount
+	for i := range exporter.VolumeMounts {
+		if exporter.VolumeMounts[i].Name == postgresExporterQueriesVolumeName {
+			queriesMount = &exporter.VolumeMounts[i]
 			break
 		}
 	}
-	if !hasQueriesMount {
-		t.Fatal("postgres-exporter must mount queries.yaml")
+	if queriesMount == nil {
+		t.Fatal("postgres-exporter must mount queries volume")
+	}
+	if queriesMount.SubPath != postgresExporterReplicaQueriesFileName {
+		t.Fatalf("replica exporter subPath: got %q want %q", queriesMount.SubPath, postgresExporterReplicaQueriesFileName)
 	}
 	for _, c := range dep.Spec.Template.Spec.Containers {
 		if c.Name != "postgres-exporter" && len(c.Args) > 0 {
