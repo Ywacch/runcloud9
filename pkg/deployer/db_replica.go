@@ -8,6 +8,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -176,31 +177,35 @@ func dbReplicaPodTemplateSpec(
 	}
 
 	exporter := dbSpec.Exporter
-	containers := []corev1.Container{
-		mainContainer,
-		{
-			Name:      exporter.Name,
-			Image:     exporter.Image,
-			Ports:     []corev1.ContainerPort{{ContainerPort: exporter.Port}},
-			Resources: ExporterResources(),
-			Env:       envMapToK8s(exporter.Env),
-		},
+	exporterContainer := corev1.Container{
+		Name:      exporter.Name,
+		Image:     exporter.Image,
+		Ports:     []corev1.ContainerPort{{ContainerPort: exporter.Port}},
+		Resources: ExporterResources(),
+		Env:       envMapToK8s(exporter.Env),
 	}
 
 	sizeLimit := resource.MustParse(dbReplicaEphemeralSize)
+	volumes := []corev1.Volume{{
+		Name: dbReplicaDataVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{
+				SizeLimit: &sizeLimit,
+			},
+		},
+	}}
+	if postgresExporterQueriesEnabled(cfg) {
+		exporterContainer.Args = postgresExporterExtendQueryArgs()
+		exporterContainer.VolumeMounts = append(exporterContainer.VolumeMounts, postgresExporterQueriesVolumeMount())
+		volumes = append(volumes, postgresExporterQueriesVolume())
+	}
+
 	return corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: podAnnotations},
 		Spec: corev1.PodSpec{
 			InitContainers: []corev1.Container{initContainer},
-			Containers:     containers,
-			Volumes: []corev1.Volume{{
-				Name: dbReplicaDataVolumeName,
-				VolumeSource: corev1.VolumeSource{
-					EmptyDir: &corev1.EmptyDirVolumeSource{
-						SizeLimit: &sizeLimit,
-					},
-				},
-			}},
+			Containers:     []corev1.Container{mainContainer, exporterContainer},
+			Volumes:        volumes,
 		},
 	}
 }
@@ -284,6 +289,15 @@ func (k *K8sDeployer) createDBReadReplicaObjects(ctx context.Context, cfg Deploy
 	}
 	standbySizes := sizes[1:]
 	groups := sizeGroups(standbySizes)
+
+	if postgresExporterQueriesEnabled(cfg) {
+		queriesCM := postgresExporterQueriesConfigMap(cfg.Namespace)
+		if _, err := k.clientset.CoreV1().ConfigMaps(cfg.Namespace).Create(ctx, queriesCM, metav1.CreateOptions{}); err != nil {
+			if !apierrors.IsAlreadyExists(err) {
+				return 0, fmt.Errorf("create postgres-exporter-queries configmap: %w", err)
+			}
+		}
+	}
 
 	headless := dbReplicaHeadlessServiceSpec(cfg)
 	if _, err := k.clientset.CoreV1().Services(cfg.Namespace).Create(ctx, headless, metav1.CreateOptions{}); err != nil {

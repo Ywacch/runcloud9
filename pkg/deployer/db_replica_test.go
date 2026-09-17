@@ -68,14 +68,21 @@ func TestDBReplicaStatefulSetSpec_readReplicaShape(t *testing.T) {
 	}
 
 	podSpec := sts.Spec.Template.Spec
-	if len(podSpec.Volumes) != 1 || podSpec.Volumes[0].EmptyDir == nil {
-		t.Fatal("expected one emptyDir volume for PGDATA")
+	var pgdata *corev1.Volume
+	for i := range podSpec.Volumes {
+		if podSpec.Volumes[i].Name == dbReplicaDataVolumeName {
+			pgdata = &podSpec.Volumes[i]
+			break
+		}
 	}
-	if podSpec.Volumes[0].EmptyDir.SizeLimit == nil {
+	if pgdata == nil || pgdata.EmptyDir == nil {
+		t.Fatal("expected emptyDir volume for PGDATA")
+	}
+	if pgdata.EmptyDir.SizeLimit == nil {
 		t.Fatal("expected emptyDir sizeLimit for Autopilot")
 	}
 	wantEphemeral := resource.MustParse(dbReplicaEphemeralSize)
-	if got := *podSpec.Volumes[0].EmptyDir.SizeLimit; got.Cmp(wantEphemeral) != 0 {
+	if got := *pgdata.EmptyDir.SizeLimit; got.Cmp(wantEphemeral) != 0 {
 		t.Fatalf("emptyDir sizeLimit: got %s want %s", got.String(), wantEphemeral.String())
 	}
 

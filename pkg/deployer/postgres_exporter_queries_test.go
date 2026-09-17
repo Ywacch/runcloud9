@@ -3,6 +3,8 @@ package deployer
 import (
 	"strings"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
 )
 
 func TestPostgresExporterQueriesEnabled(t *testing.T) {
@@ -70,7 +72,17 @@ func TestPostgresExporterQueriesConfigMap_content(t *testing.T) {
 		t.Fatalf("missing key %q", postgresExporterQueriesFileName)
 	}
 	for _, want := range []string{
-		"replay_lag", "application_name", "sync_state", "replay_lag_seconds", "replay_lag_bytes", "master: true",
+		"replication_replay_lag:",
+		"replay_lag_seconds",
+		"replay_lag_bytes",
+		"application_name",
+		"sync_state",
+		"master: true",
+		"wal_lsn:",
+		"wal_replay_lsn:",
+		"master: false",
+		"pg_current_wal_lsn()",
+		"pg_last_wal_replay_lsn()",
 	} {
 		if !strings.Contains(yaml, want) {
 			t.Fatalf("queries yaml missing %q:\n%s", want, yaml)
@@ -97,7 +109,7 @@ func TestPostgresExporterExtendQueryArgs(t *testing.T) {
 	}
 }
 
-func TestDBReplicaDeploymentSpec_noExporterQueriesVolume(t *testing.T) {
+func TestDBReplicaDeploymentSpec_mountsExporterQueriesVolume(t *testing.T) {
 	t.Parallel()
 	cfg := DeployConfig{
 		Namespace: "cloud9-test-ns",
@@ -109,14 +121,43 @@ func TestDBReplicaDeploymentSpec_noExporterQueriesVolume(t *testing.T) {
 		},
 	}
 	dep := dbReplicaStatefulSetSpec(cfg, DBResources(), 1, "small")
+	var hasQueriesVolume bool
 	for _, vol := range dep.Spec.Template.Spec.Volumes {
 		if vol.Name == postgresExporterQueriesVolumeName {
-			t.Fatalf("replica pod must not mount postgres exporter queries volume")
+			hasQueriesVolume = true
+			break
 		}
 	}
+	if !hasQueriesVolume {
+		t.Fatal("replica pod must mount postgres exporter queries volume")
+	}
+	var exporter *corev1.Container
+	for i := range dep.Spec.Template.Spec.Containers {
+		c := &dep.Spec.Template.Spec.Containers[i]
+		if c.Name == "postgres-exporter" {
+			exporter = c
+			break
+		}
+	}
+	if exporter == nil {
+		t.Fatal("expected postgres-exporter sidecar on replica pod")
+	}
+	if len(exporter.Args) != 1 || exporter.Args[0] != postgresExporterExtendQueryPathFlag {
+		t.Fatalf("exporter args: %+v", exporter.Args)
+	}
+	var hasQueriesMount bool
+	for _, m := range exporter.VolumeMounts {
+		if m.Name == postgresExporterQueriesVolumeName {
+			hasQueriesMount = true
+			break
+		}
+	}
+	if !hasQueriesMount {
+		t.Fatal("postgres-exporter must mount queries.yaml")
+	}
 	for _, c := range dep.Spec.Template.Spec.Containers {
-		if len(c.Args) > 0 {
-			t.Fatalf("replica container %q must not have exporter query args: %v", c.Name, c.Args)
+		if c.Name != "postgres-exporter" && len(c.Args) > 0 {
+			t.Fatalf("non-exporter container %q must not have exporter query args: %v", c.Name, c.Args)
 		}
 	}
 }

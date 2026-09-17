@@ -27,6 +27,10 @@ const (
 	postgresExporterReplayLagBytesMetric = "replication_replay_lag_replay_lag_bytes"
 	// postgresExporterReplicaLagFallbackMetric is the built-in replica lag gauge on standby pods.
 	postgresExporterReplicaLagFallbackMetric = "pg_replication_lag_seconds"
+	// postgresExporterWalLsnBytesMetric is primary pg_current_wal_lsn() as bytes from 0/0.
+	postgresExporterWalLsnBytesMetric = "wal_lsn_bytes"
+	// postgresExporterReplayLsnBytesMetric is standby pg_last_wal_replay_lsn() as bytes from 0/0.
+	postgresExporterReplayLsnBytesMetric = "wal_replay_lsn_bytes"
 )
 
 // dbReplicaLayerSplit holds per-instance Postgres layers when read replicas are deployed.
@@ -103,6 +107,17 @@ func postgresReplicaLagFallbackByPodQuery(ns string) string {
 	return fmt.Sprintf(
 		`max by (pod) (%s{namespace=%q,pod=~%q})`,
 		postgresExporterReplicaLagFallbackMetric, ns, dbReplicaPodSelector,
+	)
+}
+
+func postgresPrimaryWalLsnBytesQuery(ns, writerPod string) string {
+	return fmt.Sprintf(`max(%s{namespace=%q,pod=%q})`, postgresExporterWalLsnBytesMetric, ns, writerPod)
+}
+
+func postgresReplicaReplayLsnBytesByPodQuery(ns string) string {
+	return fmt.Sprintf(
+		`max by (pod) (%s{namespace=%q,pod=~%q})`,
+		postgresExporterReplayLsnBytesMetric, ns, dbReplicaPodSelector,
 	)
 }
 
@@ -267,6 +282,54 @@ func (c *MetricsCollector) replicaLagBytesByPod(ctx context.Context, ns, writerP
 	}
 	for appName, lag := range c.queryMultiResult(ctx, postgresPrimaryReplayLagBytesByAppQuery(ns, writerPod), "application_name") {
 		out[appName] = int64(lag)
+	}
+	return out
+}
+
+func walLsnDiffBytes(primary, replay float64) int64 {
+	diff := int64(primary) - int64(replay)
+	if diff < 0 {
+		return 0
+	}
+	return diff
+}
+
+func lagBytesPtr(bytes int64) *int64 {
+	v := bytes
+	return &v
+}
+
+// replicaPartitionLagBytesByPod is primary WAL LSN minus frozen standby replay LSN.
+// Used only when the standby has no pg_stat_replication row (TCP stall / partition).
+func (c *MetricsCollector) replicaPartitionLagBytesByPod(ctx context.Context, ns, writerPod string, replicaPods []string, connected map[string]bool) map[string]int64 {
+	out := make(map[string]int64, len(replicaPods))
+	if c == nil || c.prometheusURL == "" || writerPod == "" || len(replicaPods) == 0 {
+		return out
+	}
+	hasDisconnected := false
+	for _, podName := range replicaPods {
+		if !connected[podName] {
+			hasDisconnected = true
+			break
+		}
+	}
+	if !hasDisconnected {
+		return out
+	}
+	primaryLSN, present, _ := c.queryScalar(ctx, postgresPrimaryWalLsnBytesQuery(ns, writerPod))
+	if !present {
+		return out
+	}
+	replayByPod := c.queryMultiResult(ctx, postgresReplicaReplayLsnBytesByPodQuery(ns), "pod")
+	for _, podName := range replicaPods {
+		if connected[podName] {
+			continue
+		}
+		replay, ok := replayByPod[podName]
+		if !ok {
+			continue
+		}
+		out[podName] = walLsnDiffBytes(primaryLSN, replay)
 	}
 	return out
 }
@@ -484,6 +547,15 @@ func (c *MetricsCollector) collectDBReplicaLayers(ctx context.Context, ns string
 		out.replicas = append(out.replicas, replicaLayer)
 	}
 	applyReplicaPromotionPreview(out.replicas, out.connectedOnPrimary, syncByPod, lagBytesByPod)
+	partitionLag := c.replicaPartitionLagBytesByPod(ctx, ns, writerPod, standbys, out.connectedOnPrimary)
+	for i := range out.replicas {
+		if out.replicas[i].ConnectedOnPrimary {
+			continue
+		}
+		if lag, ok := partitionLag[out.replicas[i].ID]; ok {
+			out.replicas[i].LagBytes = lagBytesPtr(lag)
+		}
+	}
 	c.enrichDBLayerEngineMetrics(ctx, ns, &out, clusterStorageIO)
 	c.enrichDBLayerAppSQL(ctx, ns, &out)
 	return out
