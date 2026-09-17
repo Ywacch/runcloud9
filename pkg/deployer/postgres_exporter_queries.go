@@ -6,19 +6,19 @@ import (
 )
 
 const (
-	postgresExporterQueriesConfigMapName = "postgres-exporter-queries"
-	postgresExporterQueriesVolumeName    = "postgres-exporter-queries"
-	postgresExporterQueriesFileName      = "queries.yaml"
-	postgresExporterQueriesMountPath     = "/etc/postgres-exporter/" + postgresExporterQueriesFileName
-	postgresExporterExtendQueryPathFlag  = "--extend.query-path=" + postgresExporterQueriesMountPath
+	postgresExporterQueriesConfigMapName   = "postgres-exporter-queries"
+	postgresExporterQueriesVolumeName      = "postgres-exporter-queries"
+	postgresExporterQueriesFileName        = "queries.yaml"
+	postgresExporterReplicaQueriesFileName = "replica-queries.yaml"
+	postgresExporterQueriesMountPath       = "/etc/postgres-exporter/" + postgresExporterQueriesFileName
+	postgresExporterExtendQueryPathFlag    = "--extend.query-path=" + postgresExporterQueriesMountPath
 )
 
-// postgresExporterQueriesYAML is mounted on primary and replica postgres-exporter sidecars.
+// postgresExporterPrimaryQueriesYAML is mounted on the primary postgres-exporter sidecar.
 // replication_replay_lag names are frozen (F8 / S7) — do not rename those metrics.
-// wal_lsn / wal_replay_lsn are numeric LSN-from-0/0 gauges so the collector can subtract
-// when a standby drops off pg_stat_replication (stall / partition).
+// wal_lsn is a numeric LSN-from-0/0 gauge for partition lag when a standby drops off pg_stat_replication.
 // postgres-exporter v0.16.0 names custom metrics {block}_{column} without a pg_ prefix.
-const postgresExporterQueriesYAML = `replication_replay_lag:
+const postgresExporterPrimaryQueriesYAML = `replication_replay_lag:
   master: true
   query: |
     SELECT application_name, sync_state,
@@ -44,7 +44,11 @@ wal_lsn:
     - bytes:
         usage: GAUGE
         description: "Primary WAL insert LSN as bytes from 0/0"
-wal_replay_lsn:
+`
+
+// postgresExporterReplicaQueriesYAML is mounted on replica postgres-exporter sidecars only.
+// Must not run pg_current_wal_lsn() on standbys (recovery is in progress).
+const postgresExporterReplicaQueriesYAML = `wal_replay_lsn:
   master: false
   query: |
     SELECT pg_wal_lsn_diff(COALESCE(pg_last_wal_replay_lsn(), '0/0'), '0/0')::double precision AS bytes
@@ -68,7 +72,8 @@ func postgresExporterQueriesConfigMap(namespace string) *corev1.ConfigMap {
 			Namespace: namespace,
 		},
 		Data: map[string]string{
-			postgresExporterQueriesFileName: postgresExporterQueriesYAML,
+			postgresExporterQueriesFileName:        postgresExporterPrimaryQueriesYAML,
+			postgresExporterReplicaQueriesFileName: postgresExporterReplicaQueriesYAML,
 		},
 	}
 }
@@ -87,10 +92,18 @@ func postgresExporterQueriesVolume() corev1.Volume {
 }
 
 func postgresExporterQueriesVolumeMount() corev1.VolumeMount {
+	return postgresExporterQueriesVolumeMountFor(postgresExporterQueriesFileName)
+}
+
+func postgresExporterReplicaQueriesVolumeMount() corev1.VolumeMount {
+	return postgresExporterQueriesVolumeMountFor(postgresExporterReplicaQueriesFileName)
+}
+
+func postgresExporterQueriesVolumeMountFor(subPath string) corev1.VolumeMount {
 	return corev1.VolumeMount{
 		Name:      postgresExporterQueriesVolumeName,
 		MountPath: postgresExporterQueriesMountPath,
-		SubPath:   postgresExporterQueriesFileName,
+		SubPath:   subPath,
 		ReadOnly:  true,
 	}
 }

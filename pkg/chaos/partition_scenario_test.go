@@ -9,6 +9,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/deployer"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -46,11 +47,26 @@ func runningReplicaPod(ns, name string) *corev1.Pod {
 	}
 }
 
+func testStallScenario(client kubernetes.Interface) (*PartitionScenario, *[]time.Duration, *[]string) {
+	slept := []time.Duration{}
+	dropped := []string{}
+	scenario := &PartitionScenario{
+		Client:   client,
+		Scenario: scenarioStallReplica,
+		Sleep:    func(d time.Duration) { slept = append(slept, d) },
+		DropReplication: func(_ context.Context, _ kubernetes.Interface, _, applicationName string) error {
+			dropped = append(dropped, applicationName)
+			return nil
+		},
+	}
+	return scenario, &slept, &dropped
+}
+
 func TestPartitionScenario_ApplyAndRevert(t *testing.T) {
 	ns := "cloud9-partition"
 	client := fake.NewClientset(runningReplicaPod(ns, "postgres-replica-0"))
 	design := dbDesignWithReplicas()
-	scenario := &PartitionScenario{Client: client, Scenario: scenarioStallReplica}
+	scenario, slept, dropped := testStallScenario(client)
 
 	if err := scenario.Apply(context.Background(), ns, design, "db"); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -61,6 +77,12 @@ func TestPartitionScenario_ApplyAndRevert(t *testing.T) {
 	}
 	if policy.Labels[ChaosLabelScenario] != scenarioStallReplica {
 		t.Fatalf("scenario label: %q", policy.Labels[ChaosLabelScenario])
+	}
+	if len(*slept) != 1 || (*slept)[0] != stallReplicaEnforceDelay {
+		t.Fatalf("sleep: got %v want [%v]", *slept, stallReplicaEnforceDelay)
+	}
+	if len(*dropped) != 1 || (*dropped)[0] != "postgres-replica-0" {
+		t.Fatalf("dropped: %v", *dropped)
 	}
 
 	if err := scenario.Revert(context.Background(), ns, design, "db"); err != nil {
@@ -115,7 +137,7 @@ func TestPartitionScenario_secondPartitionRejected(t *testing.T) {
 	client := fake.NewClientset(runningReplicaPod(ns, "postgres-replica-0"))
 	design := dbDesignWithReplicas()
 
-	stall := &PartitionScenario{Client: client, Scenario: scenarioStallReplica}
+	stall, _, _ := testStallScenario(client)
 	split := &PartitionScenario{Client: client, Scenario: scenarioSplitPrimaryReplica}
 
 	if err := stall.Apply(context.Background(), ns, design, "db"); err != nil {
@@ -203,6 +225,57 @@ func TestActivePartitionScenarios(t *testing.T) {
 	}
 	if len(active) != 1 || active[0] != scenarioSplitPrimaryReplica {
 		t.Fatalf("active: %v", active)
+	}
+}
+
+func TestPartitionScenario_stallDoubleApplyStillDrops(t *testing.T) {
+	ns := "cloud9-stall-double"
+	client := fake.NewClientset(runningReplicaPod(ns, "postgres-replica-0"))
+	design := dbDesignWithReplicas()
+	scenario, slept, dropped := testStallScenario(client)
+
+	if err := scenario.Apply(context.Background(), ns, design, "db"); err != nil {
+		t.Fatalf("first Apply: %v", err)
+	}
+	if err := scenario.Apply(context.Background(), ns, design, "db"); err != nil {
+		t.Fatalf("second Apply: %v", err)
+	}
+	if len(*slept) != 2 {
+		t.Fatalf("sleep calls: got %d want 2 (%v)", len(*slept), *slept)
+	}
+	for i, d := range *slept {
+		if d != stallReplicaEnforceDelay {
+			t.Fatalf("sleep[%d]: got %v want %v", i, d, stallReplicaEnforceDelay)
+		}
+	}
+	if len(*dropped) != 2 || (*dropped)[0] != "postgres-replica-0" || (*dropped)[1] != "postgres-replica-0" {
+		t.Fatalf("dropped: %v", *dropped)
+	}
+}
+
+func TestPartitionScenario_splitDoesNotDropReplication(t *testing.T) {
+	ns := "cloud9-split-no-drop"
+	client := fake.NewClientset(runningReplicaPod(ns, "postgres-replica-0"))
+	design := dbDesignWithReplicas()
+	var slept time.Duration
+	var dropped []string
+	scenario := &PartitionScenario{
+		Client:   client,
+		Scenario: scenarioSplitPrimaryReplica,
+		Sleep:    func(d time.Duration) { slept = d },
+		DropReplication: func(_ context.Context, _ kubernetes.Interface, _, applicationName string) error {
+			dropped = append(dropped, applicationName)
+			return nil
+		},
+	}
+	if err := scenario.Apply(context.Background(), ns, design, "db"); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if slept != 0 {
+		t.Fatalf("sleep: got %v want 0", slept)
+	}
+	if len(dropped) != 0 {
+		t.Fatalf("dropped: %v", dropped)
 	}
 }
 

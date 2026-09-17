@@ -28,6 +28,10 @@ const (
 type PartitionScenario struct {
 	Client   kubernetes.Interface
 	Scenario string
+	// DropReplication terminates the primary walsender for stall_replica. Nil uses live primary admin.
+	DropReplication dropReplicationFunc
+	// Sleep waits before cutting replication after the NP (tests inject a no-op).
+	Sleep func(time.Duration)
 }
 
 // Apply creates the partition NetworkPolicy when the namespace slot is free.
@@ -52,13 +56,17 @@ func (s *PartitionScenario) Apply(ctx context.Context, namespace string, design 
 	}
 
 	_, err = s.Client.NetworkingV1().NetworkPolicies(namespace).Create(ctx, policy, metav1.CreateOptions{})
-	if apierrors.IsAlreadyExists(err) {
-		return nil
-	}
-	if err != nil {
+	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("chaos: create partition policy: %w", err)
 	}
-	slog.Info("chaos partition applied", "namespace", namespace, "scenario", s.Scenario, "target", targetComponent)
+	if err == nil {
+		slog.Info("chaos partition applied", "namespace", namespace, "scenario", s.Scenario, "target", targetComponent)
+	}
+	if s.Scenario == scenarioStallReplica && in.Exclude.PodName != "" {
+		if err := s.cutStalledReplicaReplication(ctx, namespace, in.Exclude.PodName); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
