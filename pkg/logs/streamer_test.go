@@ -144,7 +144,6 @@ func TestParseLine_setsPod(t *testing.T) {
 		{name: "plaintext", line: "LOG: ready", component: "db", pod: "postgres-0"},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := parseLine(tc.line, tc.component, tc.pod)
@@ -153,6 +152,87 @@ func TestParseLine_setsPod(t *testing.T) {
 			}
 			if got.Component != tc.component {
 				t.Fatalf("Component = %q want %q", got.Component, tc.component)
+			}
+		})
+	}
+}
+
+func TestPodLogStreamKey(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		stream podLogStream
+		want   string
+	}{
+		{
+			name:   "primary postgres",
+			stream: podLogStream{component: "db", podName: "postgres-abc", containerName: "postgres"},
+			want:   "db|postgres-abc|postgres",
+		},
+		{
+			name:   "replica postgres",
+			stream: podLogStream{component: "db", podName: "postgres-replica-0", containerName: "postgres-replica"},
+			want:   "db|postgres-replica-0|postgres-replica",
+		},
+		{
+			name:   "cache redis",
+			stream: podLogStream{component: "cache", podName: "redis-1", containerName: "redis"},
+			want:   "cache|redis-1|redis",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tc.stream.key(); got != tc.want {
+				t.Fatalf("key() = %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStreamSetTryAdd(t *testing.T) {
+	t.Parallel()
+	set := newStreamSet()
+	primary := podLogStream{component: "db", podName: "postgres-0", containerName: "postgres"}
+	replica := podLogStream{component: "db", podName: "postgres-replica-0", containerName: "postgres-replica"}
+
+	if !set.tryAdd(primary) {
+		t.Fatal("first add should succeed")
+	}
+	if set.tryAdd(primary) {
+		t.Fatal("duplicate add should fail")
+	}
+	if !set.tryAdd(replica) {
+		t.Fatal("different stream should succeed")
+	}
+}
+
+func TestConnectTailLines(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		needTail bool
+		wantNil  bool
+		want     int64
+	}{
+		{name: "first open", needTail: true, want: logTailLines},
+		{name: "reconnect", needTail: false, wantNil: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := connectTailLines(tc.needTail)
+			if tc.wantNil {
+				if got != nil {
+					t.Fatalf("got %v want nil", *got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("got nil want tail lines")
+			}
+			if *got != tc.want {
+				t.Fatalf("got %d want %d", *got, tc.want)
 			}
 		})
 	}
