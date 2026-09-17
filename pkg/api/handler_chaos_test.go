@@ -534,6 +534,7 @@ func TestHandleChaosList_activePartition(t *testing.T) {
 			Scenario        string `json:"scenario"`
 			TargetComponent string `json:"targetComponent"`
 			ExpiresAt       string `json:"expiresAt"`
+			TargetPod       string `json:"targetPod"`
 		} `json:"partitions"`
 	}
 	if err := json.Unmarshal(listRec.Body.Bytes(), &listResp); err != nil {
@@ -547,5 +548,133 @@ func TestHandleChaosList_activePartition(t *testing.T) {
 	}
 	if listResp.Partitions[0].ExpiresAt == "" {
 		t.Fatal("expected expiresAt on active partition")
+	}
+	if listResp.Partitions[0].TargetPod != "postgres-replica-0" {
+		t.Fatalf("targetPod: %+v", listResp.Partitions[0])
+	}
+}
+
+func TestHandleChaos_stallTargetPod(t *testing.T) {
+	t.Parallel()
+	ns := "ns-stall-pod"
+	client := fake.NewClientset(
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "postgres-replica-0",
+				Namespace: ns,
+				Labels:    map[string]string{"app": "postgres-replica"},
+			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "postgres-replica-1",
+				Namespace: ns,
+				Labels:    map[string]string{"app": "postgres-replica"},
+			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		},
+	)
+	st := &fakeDeploymentStore{
+		byNS: map[string]store.DeploymentRow{
+			ns: {
+				Namespace: ns,
+				Status:    "running",
+				Design:    chaosDBDesign(),
+			},
+		},
+	}
+	h := NewHandler(nil, st, nil, nil, nil, nil, client, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := `{"scenario":"stall_replica","targetComponent":"db","targetPod":"postgres-replica-1"}`
+	req := httptest.NewRequest(http.MethodPost, "/deployments/"+ns+"/chaos", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var applied struct {
+		TargetPod string `json:"targetPod"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &applied); err != nil {
+		t.Fatalf("decode apply: %v", err)
+	}
+	if applied.TargetPod != "postgres-replica-1" {
+		t.Fatalf("applied targetPod: %+v", applied)
+	}
+}
+
+func TestHandleChaos_stallUnknownTargetPod(t *testing.T) {
+	t.Parallel()
+	ns := "ns-stall-unknown"
+	client := fake.NewClientset(
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "postgres-replica-0",
+				Namespace: ns,
+				Labels:    map[string]string{"app": "postgres-replica"},
+			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		},
+	)
+	st := &fakeDeploymentStore{
+		byNS: map[string]store.DeploymentRow{
+			ns: {
+				Namespace: ns,
+				Status:    "running",
+				Design:    chaosDBDesign(),
+			},
+		},
+	}
+	h := NewHandler(nil, st, nil, nil, nil, nil, client, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := `{"scenario":"stall_replica","targetComponent":"db","targetPod":"postgres-replica-9"}`
+	req := httptest.NewRequest(http.MethodPost, "/deployments/"+ns+"/chaos", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleChaos_targetPodRejectedForSplit(t *testing.T) {
+	t.Parallel()
+	ns := "ns-split-pod"
+	client := fake.NewClientset(
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "postgres-replica-0",
+				Namespace: ns,
+				Labels:    map[string]string{"app": "postgres-replica"},
+			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		},
+	)
+	st := &fakeDeploymentStore{
+		byNS: map[string]store.DeploymentRow{
+			ns: {
+				Namespace: ns,
+				Status:    "running",
+				Design:    chaosDBDesign(),
+			},
+		},
+	}
+	h := NewHandler(nil, st, nil, nil, nil, nil, client, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := `{"scenario":"split_primary_replica","targetComponent":"db","targetPod":"postgres-replica-0"}`
+	req := httptest.NewRequest(http.MethodPost, "/deployments/"+ns+"/chaos", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }

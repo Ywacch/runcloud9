@@ -20,12 +20,26 @@ import (
 type chaosRequest struct {
 	Scenario        string `json:"scenario"`
 	TargetComponent string `json:"targetComponent"`
+	TargetPod       string `json:"targetPod"`
 }
 
 type chaosPartitionResponse struct {
 	Scenario        string `json:"scenario"`
 	TargetComponent string `json:"targetComponent"`
 	ExpiresAt       string `json:"expiresAt,omitempty"`
+	TargetPod       string `json:"targetPod,omitempty"`
+}
+
+func chaosPartitionItem(part chaos.ActivePartition) chaosPartitionResponse {
+	item := chaosPartitionResponse{
+		Scenario:        part.Scenario,
+		TargetComponent: part.TargetComponent,
+		TargetPod:       part.ReplicaPod,
+	}
+	if !part.ExpiresAt.IsZero() {
+		item.ExpiresAt = part.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+	return item
 }
 
 func (h *Handler) requireChaosDeployment(w http.ResponseWriter, r *http.Request, namespace string) *store.DeploymentRow {
@@ -87,6 +101,11 @@ func (h *Handler) handleChaosApply(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "cannot target loadgen")
 		return
 	}
+	req.TargetPod = strings.TrimSpace(req.TargetPod)
+	if req.TargetPod != "" && req.Scenario != "stall_replica" {
+		writeError(w, http.StatusBadRequest, "targetPod is only valid for stall_replica")
+		return
+	}
 
 	design, err := deployer.DesignFromMap(row.Design)
 	if err != nil || design == nil {
@@ -104,10 +123,17 @@ func (h *Handler) handleChaosApply(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if part, ok := scenario.(*chaos.PartitionScenario); ok {
+		part.TargetPod = req.TargetPod
+	}
 
 	if err := scenario.Apply(r.Context(), namespace, *design, req.TargetComponent); err != nil {
 		if errors.Is(err, chaos.ErrPartitionAlreadyActive) {
 			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		if errors.Is(err, chaos.ErrInvalidStallTarget) {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -131,6 +157,9 @@ func (h *Handler) handleChaosApply(w http.ResponseWriter, r *http.Request) {
 		detail := map[string]string{
 			"scenario":        req.Scenario,
 			"targetComponent": req.TargetComponent,
+		}
+		if part, ok := scenario.(*chaos.PartitionScenario); ok && part.TargetPod != "" {
+			detail["targetPod"] = part.TargetPod
 		}
 		if ps, ok := scenario.(*chaos.PromoteScenario); ok {
 			promotedPod = ps.Result.PromotedPod
@@ -157,13 +186,17 @@ func (h *Handler) handleChaosApply(w http.ResponseWriter, r *http.Request) {
 		h.followOrRecloneThenMaybeSync(namespace, promotedPod, dbCfg)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	applied := map[string]any{
 		"status":          "applied",
 		"scenario":        req.Scenario,
 		"targetComponent": req.TargetComponent,
-	})
+	}
+	if part, ok := scenario.(*chaos.PartitionScenario); ok && part.TargetPod != "" {
+		applied["targetPod"] = part.TargetPod
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(applied)
 }
 
 // handleChaosHeal reverts active partitions on a running deployment.
@@ -189,14 +222,7 @@ func (h *Handler) handleChaosHeal(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]chaosPartitionResponse, 0, len(healed))
 	for _, part := range healed {
-		item := chaosPartitionResponse{
-			Scenario:        part.Scenario,
-			TargetComponent: part.TargetComponent,
-		}
-		if !part.ExpiresAt.IsZero() {
-			item.ExpiresAt = part.ExpiresAt.UTC().Format(time.RFC3339)
-		}
-		resp = append(resp, item)
+		resp = append(resp, chaosPartitionItem(part))
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -226,14 +252,7 @@ func (h *Handler) handleChaosList(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]chaosPartitionResponse, 0, len(active))
 	for _, part := range active {
-		item := chaosPartitionResponse{
-			Scenario:        part.Scenario,
-			TargetComponent: part.TargetComponent,
-		}
-		if !part.ExpiresAt.IsZero() {
-			item.ExpiresAt = part.ExpiresAt.UTC().Format(time.RFC3339)
-		}
-		resp = append(resp, item)
+		resp = append(resp, chaosPartitionItem(part))
 	}
 
 	w.Header().Set("Content-Type", "application/json")
