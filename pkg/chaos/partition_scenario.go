@@ -24,17 +24,18 @@ const (
 	postgresPrimaryAppLabel     = "postgres"
 )
 
-// PartitionScenario applies a reversible ingress partition via NetworkPolicy.
+// PartitionScenario applies a reversible partition. stall_replica blackholes replica
+// primary_conninfo; split_* scenarios still use an ingress NetworkPolicy.
 type PartitionScenario struct {
 	Client   kubernetes.Interface
 	Scenario string
+	// SetReplicaPrimaryHost rewrites overlay primary_conninfo and reloads. Nil uses live pod exec.
+	SetReplicaPrimaryHost setReplicaPrimaryHostFunc
 	// DropReplication terminates the primary walsender for stall_replica. Nil uses live primary admin.
 	DropReplication dropReplicationFunc
-	// Sleep waits before cutting replication after the NP (tests inject a no-op).
-	Sleep func(time.Duration)
 }
 
-// Apply creates the partition NetworkPolicy when the namespace slot is free.
+// Apply records partition state when the namespace slot is free.
 func (s *PartitionScenario) Apply(ctx context.Context, namespace string, design deployer.DeploymentDesign, targetComponent string) error {
 	if s == nil || s.Client == nil {
 		return fmt.Errorf("chaos: kubernetes client is required")
@@ -44,6 +45,13 @@ func (s *PartitionScenario) Apply(ctx context.Context, namespace string, design 
 	}
 	if err := ensurePartitionSlot(ctx, s.Client, namespace, s.Scenario); err != nil {
 		return err
+	}
+	if s.Scenario == scenarioStallReplica {
+		if err := s.applyStallReplica(ctx, namespace, design, targetComponent); err != nil {
+			return err
+		}
+		slog.Info("chaos partition applied", "namespace", namespace, "scenario", s.Scenario, "target", targetComponent)
+		return nil
 	}
 
 	in, err := s.buildInput(ctx, namespace, targetComponent, design, time.Now().Add(DefaultPartitionTTL))
@@ -62,21 +70,23 @@ func (s *PartitionScenario) Apply(ctx context.Context, namespace string, design 
 	if err == nil {
 		slog.Info("chaos partition applied", "namespace", namespace, "scenario", s.Scenario, "target", targetComponent)
 	}
-	if s.Scenario == scenarioStallReplica && in.Exclude.PodName != "" {
-		if err := s.cutStalledReplicaReplication(ctx, namespace, in.Exclude.PodName); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
-// Revert deletes the partition NetworkPolicy for this scenario.
+// Revert restores stall conninfo or deletes the partition NetworkPolicy.
 func (s *PartitionScenario) Revert(ctx context.Context, namespace string, _ deployer.DeploymentDesign, _ string) error {
 	if s == nil || s.Client == nil {
 		return fmt.Errorf("chaos: kubernetes client is required")
 	}
 	if s.Scenario == "" {
 		return fmt.Errorf("chaos: partition scenario is required")
+	}
+	if s.Scenario == scenarioStallReplica {
+		if err := s.revertStallReplica(ctx, namespace); err != nil {
+			return err
+		}
+		slog.Info("chaos partition reverted", "namespace", namespace, "scenario", s.Scenario)
+		return nil
 	}
 
 	err := s.Client.NetworkingV1().NetworkPolicies(namespace).Delete(ctx, partitionPolicyName(s.Scenario), metav1.DeleteOptions{})

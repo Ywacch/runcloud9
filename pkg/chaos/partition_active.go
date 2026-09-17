@@ -9,13 +9,13 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// ErrPartitionAlreadyActive is returned when a namespace already has a chaos partition policy.
+// ErrPartitionAlreadyActive is returned when a namespace already has a chaos partition.
 var ErrPartitionAlreadyActive = errors.New("chaos: partition already active")
 
 // DefaultPartitionTTL is how long a partition policy stays before C4 auto-revert removes it.
 const DefaultPartitionTTL = 15 * time.Minute
 
-// ActivePartitionScenarios lists scenario ids with an active partition policy in the namespace.
+// ActivePartitionScenarios lists scenario ids with an active partition in the namespace.
 func ActivePartitionScenarios(ctx context.Context, client kubernetes.Interface, namespace string) ([]string, error) {
 	partitions, err := ListActivePartitions(ctx, client, namespace)
 	if err != nil {

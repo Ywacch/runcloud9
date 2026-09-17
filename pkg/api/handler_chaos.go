@@ -166,7 +166,7 @@ func (h *Handler) handleChaosApply(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleChaosHeal removes active partition policies from a running deployment.
+// handleChaosHeal reverts active partitions on a running deployment.
 func (h *Handler) handleChaosHeal(w http.ResponseWriter, r *http.Request) {
 	namespace := r.PathValue("id")
 	if namespace == "" {
@@ -207,7 +207,7 @@ func (h *Handler) handleChaosHeal(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleChaosList returns active partition policies for page reload.
+// handleChaosList returns active partitions for page reload.
 func (h *Handler) handleChaosList(w http.ResponseWriter, r *http.Request) {
 	namespace := r.PathValue("id")
 	if namespace == "" {
