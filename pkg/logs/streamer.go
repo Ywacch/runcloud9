@@ -100,9 +100,15 @@ var componentLogTargets = map[string][]componentLogTarget{
 // Discovery is repeated while ctx is active so pods that appear after connect
 // (Postgres replicas finishing init, late Redis) still get a follower.
 func StreamLogs(ctx context.Context, conn *websocket.Conn, clientset kubernetes.Interface, namespace string) {
+	// Hijacked request contexts often stay live after the client closes the
+	// socket. Cancel when the reader or writer exits so pod log follows stop.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	writeCh := make(chan LogLine, logBufferSize)
 
 	go func() {
+		defer cancel()
 		ticker := time.NewTicker(wskeepalive.PingPeriod)
 		defer ticker.Stop()
 		defer conn.Close()
@@ -129,6 +135,7 @@ func StreamLogs(ctx context.Context, conn *websocket.Conn, clientset kubernetes.
 	}()
 
 	go func() {
+		defer cancel()
 		conn.SetReadLimit(512 * 1024)
 		_ = conn.SetReadDeadline(time.Now().Add(wskeepalive.PongWait))
 		conn.SetPongHandler(func(string) error {
