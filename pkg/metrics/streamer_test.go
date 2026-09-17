@@ -16,45 +16,25 @@ import (
 func TestStreamMetrics_AsyncCollect_SteadyCadence(t *testing.T) {
 	t.Parallel()
 
-	delays := []time.Duration{0, time.Second, 3 * time.Second}
-	for _, delay := range delays {
-		delay := delay
-		name := delay.String()
-		if delay == 0 {
-			name = "instant"
+	var seq atomic.Int64
+	latest := func() *DeploymentMetrics {
+		n := seq.Add(1)
+		return &DeploymentMetrics{
+			Timestamp: time.Unix(n, 0),
+			Namespace: "test-ns",
 		}
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
+	}
 
-			var seq atomic.Int64
-			collect := func(ctx context.Context) (*DeploymentMetrics, error) {
-				if delay > 0 {
-					select {
-					case <-ctx.Done():
-						return nil, ctx.Err()
-					case <-time.After(delay):
-					}
-				}
-				n := seq.Add(1)
-				return &DeploymentMetrics{
-					Timestamp: time.Unix(n, 0),
-					Namespace: "test-ns",
-				}, nil
-			}
+	intervals := runStreamMetricsWS(t, latest, streamConfig{
+		emitInterval: 200 * time.Millisecond,
+	}, 10, 0)
 
-			intervals := runStreamMetricsWS(t, collect, streamConfig{
-				emitInterval: 200 * time.Millisecond,
-				collectPause: 200 * time.Millisecond,
-			}, 10, delay)
-
-			const want = 200 * time.Millisecond
-			const tolerance = 500 * time.Millisecond
-			for i, d := range intervals {
-				if d < want-tolerance || d > want+tolerance {
-					t.Fatalf("frame %d interval %v outside [%v, %v]", i, d, want-tolerance, want+tolerance)
-				}
-			}
-		})
+	const want = 200 * time.Millisecond
+	const tolerance = 500 * time.Millisecond
+	for i, d := range intervals {
+		if d < want-tolerance || d > want+tolerance {
+			t.Fatalf("frame %d interval %v outside [%v, %v]", i, d, want-tolerance, want+tolerance)
+		}
 	}
 }
 
@@ -62,50 +42,39 @@ func TestStreamMetrics_SlowCollect_NoBackpressureDrop(t *testing.T) {
 	t.Parallel()
 
 	var seq atomic.Int64
-	collect := func(ctx context.Context) (*DeploymentMetrics, error) {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(400 * time.Millisecond):
-		}
+	latest := func() *DeploymentMetrics {
 		n := seq.Add(1)
 		return &DeploymentMetrics{
 			Timestamp: time.Unix(n, 0),
 			Namespace: "test-ns",
-		}, nil
+		}
 	}
 
-	received := runStreamMetricsWSCount(t, collect, streamConfig{
+	received := runStreamMetricsWSCount(t, latest, streamConfig{
 		emitInterval: 100 * time.Millisecond,
-		collectPause: 100 * time.Millisecond,
 	}, 2*time.Second)
 
 	if received < 5 {
-		t.Fatalf("expected steady frames during slow collect, got %d", received)
+		t.Fatalf("expected steady frames while latest is always available, got %d", received)
 	}
 }
 
-func TestStreamMetrics_ClientClose_CancelsCollect(t *testing.T) {
+func TestStreamMetrics_ClientClose_DoesNotRequireCollect(t *testing.T) {
 	t.Parallel()
 
 	parent := context.Background()
-	collectStarted := make(chan struct{})
-	collectDone := make(chan struct{})
-	collect := func(ctx context.Context) (*DeploymentMetrics, error) {
-		select {
-		case <-collectStarted:
-		default:
-			close(collectStarted)
+	streamDone := make(chan struct{})
+	latest := func() *DeploymentMetrics {
+		return &DeploymentMetrics{
+			Timestamp: time.Now(),
+			Namespace: "test-ns",
 		}
-		<-ctx.Done()
-		return nil, ctx.Err()
 	}
 
 	srv, url := newMetricsWSServer(t, func(conn *websocket.Conn) {
-		defer close(collectDone)
-		streamMetrics(parent, conn, "test-ns", collect, streamConfig{
+		defer close(streamDone)
+		streamMetrics(parent, conn, "test-ns", latest, streamConfig{
 			emitInterval: 50 * time.Millisecond,
-			collectPause: 50 * time.Millisecond,
 		})
 	})
 	defer srv.Close()
@@ -115,34 +84,79 @@ func TestStreamMetrics_ClientClose_CancelsCollect(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 
-	select {
-	case <-collectStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("collect did not start")
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _, err = conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("expected initial frame: %v", err)
 	}
 
 	_ = conn.Close()
 
 	select {
-	case <-collectDone:
+	case <-streamDone:
 	case <-time.After(3 * time.Second):
-		t.Fatal("streamMetrics kept collecting after the client closed the socket")
+		t.Fatal("streamMetrics did not exit after client closed the socket")
+	}
+}
+
+func TestStreamMetrics_EmitsPendingBeforeCollect(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	latest := func() *DeploymentMetrics {
+		if calls.Add(1) == 1 {
+			return &DeploymentMetrics{
+				Timestamp:      time.Now(),
+				Namespace:      "test-ns",
+				Components:     map[string]ComponentMetrics{},
+				CollectPending: true,
+			}
+		}
+		return &DeploymentMetrics{
+			Timestamp:  time.Now(),
+			Namespace:  "test-ns",
+			Components: map[string]ComponentMetrics{},
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	srv, url := newMetricsWSServer(t, func(conn *websocket.Conn) {
+		streamMetrics(ctx, conn, "test-ns", latest, streamConfig{
+			emitInterval: 100 * time.Millisecond,
+		})
+	})
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var dm DeploymentMetrics
+	if err := json.Unmarshal(data, &dm); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !dm.CollectPending {
+		t.Fatalf("expected first frame collectPending true, got %+v", dm)
 	}
 }
 
 func TestStreamMetrics_ContextCancel_CleanShutdown(t *testing.T) {
 	t.Parallel()
 
-	collect := func(ctx context.Context) (*DeploymentMetrics, error) {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(50 * time.Millisecond):
-		}
+	latest := func() *DeploymentMetrics {
 		return &DeploymentMetrics{
 			Timestamp: time.Now(),
 			Namespace: "test-ns",
-		}, nil
+		}
 	}
 
 	done := make(chan struct{})
@@ -153,9 +167,8 @@ func TestStreamMetrics_ContextCancel_CleanShutdown(t *testing.T) {
 		defer cancel()
 
 		srv, url := newMetricsWSServer(t, func(conn *websocket.Conn) {
-			streamMetrics(ctx, conn, "test-ns", collect, streamConfig{
+			streamMetrics(ctx, conn, "test-ns", latest, streamConfig{
 				emitInterval: 100 * time.Millisecond,
-				collectPause: 100 * time.Millisecond,
 			})
 		})
 		defer srv.Close()
@@ -185,18 +198,18 @@ func TestStreamMetrics_ContextCancel_CleanShutdown(t *testing.T) {
 	}
 }
 
-func runStreamMetricsWS(t *testing.T, collect snapshotCollector, cfg streamConfig, frames int, collectWarmup time.Duration) []time.Duration {
+func runStreamMetricsWS(t *testing.T, latest func() *DeploymentMetrics, cfg streamConfig, frames int, warmup time.Duration) []time.Duration {
 	t.Helper()
 
 	var intervals []time.Duration
 	var last time.Time
 
-	timeout := time.Duration(frames)*cfg.emitInterval + collectWarmup + 2*time.Second
+	timeout := time.Duration(frames)*cfg.emitInterval + warmup + 2*time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	srv, url := newMetricsWSServer(t, func(conn *websocket.Conn) {
-		streamMetrics(ctx, conn, "test-ns", collect, cfg)
+		streamMetrics(ctx, conn, "test-ns", latest, cfg)
 	})
 	defer srv.Close()
 
@@ -226,14 +239,14 @@ func runStreamMetricsWS(t *testing.T, collect snapshotCollector, cfg streamConfi
 	return intervals
 }
 
-func runStreamMetricsWSCount(t *testing.T, collect snapshotCollector, cfg streamConfig, duration time.Duration) int {
+func runStreamMetricsWSCount(t *testing.T, latest func() *DeploymentMetrics, cfg streamConfig, duration time.Duration) int {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
 	defer cancel()
 
 	srv, url := newMetricsWSServer(t, func(conn *websocket.Conn) {
-		streamMetrics(ctx, conn, "test-ns", collect, cfg)
+		streamMetrics(ctx, conn, "test-ns", latest, cfg)
 	})
 	defer srv.Close()
 
@@ -253,14 +266,9 @@ func runStreamMetricsWSCount(t *testing.T, collect snapshotCollector, cfg stream
 		if remaining <= 0 {
 			return count
 		}
-		// Use the full remaining window per read so slow CI still receives the first
-		// frame (~400ms collect). Gorilla forbids ReadMessage after a failed read, so
-		// never retry on timeout with a short deadline.
 		_ = conn.SetReadDeadline(time.Now().Add(remaining))
 		_, data, err := conn.ReadMessage()
 		if err != nil {
-			// Gorilla marks the conn failed on most read errors (including i/o timeout
-			// when Temporary() is false). Never call ReadMessage again after an error.
 			return count
 		}
 		var dm DeploymentMetrics

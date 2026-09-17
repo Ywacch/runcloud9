@@ -72,3 +72,62 @@ func TestPodLoadGenerator_StartStopGetStats(t *testing.T) {
 }
 
 func intPtr(n int) *int { return &n }
+
+func TestPodLoadGenerator_GetStats_StaleOnError(t *testing.T) {
+	var running bool
+	var failNext bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/metrics":
+			if failNext {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(LoadStats{
+				Active:      running,
+				TargetRPS:   100,
+				CurrentRPS:  100,
+				StatusCodes: map[string]int{"200": 10},
+			})
+		case r.Method == http.MethodDelete && r.URL.Path == "/stop":
+			running = false
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	podEndpointOverride = func(string) string { return srv.URL }
+	t.Cleanup(func() { podEndpointOverride = nil })
+
+	p := &PodLoadGenerator{httpClient: srv.Client()}
+	running = true
+
+	stats := p.GetStats("ns-stale")
+	if !stats.Active || stats.TargetRPS != 100 {
+		t.Fatalf("first GetStats: %+v", stats)
+	}
+	if stats.Stale {
+		t.Fatal("expected stale false on success")
+	}
+
+	failNext = true
+	stale := p.GetStats("ns-stale")
+	if !stale.Active || stale.TargetRPS != 100 {
+		t.Fatalf("stale GetStats should keep last active/target: %+v", stale)
+	}
+	if !stale.Stale {
+		t.Fatal("expected stale true after error")
+	}
+
+	running = false
+	if err := p.Stop(context.Background(), "ns-stale"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	inactive := p.GetStats("ns-stale")
+	if inactive.Active || inactive.Stale {
+		t.Fatalf("after Stop, error path should be inactive not stale-last: %+v", inactive)
+	}
+}

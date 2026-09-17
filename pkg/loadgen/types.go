@@ -87,6 +87,8 @@ type LoadStats struct {
 	ScheduleID        string         `json:"scheduleId,omitempty"`
 	CurrentPhase      string         `json:"currentPhase,omitempty"`
 	PhaseIndex        int            `json:"phaseIndex,omitempty"`
+	// Stale is true when the last-known stats are returned after a fetch error.
+	Stale bool `json:"stale,omitempty"`
 }
 
 // DefaultProfile returns default RPS only. Template and distribution come from the handler or JSON.

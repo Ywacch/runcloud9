@@ -39,30 +39,33 @@ Fallback chain per component:
 // The API is simple: GET /api/v1/query?query=<promql>&time=<unix>
 // Response is JSON that we unmarshal into a typed struct.
 type MetricsCollector struct {
-	prometheusURL   string
-	httpClient      *http.Client
-	scrapeClient    *http.Client // short timeout for in-cluster LB / RabbitMQ HTTP scrapes
-	loadgen         loadgen.LoadGenerator
-	clientset       kubernetes.Interface // optional: LB metadata from ConfigMap
-	metricsClient   PodMetricsProvider   // optional: metrics.k8s.io for container CPU/mem on Autopilot
-	debugMetrics    bool
-	eventBus        *EventBus
-	thresholds      *ThresholdDetector
-	cascade         *CascadeDetector
-	invariants      *InvariantChecker
-	observer        consistencyObserver
-	consistency     *ConsistencyDetector
-	historyMu       sync.RWMutex
-	history         map[string]*RingBuffer // namespace → last 300 snapshots
-	clientLatencyMu sync.Mutex
-	clientLatency   map[string]*clientLatencyAccumulator
-	mqRateMu        sync.Mutex
-	mqRates         map[string]rabbitCounterSnapshot
-	podHealthMu     sync.Mutex
-	podHealth       map[string]*podHealthTracker
-	sessionAcc      *sessionAccumulator
-	pgHoldMu        sync.Mutex
-	pgHold          map[string]bool
+	prometheusURL        string
+	httpClient           *http.Client
+	scrapeClient         *http.Client // short timeout for in-cluster LB / RabbitMQ HTTP scrapes
+	loadgen              loadgen.LoadGenerator
+	clientset            kubernetes.Interface // optional: LB metadata from ConfigMap
+	metricsClient        PodMetricsProvider   // optional: metrics.k8s.io for container CPU/mem on Autopilot
+	debugMetrics         bool
+	eventBus             *EventBus
+	thresholds           *ThresholdDetector
+	cascade              *CascadeDetector
+	invariants           *InvariantChecker
+	observer             consistencyObserver
+	consistency          *ConsistencyDetector
+	historyMu            sync.RWMutex
+	history              map[string]*RingBuffer // namespace → last 300 snapshots
+	clientLatencyMu      sync.Mutex
+	clientLatency        map[string]*clientLatencyAccumulator
+	mqRateMu             sync.Mutex
+	mqRates              map[string]rabbitCounterSnapshot
+	podHealthMu          sync.Mutex
+	podHealth            map[string]*podHealthTracker
+	sessionAcc           *sessionAccumulator
+	pgHoldMu             sync.Mutex
+	pgHold               map[string]bool
+	publishersMu         sync.Mutex
+	publishers           map[string]*sessionPublisher
+	publisherCollectHook func(ctx context.Context, namespace, template string, topo TopologyFlags) (*DeploymentMetrics, error) // tests only
 }
 
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
@@ -132,6 +135,7 @@ func (c *MetricsCollector) Cleanup(namespace string) {
 	if c.observer != nil {
 		c.observer.Stop(namespace)
 	}
+	c.StopPublisher(namespace)
 	c.historyMu.Lock()
 	if c.history != nil {
 		delete(c.history, namespace)

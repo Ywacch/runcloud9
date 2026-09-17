@@ -156,6 +156,10 @@ func (h *Handler) runBackgroundProvision(
 	if h.scheduler != nil {
 		h.scheduler.Schedule(namespace, runExpiresAt)
 	}
+	if h.metricsCollector != nil {
+		topo := MetricsTopologyFromDeploymentDesign(&design, design.Template)
+		h.metricsCollector.EnsurePublisher(namespace, design.Template, topo)
+	}
 	h.provisionETA.Observe(time.Since(start))
 	h.wakeDeployQueue()
 }
