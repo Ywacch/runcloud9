@@ -49,8 +49,11 @@ func TestApplyReplicaPromotionPreview_disconnectedAsync(t *testing.T) {
 		{ID: "postgres-replica-0", Role: dbLayerRoleReplica},
 	}
 	applyReplicaPromotionPreview(layers, map[string]bool{"postgres-replica-0": false}, nil, nil)
-	if layers[0].SyncState != "async" {
-		t.Fatalf("expected async, got %q", layers[0].SyncState)
+	if layers[0].SyncState != "" {
+		t.Fatalf("expected empty sync state, got %q", layers[0].SyncState)
+	}
+	if layers[0].LagBytes != nil {
+		t.Fatal("disconnected replica should not have lag bytes")
 	}
 	if layers[0].PromotionCandidate {
 		t.Fatal("disconnected replica should not be candidate")

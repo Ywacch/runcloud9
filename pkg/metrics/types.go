@@ -283,6 +283,8 @@ type ComponentLayerMetrics struct {
 	LagBytes *int64 `json:"lagBytes,omitempty"`
 	// PromotionCandidate marks the standby PickCandidate(mostCurrent) would promote.
 	PromotionCandidate bool `json:"promotionCandidate,omitempty"`
+	// ConnectedOnPrimary is true when pg_stat_replication has a row for this standby on the writer.
+	ConnectedOnPrimary bool `json:"connectedOnPrimary"` // no omitempty: false must serialize
 	// RequestRate is per-layer PostgreSQL transaction throughput (xact/s) when known.
 	RequestRate float64 `json:"requestRate,omitempty"`
 	// TotalRequests is the session sum of pg_stat_database xact commit+rollback for this layer.
