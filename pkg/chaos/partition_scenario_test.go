@@ -47,39 +47,49 @@ func runningReplicaPod(ns, name string) *corev1.Pod {
 	}
 }
 
-func testStallScenario(client kubernetes.Interface) (*PartitionScenario, *[]time.Duration, *[]string) {
-	slept := []time.Duration{}
+func testStallScenario(client kubernetes.Interface) (*PartitionScenario, *[]string, *[]string) {
+	hosts := []string{}
 	dropped := []string{}
 	scenario := &PartitionScenario{
 		Client:   client,
 		Scenario: scenarioStallReplica,
-		Sleep:    func(d time.Duration) { slept = append(slept, d) },
+		SetReplicaPrimaryHost: func(_ context.Context, _ kubernetes.Interface, _, _, host string) error {
+			hosts = append(hosts, host)
+			return nil
+		},
 		DropReplication: func(_ context.Context, _ kubernetes.Interface, _, applicationName string) error {
 			dropped = append(dropped, applicationName)
 			return nil
 		},
 	}
-	return scenario, &slept, &dropped
+	return scenario, &hosts, &dropped
 }
 
 func TestPartitionScenario_ApplyAndRevert(t *testing.T) {
 	ns := "cloud9-partition"
 	client := fake.NewClientset(runningReplicaPod(ns, "postgres-replica-0"))
 	design := dbDesignWithReplicas()
-	scenario, slept, dropped := testStallScenario(client)
+	scenario, hosts, dropped := testStallScenario(client)
 
 	if err := scenario.Apply(context.Background(), ns, design, "db"); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	policy, err := client.NetworkingV1().NetworkPolicies(ns).Get(context.Background(), "c9-chaos-stall-replica", metav1.GetOptions{})
+	_, err := client.NetworkingV1().NetworkPolicies(ns).Get(context.Background(), "c9-chaos-stall-replica", metav1.GetOptions{})
+	if err == nil {
+		t.Fatal("stall_replica must not create a NetworkPolicy")
+	}
+	cm, err := client.CoreV1().ConfigMaps(ns).Get(context.Background(), "c9-chaos-stall-replica", metav1.GetOptions{})
 	if err != nil {
-		t.Fatalf("Get policy: %v", err)
+		t.Fatalf("Get stall state: %v", err)
 	}
-	if policy.Labels[ChaosLabelScenario] != scenarioStallReplica {
-		t.Fatalf("scenario label: %q", policy.Labels[ChaosLabelScenario])
+	if cm.Labels[ChaosLabelScenario] != scenarioStallReplica {
+		t.Fatalf("scenario label: %q", cm.Labels[ChaosLabelScenario])
 	}
-	if len(*slept) != 1 || (*slept)[0] != stallReplicaEnforceDelay {
-		t.Fatalf("sleep: got %v want [%v]", *slept, stallReplicaEnforceDelay)
+	if cm.Annotations[ChaosAnnotationReplicaPod] != "postgres-replica-0" {
+		t.Fatalf("replica pod: %q", cm.Annotations[ChaosAnnotationReplicaPod])
+	}
+	if len(*hosts) != 1 || (*hosts)[0] != stallBlackholeHost {
+		t.Fatalf("hosts: %v", *hosts)
 	}
 	if len(*dropped) != 1 || (*dropped)[0] != "postgres-replica-0" {
 		t.Fatalf("dropped: %v", *dropped)
@@ -88,9 +98,12 @@ func TestPartitionScenario_ApplyAndRevert(t *testing.T) {
 	if err := scenario.Revert(context.Background(), ns, design, "db"); err != nil {
 		t.Fatalf("Revert: %v", err)
 	}
-	_, err = client.NetworkingV1().NetworkPolicies(ns).Get(context.Background(), "c9-chaos-stall-replica", metav1.GetOptions{})
+	if len(*hosts) != 2 || (*hosts)[1] != stallPrimaryHost {
+		t.Fatalf("restore host: %v", *hosts)
+	}
+	_, err = client.CoreV1().ConfigMaps(ns).Get(context.Background(), "c9-chaos-stall-replica", metav1.GetOptions{})
 	if err == nil {
-		t.Fatal("expected policy deleted")
+		t.Fatal("expected stall state deleted")
 	}
 }
 
@@ -232,7 +245,7 @@ func TestPartitionScenario_stallDoubleApplyStillDrops(t *testing.T) {
 	ns := "cloud9-stall-double"
 	client := fake.NewClientset(runningReplicaPod(ns, "postgres-replica-0"))
 	design := dbDesignWithReplicas()
-	scenario, slept, dropped := testStallScenario(client)
+	scenario, hosts, dropped := testStallScenario(client)
 
 	if err := scenario.Apply(context.Background(), ns, design, "db"); err != nil {
 		t.Fatalf("first Apply: %v", err)
@@ -240,13 +253,8 @@ func TestPartitionScenario_stallDoubleApplyStillDrops(t *testing.T) {
 	if err := scenario.Apply(context.Background(), ns, design, "db"); err != nil {
 		t.Fatalf("second Apply: %v", err)
 	}
-	if len(*slept) != 2 {
-		t.Fatalf("sleep calls: got %d want 2 (%v)", len(*slept), *slept)
-	}
-	for i, d := range *slept {
-		if d != stallReplicaEnforceDelay {
-			t.Fatalf("sleep[%d]: got %v want %v", i, d, stallReplicaEnforceDelay)
-		}
+	if len(*hosts) != 2 || (*hosts)[0] != stallBlackholeHost || (*hosts)[1] != stallBlackholeHost {
+		t.Fatalf("hosts: %v", *hosts)
 	}
 	if len(*dropped) != 2 || (*dropped)[0] != "postgres-replica-0" || (*dropped)[1] != "postgres-replica-0" {
 		t.Fatalf("dropped: %v", *dropped)
@@ -257,12 +265,15 @@ func TestPartitionScenario_splitDoesNotDropReplication(t *testing.T) {
 	ns := "cloud9-split-no-drop"
 	client := fake.NewClientset(runningReplicaPod(ns, "postgres-replica-0"))
 	design := dbDesignWithReplicas()
-	var slept time.Duration
+	var hosts []string
 	var dropped []string
 	scenario := &PartitionScenario{
 		Client:   client,
 		Scenario: scenarioSplitPrimaryReplica,
-		Sleep:    func(d time.Duration) { slept = d },
+		SetReplicaPrimaryHost: func(_ context.Context, _ kubernetes.Interface, _, _, host string) error {
+			hosts = append(hosts, host)
+			return nil
+		},
 		DropReplication: func(_ context.Context, _ kubernetes.Interface, _, applicationName string) error {
 			dropped = append(dropped, applicationName)
 			return nil
@@ -271,8 +282,8 @@ func TestPartitionScenario_splitDoesNotDropReplication(t *testing.T) {
 	if err := scenario.Apply(context.Background(), ns, design, "db"); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if slept != 0 {
-		t.Fatalf("sleep: got %v want 0", slept)
+	if len(hosts) != 0 {
+		t.Fatalf("hosts: %v", hosts)
 	}
 	if len(dropped) != 0 {
 		t.Fatalf("dropped: %v", dropped)

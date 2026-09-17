@@ -17,7 +17,9 @@ const (
 	ChaosLabelTarget = "cloud9.chaos/target"
 	// ChaosAnnotationExpiresAt holds the RFC3339 time when the partition should auto-revert.
 	ChaosAnnotationExpiresAt = "cloud9.chaos/expires-at"
-	chaosPolicyNamePrefix    = "c9-chaos-"
+	// ChaosAnnotationReplicaPod names the stalled postgres replica for Heal restore.
+	ChaosAnnotationReplicaPod = "cloud9.chaos/replica-pod"
+	chaosPolicyNamePrefix     = "c9-chaos-"
 
 	postgresPartitionPort = int32(5432)
 	redisPartitionPort    = int32(6379)

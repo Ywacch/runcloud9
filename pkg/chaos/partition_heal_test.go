@@ -26,20 +26,9 @@ func TestHealPartitions_andExpireDue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build expired policy: %v", err)
 	}
-	activePolicy, err := BuildPartitionNetworkPolicy(PartitionPolicyInput{
-		Namespace:       ns,
-		Scenario:        scenarioStallReplica,
-		TargetComponent: "db",
-		ExpiresAt:       active,
-		DestAppLabel:    postgresPrimaryAppLabel,
-		Port:            postgresPartitionPort,
-		Exclude:         PartitionPeerExclusion{PodName: "postgres-replica-0"},
-	})
-	if err != nil {
-		t.Fatalf("build active policy: %v", err)
-	}
+	activeStall := buildStallStateConfigMap(ns, "postgres-replica-0", "db", active)
 
-	client := fake.NewClientset(expiredPolicy, activePolicy)
+	client := fake.NewClientset(expiredPolicy, activeStall)
 
 	due, err := ExpireDuePartitions(context.Background(), client, ns, time.Now())
 	if err != nil {
@@ -55,6 +44,9 @@ func TestHealPartitions_andExpireDue(t *testing.T) {
 	}
 	if len(remaining) != 1 || remaining[0].Scenario != scenarioStallReplica {
 		t.Fatalf("remaining: %+v", remaining)
+	}
+	if remaining[0].ReplicaPod != "postgres-replica-0" {
+		t.Fatalf("remaining replica: %+v", remaining[0])
 	}
 
 	healed, err := HealPartitions(context.Background(), client, ns)
@@ -119,5 +111,37 @@ func TestListActivePartitions_readsLabels(t *testing.T) {
 	_, err = client.NetworkingV1().NetworkPolicies(ns).Get(context.Background(), policy.Name, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("policy should exist: %v", err)
+	}
+}
+
+func TestListActivePartitions_stallConfigMap(t *testing.T) {
+	ns := "cloud9-list-stall"
+	expires := time.Date(2026, 9, 17, 21, 0, 0, 0, time.UTC)
+	cm := buildStallStateConfigMap(ns, "postgres-replica-0", "db", expires)
+	client := fake.NewClientset(cm)
+
+	active, err := ListActivePartitions(context.Background(), client, ns)
+	if err != nil {
+		t.Fatalf("ListActivePartitions: %v", err)
+	}
+	if len(active) != 1 {
+		t.Fatalf("active: %+v", active)
+	}
+	if active[0].Scenario != scenarioStallReplica || active[0].TargetComponent != "db" {
+		t.Fatalf("partition: %+v", active[0])
+	}
+	if active[0].ReplicaPod != "postgres-replica-0" {
+		t.Fatalf("replica: %+v", active[0])
+	}
+	if !active[0].ExpiresAt.Equal(expires) {
+		t.Fatalf("expires: got %v want %v", active[0].ExpiresAt, expires)
+	}
+
+	policies, err := client.NetworkingV1().NetworkPolicies(ns).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("list policies: %v", err)
+	}
+	if len(policies.Items) != 0 {
+		t.Fatalf("stall must not require a NetworkPolicy, got %+v", policies.Items)
 	}
 }
