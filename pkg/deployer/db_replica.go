@@ -32,7 +32,7 @@ const (
 	dbReplicaEphemeralSize  = "500Mi"
 	// --checkpoint=fast: after pg_restore the primary is dirty; default spread
 	// checkpoint left replica inits on "waiting for checkpoint" until the 5m deploy deadline.
-	dbReplicaBasebackupScript = `until pg_isready -h db -U syscrack; do sleep 1; done; SLOT=$(printf '%s' "$HOSTNAME" | tr '-' '_'); psql -h db -U syscrack -d syscrack -v ON_ERROR_STOP=1 -tAc "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name = '${SLOT}' AND NOT active"; psql -h db -U syscrack -d syscrack -v ON_ERROR_STOP=1 -tAc "SELECT pg_create_physical_replication_slot('${SLOT}') WHERE NOT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = '${SLOT}')"; pg_basebackup -h db -U syscrack -D $PGDATA -Fp -Xs -R -P --checkpoint=fast; echo "primary_conninfo = 'host=db port=5432 user=syscrack application_name=${HOSTNAME} primary_slot_name=${SLOT} sslmode=disable'" >> "$PGDATA/postgresql.auto.conf"`
+	dbReplicaBasebackupScript = `until pg_isready -h db -U syscrack; do sleep 1; done; SLOT=$(printf '%s' "$HOSTNAME" | tr '-' '_'); psql -h db -U syscrack -d syscrack -v ON_ERROR_STOP=1 -tAc "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name = '${SLOT}' AND NOT active"; psql -h db -U syscrack -d syscrack -v ON_ERROR_STOP=1 -tAc "SELECT pg_create_physical_replication_slot('${SLOT}') WHERE NOT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = '${SLOT}')"; pg_basebackup -h db -U syscrack -D $PGDATA -Fp -Xs -R -P --checkpoint=fast; echo "primary_conninfo = 'host=db port=5432 user=syscrack application_name=${HOSTNAME} sslmode=disable'" >> "$PGDATA/postgresql.auto.conf"; echo "primary_slot_name = '${SLOT}'" >> "$PGDATA/postgresql.auto.conf"`
 )
 
 // postgresPrimaryCommand returns the postgres primary container command.
@@ -148,8 +148,10 @@ func dbReplicaPodTemplateSpec(
 	initContainer := corev1.Container{
 		Name:  "basebackup",
 		Image: dbSpec.Image,
-		// Append primary_conninfo after pg_basebackup -R so application_name matches pod HOSTNAME
-		// (used by primary-side replay_lag metrics and db instance layers).
+		// After pg_basebackup -R, overwrite primary_conninfo so application_name is the pod
+		// hostname (primary-side replay_lag labels). primary_slot_name is a GUC, not a libpq
+		// option; stuffing it into primary_conninfo makes walreceiver fail with
+		// invalid connection option "primary_slot_name".
 		Command: []string{"sh", "-c", dbReplicaBasebackupScript},
 		Env: []corev1.EnvVar{
 			{Name: "PGDATA", Value: "/var/lib/postgresql/data"},
