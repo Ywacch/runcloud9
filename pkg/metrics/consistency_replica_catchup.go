@@ -5,9 +5,11 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/ywacch/cloud9/pkg/rules"
 )
 
-const ruleReplicaCannotCatchUp = "replica_cannot_catch_up"
+const ruleReplicaCannotCatchUp = rules.IDReplicaCannotCatchUp
 
 // NoteDBReplicaPrimaryConnectivity records replica pod readiness and whether each ready
 // standby appears in pg_stat_replication on the primary. Call once per Collect tick before Eval.

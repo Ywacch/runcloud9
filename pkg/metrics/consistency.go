@@ -6,13 +6,14 @@ import (
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/probes"
+	"github.com/ywacch/cloud9/pkg/rules"
 	"github.com/ywacch/cloud9/pkg/templates"
 )
 
 const (
-	ruleRYWViolation       = "ryw_violation"
-	ruleMonotonicViolation = "monotonic_violation"
-	ruleCacheDbStale       = "cache_db_stale"
+	ruleRYWViolation       = rules.IDRYWViolation
+	ruleMonotonicViolation = rules.IDMonotonicViolation
+	ruleCacheDbStale       = rules.IDCacheDBStale
 
 	guaranteeHeldByNone = "none"
 	guaranteeHeldByApp  = "app"

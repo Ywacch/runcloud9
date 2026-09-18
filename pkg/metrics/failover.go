@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/ywacch/cloud9/pkg/rules"
 )
 
 // RuleFailoverWriteLoss is emitted when promotion promotes a standby behind the fenced primary.
-const RuleFailoverWriteLoss = "failover_write_loss"
+const RuleFailoverWriteLoss = rules.IDFailoverWriteLoss
 
 // FailoverWriteLossEvent builds a failover data-loss invariant when walBytesLost is positive.
 // Zero loss returns nil so the UI renders from chaos_inject detail instead.

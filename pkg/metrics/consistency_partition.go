@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ywacch/cloud9/pkg/rules"
 	"github.com/ywacch/cloud9/pkg/templates"
 )
 
 const (
-	rulePartitionStaleReads = "partition_stale_reads"
-	rulePartitionWriteStall = "partition_write_stall"
+	rulePartitionStaleReads = rules.IDPartitionStaleReads
+	rulePartitionWriteStall = rules.IDPartitionWriteStall
 
 	partitionLagThresholdSec         = 0.05
 	partitionDBErrorRateThreshold    = 0.01
