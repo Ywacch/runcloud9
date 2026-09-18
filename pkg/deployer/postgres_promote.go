@@ -24,10 +24,23 @@ const (
 FROM pg_stat_replication
 WHERE state = 'streaming'`
 
+	sqlSelectReplicationState = `SELECT application_name, state, sync_state,
+       COALESCE(EXTRACT(EPOCH FROM replay_lag), 0)::text,
+       COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn), 0)::text
+FROM pg_stat_replication`
+
+	sqlSelectCurrentWalLSNBytes = `SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0')::text`
+
 	sqlPromoteStandby     = "SELECT pg_promote(wait => true, wait_seconds => 30)"
 	sqlCheckNotInRecovery = "SELECT pg_is_in_recovery()"
 	sqlCurrentWalLSN      = "SELECT pg_current_wal_lsn()::text"
 	postgresRecoveryFalse = "f"
+)
+
+// Exported for pkg/metrics writer replication SQL fallback (same strings as unexported consts above).
+const (
+	ReplicationStateSQL   = sqlSelectReplicationState
+	CurrentWalLSNBytesSQL = sqlSelectCurrentWalLSNBytes
 )
 
 // PromotionResult records what a promotion chose and destroyed.
