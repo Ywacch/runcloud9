@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ywacch/cloud9/pkg/rules"
 	"github.com/ywacch/cloud9/pkg/templates"
 )
 
@@ -66,11 +67,11 @@ func NewCascadeDetector() *CascadeDetector {
 }
 
 const (
-	cascadeRuleCacheDB        = "cascade_cache_db"
-	cascadeRuleQueueWorker    = "cascade_queue_worker"
-	cascadeRuleDBPoolErrors   = "cascade_dbpool_errors"
-	cascadeRuleLatencyMiss    = "cascade_latency_miss"
-	cascadeRuleMQBackpressure = "cascade_mq_backpressure"
+	cascadeRuleCacheDB        = rules.IDCascadeCacheDB
+	cascadeRuleQueueWorker    = rules.IDCascadeQueueWorker
+	cascadeRuleDBPoolErrors   = rules.IDCascadeDBPoolErrors
+	cascadeRuleLatencyMiss    = rules.IDCascadeLatencyMiss
+	cascadeRuleMQBackpressure = rules.IDCascadeMQBackpressure
 )
 
 // Eval compares the latest snapshot to the previous tick and returns new cascade events.

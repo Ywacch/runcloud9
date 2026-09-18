@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ywacch/cloud9/pkg/rules"
 	"github.com/ywacch/cloud9/pkg/templates"
 )
 
@@ -23,12 +24,12 @@ func NewThresholdDetector() *ThresholdDetector {
 }
 
 const (
-	ruleCacheHitLow    = "cache_hit_low"
-	ruleErrorRate      = "error_rate"
-	ruleDBLatency      = "db_latency"
-	ruleQueueDepth     = "queue_depth"
-	ruleDBConnPressure = "db_conn_pressure"
-	ruleMQBackpressure = "mq_backpressure"
+	ruleCacheHitLow    = rules.IDCacheHitLow
+	ruleErrorRate      = rules.IDErrorRate
+	ruleDBLatency      = rules.IDDBLatency
+	ruleQueueDepth     = rules.IDQueueDepth
+	ruleDBConnPressure = rules.IDDBConnPressure
+	ruleMQBackpressure = rules.IDMQBackpressure
 )
 
 // Eval returns threshold events for conditions that just crossed into a bad state.
