@@ -48,6 +48,31 @@ func DefaultLBSpec() LBSpec {
 	}
 }
 
+// lbNginxContainer builds the demo LB nginx container. Command/Args skip
+// nginx:alpine docker-entrypoint.d scripts that call apk at start and can hang
+// when outbound network to Alpine package repos is slow or blocked.
+func lbNginxContainer(spec LBSpec) corev1.Container {
+	return corev1.Container{
+		Name:      "nginx",
+		Image:     spec.Image,
+		Command:   []string{"nginx"},
+		Args:      []string{"-g", "daemon off;"},
+		Ports:     []corev1.ContainerPort{{ContainerPort: spec.Port}},
+		Resources: spec.Resources,
+		ReadinessProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(spec.Port)},
+			},
+			InitialDelaySeconds: 2,
+			PeriodSeconds:       2,
+			FailureThreshold:    3,
+		},
+		VolumeMounts: []corev1.VolumeMount{{
+			Name: "config", MountPath: "/etc/nginx/nginx.conf", SubPath: "nginx.conf",
+		}},
+	}
+}
+
 // LBEndpointSnapshot records a ready app-server pod IP at deploy time for metrics and debugging.
 type LBEndpointSnapshot struct {
 	PodName string `json:"podName"`
@@ -215,23 +240,7 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{{
-						Name:      "nginx",
-						Image:     spec.Image,
-						Ports:     []corev1.ContainerPort{{ContainerPort: spec.Port}},
-						Resources: spec.Resources,
-						ReadinessProbe: &corev1.Probe{
-							ProbeHandler: corev1.ProbeHandler{
-								TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(spec.Port)},
-							},
-							InitialDelaySeconds: 2,
-							PeriodSeconds:       2,
-							FailureThreshold:    3,
-						},
-						VolumeMounts: []corev1.VolumeMount{{
-							Name: "config", MountPath: "/etc/nginx/nginx.conf", SubPath: "nginx.conf",
-						}},
-					}},
+					Containers: []corev1.Container{lbNginxContainer(spec)},
 					Volumes: []corev1.Volume{{
 						Name: "config",
 						VolumeSource: corev1.VolumeSource{
