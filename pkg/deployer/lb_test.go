@@ -12,6 +12,20 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
+func TestLbNginxContainer_skipsDockerEntrypoint(t *testing.T) {
+	t.Parallel()
+	c := lbNginxContainer(DefaultLBSpec())
+	if len(c.Command) != 1 || c.Command[0] != "nginx" {
+		t.Fatalf("Command = %v want [nginx]", c.Command)
+	}
+	if len(c.Args) != 2 || c.Args[0] != "-g" || c.Args[1] != "daemon off;" {
+		t.Fatalf("Args = %v want [-g daemon off;]", c.Args)
+	}
+	if c.Image != imageNginx {
+		t.Fatalf("Image = %q want %q", c.Image, imageNginx)
+	}
+}
+
 func TestDefaultLBSpec(t *testing.T) {
 	t.Parallel()
 	spec := DefaultLBSpec()
