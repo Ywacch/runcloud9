@@ -3,11 +3,14 @@ package metrics
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ywacch/cloud9/pkg/deployer"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,6 +19,17 @@ import (
 
 func float64Ptr(v float64) *float64 {
 	return &v
+}
+
+type fakeReplicationAdmin struct {
+	exec func(ctx context.Context, query string) (string, error)
+}
+
+func (f *fakeReplicationAdmin) ExecSQL(ctx context.Context, query string) (string, error) {
+	if f == nil || f.exec == nil {
+		return "", errors.New("fakeReplicationAdmin: no exec hook")
+	}
+	return f.exec(ctx, query)
 }
 
 func fakeDBReplicaStatefulSet(ns string, desired int32) *appsv1.StatefulSet {
@@ -533,6 +547,10 @@ func TestCollectDBReplicaLayers_lagFromPrimaryCustomQuery(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
+	c.replicationAdminForTest = func(namespace, pod, container string) deployer.PostgresAdmin {
+		t.Fatal("replication admin should not run when Prom replication_replay_lag is populated")
+		return nil
+	}
 	split := c.collectDBReplicaLayers(context.Background(), ns, nil)
 	if replicaLagSeconds(split.replicas[0]) != 1.25 {
 		t.Fatalf("lag: got %v, want 1.25", replicaLagSeconds(split.replicas[0]))
@@ -1353,6 +1371,307 @@ func TestCollectDBReplicaLayers_prePromoteThreeLayers(t *testing.T) {
 	}
 	if cm.Layers[0].ID != dbLayerIDPostgresPrimary {
 		t.Fatalf("primary layer: %+v", cm.Layers[0])
+	}
+}
+
+func splitToReplicationSnapshot(split dbReplicaLayerSplit, leftover string) primaryReplicationSnapshot {
+	snap := newPrimaryReplicationSnapshot(split.replicaPods)
+	for podName, connected := range split.connectedOnPrimary {
+		snap.connected[podName] = connected
+	}
+	if layer, ok := findReplicaLayer(split.replicas, leftover); ok {
+		if layer.ReplicationLagSeconds != nil {
+			snap.lagSeconds[leftover] = *layer.ReplicationLagSeconds
+		}
+		if layer.LagBytes != nil {
+			snap.lagBytes[leftover] = *layer.LagBytes
+		}
+		if layer.SyncState != "" {
+			snap.syncState[leftover] = layer.SyncState
+		}
+	}
+	return snap
+}
+
+func findReplicaLayer(layers []ComponentLayerMetrics, id string) (ComponentLayerMetrics, bool) {
+	for _, layer := range layers {
+		if layer.ID == id {
+			return layer, true
+		}
+	}
+	return ComponentLayerMetrics{}, false
+}
+
+func TestParseReplicationStateRows(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		stdout string
+		want   map[string]struct {
+			connected bool
+			sync      string
+			seconds   float64
+			bytes     int64
+		}
+		missing []string
+	}{
+		{
+			name:   "streaming quorum row",
+			stdout: "postgres-replica-0|streaming|quorum|0|0\n",
+			want: map[string]struct {
+				connected bool
+				sync      string
+				seconds   float64
+				bytes     int64
+			}{
+				"postgres-replica-0": {connected: true, sync: "quorum", seconds: 0, bytes: 0},
+			},
+		},
+		{
+			name:   "skip malformed line",
+			stdout: "bad|row\npostgres-replica-1|streaming|async|1.5|42\n",
+			want: map[string]struct {
+				connected bool
+				sync      string
+				seconds   float64
+				bytes     int64
+			}{
+				"postgres-replica-1": {connected: true, sync: "async", seconds: 1.5, bytes: 42},
+			},
+			missing: []string{"bad"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			connected, lagSeconds, lagBytes, syncState := parseReplicationStateRows(tt.stdout)
+			for app, want := range tt.want {
+				if !connected[app] || !want.connected {
+					t.Fatalf("connected[%s]: got %v want %v", app, connected[app], want.connected)
+				}
+				if syncState[app] != want.sync {
+					t.Fatalf("syncState[%s]: got %q want %q", app, syncState[app], want.sync)
+				}
+				if lagSeconds[app] != want.seconds {
+					t.Fatalf("lagSeconds[%s]: got %v want %v", app, lagSeconds[app], want.seconds)
+				}
+				if lagBytes[app] != want.bytes {
+					t.Fatalf("lagBytes[%s]: got %v want %v", app, lagBytes[app], want.bytes)
+				}
+			}
+			for _, app := range tt.missing {
+				if connected[app] {
+					t.Fatalf("unexpected connected[%s]", app)
+				}
+			}
+		})
+	}
+}
+
+func TestCollectDBReplicaLayers_sqlFallbackOnPromotedWriter(t *testing.T) {
+	t.Parallel()
+
+	const (
+		ns        = "cloud9-sql-fallback-ns"
+		writerPod = "postgres-replica-1"
+		leftover  = "postgres-replica-0"
+	)
+	desired := int32(2)
+	zero := int32(0)
+
+	clientset := fake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "postgres", Namespace: ns},
+			Spec:       appsv1.DeploymentSpec{Replicas: &zero},
+		},
+		fakeDBReplicaStatefulSet(ns, desired),
+		fakeReplicaPod(ns, writerPod),
+		fakeReplicaPod(ns, leftover),
+		fakeDBWriteEndpoints(ns, writerPod),
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(promEmptyJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
+	c.replicationAdminForTest = func(namespace, pod, container string) deployer.PostgresAdmin {
+		return &fakeReplicationAdmin{exec: func(ctx context.Context, query string) (string, error) {
+			if strings.Contains(query, "pg_stat_replication") {
+				return leftover + "|streaming|quorum|0|0", nil
+			}
+			if strings.Contains(query, "0/0") {
+				return "100", nil
+			}
+			return "", errors.New("unexpected query: " + query)
+		}}
+	}
+
+	split := c.collectDBReplicaLayers(context.Background(), ns, nil)
+	if len(split.replicas) != 1 || split.replicas[0].ID != leftover {
+		t.Fatalf("standbys: %+v", split.replicas)
+	}
+	layer := split.replicas[0]
+	if !layer.ConnectedOnPrimary {
+		t.Fatal("leftover should be connected via SQL fallback")
+	}
+	if layer.SyncState != "quorum" {
+		t.Fatalf("syncState: got %q want quorum", layer.SyncState)
+	}
+	if layer.ReplicationLagSeconds == nil || *layer.ReplicationLagSeconds != 0 {
+		t.Fatalf("lag seconds: %+v", layer.ReplicationLagSeconds)
+	}
+	if layer.LagBytes == nil || *layer.LagBytes != 0 {
+		t.Fatalf("lag bytes: %+v", layer.LagBytes)
+	}
+}
+
+func TestCollectDBReplicaLayers_sqlTimeoutUsesLastGoodCache(t *testing.T) {
+	t.Parallel()
+
+	const (
+		ns        = "cloud9-sql-timeout-ns"
+		writerPod = "postgres-replica-1"
+		leftover  = "postgres-replica-0"
+	)
+	desired := int32(2)
+	zero := int32(0)
+	slow := false
+
+	clientset := fake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "postgres", Namespace: ns},
+			Spec:       appsv1.DeploymentSpec{Replicas: &zero},
+		},
+		fakeDBReplicaStatefulSet(ns, desired),
+		fakeReplicaPod(ns, writerPod),
+		fakeReplicaPod(ns, leftover),
+		fakeDBWriteEndpoints(ns, writerPod),
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(promEmptyJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
+	c.replicationAdminForTest = func(namespace, pod, container string) deployer.PostgresAdmin {
+		return &fakeReplicationAdmin{exec: func(ctx context.Context, query string) (string, error) {
+			if slow {
+				if ctx.Err() != nil {
+					return "", ctx.Err()
+				}
+				time.Sleep(3 * time.Second)
+				return "", context.DeadlineExceeded
+			}
+			if strings.Contains(query, "pg_stat_replication") {
+				return leftover + "|streaming|quorum|0|0", nil
+			}
+			if strings.Contains(query, "0/0") {
+				return "100", nil
+			}
+			return "", errors.New("unexpected query")
+		}}
+	}
+
+	split := c.collectDBReplicaLayers(context.Background(), ns, nil)
+	if len(split.replicas) != 1 || !split.replicas[0].ConnectedOnPrimary {
+		t.Fatalf("first collect should connect leftover via SQL: %+v", split.replicas)
+	}
+
+	c.replSQLMu.Lock()
+	if c.replSQLCache == nil {
+		c.replSQLCache = make(map[string]replSQLCacheEntry)
+	}
+	c.replSQLCache[ns] = replSQLCacheEntry{
+		snap:      copyPrimaryReplicationSnapshot(splitToReplicationSnapshot(split, leftover)),
+		expiresAt: time.Now().Add(-time.Second),
+	}
+	c.replSQLMu.Unlock()
+
+	slow = true
+	split2 := c.collectDBReplicaLayers(context.Background(), ns, nil)
+	if len(split2.replicas) != 1 || !split2.replicas[0].ConnectedOnPrimary {
+		t.Fatalf("expired cache after SQL timeout should keep connected leftover: %+v", split2.replicas)
+	}
+
+	c2 := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
+	c2.replicationAdminForTest = c.replicationAdminForTest
+	slow = true
+	split3 := c2.collectDBReplicaLayers(context.Background(), ns, nil)
+	if len(split3.replicas) != 1 {
+		t.Fatalf("replicas: %+v", split3.replicas)
+	}
+	if split3.replicas[0].ConnectedOnPrimary {
+		t.Fatal("first collect with no cache and SQL error should leave leftover disconnected")
+	}
+}
+
+func TestCollectDBReplicaLayers_climbingLagWithoutReplicationRow(t *testing.T) {
+	t.Parallel()
+
+	const (
+		ns        = "cloud9-climb-no-row-ns"
+		writerPod = "postgres-replica-1"
+		leftover  = "postgres-replica-0"
+	)
+	desired := int32(2)
+	zero := int32(0)
+
+	clientset := fake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "postgres", Namespace: ns},
+			Spec:       appsv1.DeploymentSpec{Replicas: &zero},
+		},
+		fakeDBReplicaStatefulSet(ns, desired),
+		fakeReplicaPod(ns, writerPod),
+		fakeReplicaPod(ns, leftover),
+		fakeDBWriteEndpoints(ns, writerPod),
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, postgresExporterReplayLsnBytesMetric):
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				leftover: "4096",
+			}))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, clientset, nil, nil)
+	c.replicationAdminForTest = func(namespace, pod, container string) deployer.PostgresAdmin {
+		return &fakeReplicationAdmin{exec: func(ctx context.Context, query string) (string, error) {
+			if strings.Contains(query, "pg_stat_replication") {
+				return "", nil
+			}
+			if strings.Contains(query, "0/0") {
+				return "20000", nil
+			}
+			return "", errors.New("unexpected query")
+		}}
+	}
+
+	split := c.collectDBReplicaLayers(context.Background(), ns, nil)
+	if len(split.replicas) != 1 {
+		t.Fatalf("replicas: %+v", split.replicas)
+	}
+	layer := split.replicas[0]
+	if layer.ConnectedOnPrimary {
+		t.Fatal("leftover should be disconnected without pg_stat_replication row")
+	}
+	if layer.LagBytes == nil || *layer.LagBytes != 15904 {
+		t.Fatalf("climbing partition lag bytes: %+v", layer.LagBytes)
+	}
+	if layer.LagBytes != nil && *layer.LagBytes == 0 {
+		t.Fatal("partition lag should not be forced to 0 from empty replication")
 	}
 }
 
