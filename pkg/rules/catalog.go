@@ -21,6 +21,7 @@ const (
 type Rule struct {
 	ID             string
 	Family         Family
+	Kind           string   // template invariant kind; empty for static detector rules
 	Component      string   // primary canvas role; empty when cross-cutting
 	Audience       string   // "student" | "both" | "operator"
 	Summary        string   // one line, student-readable
