@@ -84,6 +84,39 @@ func TestSessionSummary_MergesPeakSteadyHistoryAnchors(t *testing.T) {
 	}
 }
 
+func TestSessionSummary_IncludesFreshnessPerComponent(t *testing.T) {
+	t.Parallel()
+	c := &MetricsCollector{}
+	dm := &DeploymentMetrics{
+		Components: map[string]ComponentMetrics{
+			"app-server": {
+				Component: "app-server",
+				CPUSource: ResourceSourceMetricsAPI,
+				MemSource: ResourceSourceMetricsAPI,
+			},
+			"mq": {
+				Component: "mq",
+				CPUSource: ResourceSourceMetricsAPI,
+				MemSource: ResourceSourceMetricsAPI,
+			},
+		},
+	}
+	summary := c.SessionSummary("ns", nil, dm)
+	fresh, ok := summary["freshness"].(map[string]map[string]SignalFreshness)
+	if !ok {
+		t.Fatalf("freshness type: %T", summary["freshness"])
+	}
+	if len(fresh) != 2 {
+		t.Fatalf("want 2 components, got %d", len(fresh))
+	}
+	if fresh["app-server"][SignalContainerCPU].Tier != FreshnessMetricsAPI {
+		t.Fatalf("app containerCpu: %+v", fresh["app-server"][SignalContainerCPU])
+	}
+	if fresh["mq"][SignalQueue].Tier != FreshnessDirect {
+		t.Fatalf("mq queue: %+v", fresh["mq"][SignalQueue])
+	}
+}
+
 func TestSessionSummary_NilCollector(t *testing.T) {
 	t.Parallel()
 	var c *MetricsCollector
@@ -98,5 +131,9 @@ func TestSessionSummary_NilCollector(t *testing.T) {
 	}
 	if _, ok := summary["peak_p99_ms"]; !ok {
 		t.Fatalf("peak fallback: %#v", summary)
+	}
+	fresh, ok := summary["freshness"].(map[string]map[string]SignalFreshness)
+	if !ok || len(fresh) != 1 {
+		t.Fatalf("freshness on nil collector: %#v", summary["freshness"])
 	}
 }
