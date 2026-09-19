@@ -191,6 +191,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /templates/{id}/loadgen", routePublic(rl, http.HandlerFunc(h.handleGetTemplateLoadgen)))
 	mux.Handle("GET /meta/resource-profiles", routePublic(rl, http.HandlerFunc(h.handleGetResourceProfiles)))
 	mux.Handle("GET /meta/topology-rules", routePublic(rl, http.HandlerFunc(h.handleGetTopologyRules)))
+	mux.Handle("GET /meta/rules", routePublic(rl, http.HandlerFunc(h.handleGetRules)))
 }
 
 // handleMetricsStream upgrades the HTTP connection to WebSocket and streams
