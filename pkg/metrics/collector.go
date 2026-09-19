@@ -207,11 +207,12 @@ func (c *MetricsCollector) DownsampledSessionHistory(namespace string) []Deploym
 	return rb.DownsampledHistory()
 }
 
-// SessionSummary merges peak, steady-state, history, events, workload anchors, and
-// trajectories into base for metrics_summary persistence. base may be nil; existing
-// keys (e.g. seeded) are preserved. Caller still sets terminated_at / duration.
+// SessionSummary merges peak, steady-state, history, events, workload anchors,
+// trajectories, and per-component freshness into base for metrics_summary persistence.
+// base may be nil; existing keys (e.g. seeded) are preserved. Caller still sets
+// terminated_at / duration.
 func (c *MetricsCollector) SessionSummary(namespace string, base map[string]any, dm *DeploymentMetrics) map[string]any {
-	summary := make(map[string]any, len(base)+8)
+	summary := make(map[string]any, len(base)+9)
 	for k, v := range base {
 		summary[k] = v
 	}
@@ -221,7 +222,7 @@ func (c *MetricsCollector) SessionSummary(namespace string, base map[string]any,
 				summary[k] = v
 			}
 		}
-		return summary
+		return appendSessionFreshness(summary, dm)
 	}
 	for k, v := range c.PeakSummaryForNamespace(namespace, dm) {
 		summary[k] = v
@@ -241,6 +242,16 @@ func (c *MetricsCollector) SessionSummary(namespace string, base map[string]any,
 	}
 	if clh := c.ClientLatencyHistoryFor(namespace); len(clh) > 0 {
 		summary["client_latency_history"] = clh
+	}
+	return appendSessionFreshness(summary, dm)
+}
+
+func appendSessionFreshness(summary map[string]any, dm *DeploymentMetrics) map[string]any {
+	if dm != nil {
+		annotateFreshness(dm)
+		if fresh := sessionFreshnessFromComponents(dm.Components); len(fresh) > 0 {
+			summary["freshness"] = fresh
+		}
 	}
 	return summary
 }

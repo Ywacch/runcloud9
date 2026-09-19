@@ -156,3 +156,22 @@ func annotateFreshness(dm *DeploymentMetrics) {
 		dm.Components[name] = cm
 	}
 }
+
+// sessionFreshnessFromComponents projects per-component freshness tags for
+// metrics_summary persistence.
+func sessionFreshnessFromComponents(components map[string]ComponentMetrics) map[string]map[string]SignalFreshness {
+	if len(components) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]SignalFreshness, len(components))
+	for name, cm := range components {
+		if len(cm.Freshness) == 0 {
+			continue
+		}
+		out[name] = cm.Freshness
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
