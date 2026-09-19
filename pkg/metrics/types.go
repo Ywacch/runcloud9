@@ -239,6 +239,9 @@ type ConsistencyStatus struct {
 	RYWViolations            int64  `json:"rywViolations"`
 	MonotonicViolations      int64  `json:"monotonicViolations"`
 	CacheDbStale             int64  `json:"cacheDbStale"`
+	PartitionStaleReads      int64  `json:"partitionStaleReads"`
+	PartitionWriteStall      int64  `json:"partitionWriteStall"`
+	ReplicaCannotCatchUp     int64  `json:"replicaCannotCatchUp"`
 	ReplicaStalenessVersions int64  `json:"replicaStalenessVersions"`
 	LastProbeError           string `json:"lastProbeError,omitempty"`
 	LastCacheKey             string `json:"lastCacheKey,omitempty"`
