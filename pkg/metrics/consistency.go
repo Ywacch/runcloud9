@@ -242,13 +242,16 @@ func (cd *ConsistencyDetector) statusFor(namespace string, result probes.ProbeRe
 	cd.mu.Unlock()
 
 	status := &ConsistencyStatus{
-		RYWViolations:       cd.violationCount(namespace, ruleRYWViolation),
-		MonotonicViolations: cd.violationCount(namespace, ruleMonotonicViolation),
-		CacheDbStale:        cd.violationCount(namespace, ruleCacheDbStale),
-		LeaderReads:         traffic.LeaderReads,
-		ReplicaReads:        traffic.ReplicaReads,
-		ReplicaStaleReads:   int64(traffic.ReplicaStaleTotal + 0.5),
-		GuaranteeHeldBy:     guaranteeHeldByFrom(traffic, topo, postgresSync),
+		RYWViolations:        cd.violationCount(namespace, ruleRYWViolation),
+		MonotonicViolations:  cd.violationCount(namespace, ruleMonotonicViolation),
+		CacheDbStale:         cd.violationCount(namespace, ruleCacheDbStale),
+		PartitionStaleReads:  cd.violationCount(namespace, rulePartitionStaleReads),
+		PartitionWriteStall:  cd.violationCount(namespace, rulePartitionWriteStall),
+		ReplicaCannotCatchUp: cd.violationCount(namespace, ruleReplicaCannotCatchUp),
+		LeaderReads:          traffic.LeaderReads,
+		ReplicaReads:         traffic.ReplicaReads,
+		ReplicaStaleReads:    int64(traffic.ReplicaStaleTotal + 0.5),
+		GuaranteeHeldBy:      guaranteeHeldByFrom(traffic, topo, postgresSync),
 	}
 	if sample, has := cd.sampleFor(namespace); has {
 		status.LastCacheKey = sample.Key
