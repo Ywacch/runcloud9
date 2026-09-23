@@ -15,11 +15,11 @@ func CatalogFor(tmpl *templates.TemplateSpec) []Rule {
 			summary = inv.ID
 		}
 		out = append(out, Rule{
-			ID:       inv.ID,
-			Family:   FamilyInvariant,
-			Kind:     inv.Kind,
-			Audience: "both",
-			Summary:  summary,
+			ID:         inv.ID,
+			Family:     FamilyInvariant,
+			Kind:       inv.Kind,
+			Visibility: VisibilityAll,
+			Summary:    summary,
 		})
 	}
 	return out

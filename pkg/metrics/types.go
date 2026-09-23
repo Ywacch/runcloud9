@@ -26,7 +26,7 @@ type DeploymentMetrics struct {
 
 // Event annotates the metrics timeline (loadgen, thresholds, cascades, invariants, runtime).
 // Type remains "action" | "threshold" | "cascade" | "invariant". Workload anchors (loadgen/chaos)
-// keep Type "action" and set Kind/Detail/Audience for L2 causal evidence.
+// keep Type "action" and set Kind/Detail/Visibility for L2 causal evidence.
 type Event struct {
 	Timestamp time.Time `json:"timestamp"`
 	Type      string    `json:"type"` // "action" | "threshold" | "cascade" | "invariant"
@@ -37,8 +37,9 @@ type Event struct {
 	Kind string `json:"kind,omitempty"`
 	// Detail carries structured params for workload anchors (rps, template, scenario, …).
 	Detail map[string]string `json:"detail,omitempty"`
-	// Audience selects consumers: "user" | "ai" | "both". Empty means both.
-	Audience string `json:"audience,omitempty"`
+	// Visibility selects who should see this event: "student" | "operator" | "all".
+	// Empty means all.
+	Visibility string `json:"visibility,omitempty"`
 	// RuleID is the stable detector key (e.g. "cache_hit_low", "cascade_cache_db") for UI prediction matching.
 	RuleID      string `json:"ruleId,omitempty"`
 	Title       string `json:"title"`

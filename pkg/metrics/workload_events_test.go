@@ -15,14 +15,14 @@ func TestBuildWorkloadEventsSummary_FiltersDedupCap(t *testing.T) {
 	hist := []DeploymentMetrics{
 		{Timestamp: t1, Events: []Event{
 			{Timestamp: t1, Type: "action", Source: "loadgen", Kind: "loadgen_start", Title: "start",
-				Detail: map[string]string{"rps": "100"}, Audience: "both"},
+				Detail: map[string]string{"rps": "100"}, Visibility: VisibilityAll},
 			{Timestamp: t1, Type: "threshold", RuleID: "cache_hit_low", Title: "ignore"},
 		}},
 		{Timestamp: t2, Events: []Event{
 			// Duplicate of t1 start (same kind+timestamp) should be skipped.
 			{Timestamp: t1, Type: "action", Source: "loadgen", Kind: "loadgen_start", Title: "start-dup"},
 			{Timestamp: t2, Type: "action", Source: "chaos", Kind: "chaos_inject", Component: "cache",
-				Title: "kill", Detail: map[string]string{"scenario": "pod_kill"}, Audience: "ai"},
+				Title: "kill", Detail: map[string]string{"scenario": "pod_kill"}, Visibility: VisibilityOperator},
 		}},
 		{Timestamp: t3, Events: []Event{
 			{Timestamp: t3, Type: "action", Source: "loadgen", Kind: "loadgen_stop", Title: "stop"},
@@ -55,14 +55,17 @@ func TestBuildWorkloadEventsSummary_FiltersDedupCap(t *testing.T) {
 	if !ok || detail["rps"] != "100" {
 		t.Fatalf("detail passthrough: %#v", full[0]["detail"])
 	}
-	if full[0]["audience"] != "both" {
-		t.Fatalf("audience: %v", full[0]["audience"])
+	if full[0]["visibility"] != VisibilityAll {
+		t.Fatalf("visibility: %v", full[0]["visibility"])
 	}
 	if full[1]["component"] != "cache" {
 		t.Fatalf("component: %v", full[1]["component"])
 	}
-	if full[2]["audience"] != "both" {
-		t.Fatalf("empty audience defaults to both: %v", full[2]["audience"])
+	if full[1]["visibility"] != VisibilityOperator {
+		t.Fatalf("operator visibility passthrough: %v", full[1]["visibility"])
+	}
+	if full[2]["visibility"] != VisibilityAll {
+		t.Fatalf("empty visibility defaults to all: %v", full[2]["visibility"])
 	}
 }
 

@@ -33,7 +33,7 @@ func FailoverWriteLossEvent(
 		Source:      "chaos",
 		Component:   "db",
 		RuleID:      RuleFailoverWriteLoss,
-		Audience:    "student",
+		Visibility:  VisibilityStudent,
 		Title:       "Failover write loss",
 		Description: desc,
 		Detail: map[string]string{
