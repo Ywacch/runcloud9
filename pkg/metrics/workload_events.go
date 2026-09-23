@@ -16,13 +16,13 @@ func BuildWorkloadEventsSummary(hist []DeploymentMetrics, maxEntries int) []map[
 		maxEntries = defaultWorkloadEventsMax
 	}
 	type acc struct {
-		ts        time.Time
-		kind      string
-		source    string
-		component string
-		title     string
-		detail    map[string]string
-		audience  string
+		ts         time.Time
+		kind       string
+		source     string
+		component  string
+		title      string
+		detail     map[string]string
+		visibility string
 	}
 	seen := make(map[string]struct{})
 	var out []acc
@@ -37,18 +37,15 @@ func BuildWorkloadEventsSummary(hist []DeploymentMetrics, maxEntries int) []map[
 			}
 			seen[key] = struct{}{}
 			detail := cloneStringMap(ev.Detail)
-			audience := ev.Audience
-			if audience == "" {
-				audience = "both"
-			}
+			visibility := NormalizeVisibility(ev.Visibility)
 			out = append(out, acc{
-				ts:        ev.Timestamp,
-				kind:      ev.Kind,
-				source:    ev.Source,
-				component: ev.Component,
-				title:     ev.Title,
-				detail:    detail,
-				audience:  audience,
+				ts:         ev.Timestamp,
+				kind:       ev.Kind,
+				source:     ev.Source,
+				component:  ev.Component,
+				title:      ev.Title,
+				detail:     detail,
+				visibility: visibility,
 			})
 		}
 	}
@@ -62,11 +59,11 @@ func BuildWorkloadEventsSummary(hist []DeploymentMetrics, maxEntries int) []map[
 	rows := make([]map[string]any, len(out))
 	for i, v := range out {
 		row := map[string]any{
-			"timestamp": v.ts.UTC().Format(time.RFC3339Nano),
-			"kind":      v.kind,
-			"source":    v.source,
-			"title":     v.title,
-			"audience":  v.audience,
+			"timestamp":  v.ts.UTC().Format(time.RFC3339Nano),
+			"kind":       v.kind,
+			"source":     v.source,
+			"title":      v.title,
+			"visibility": v.visibility,
 		}
 		if v.component != "" {
 			row["component"] = v.component

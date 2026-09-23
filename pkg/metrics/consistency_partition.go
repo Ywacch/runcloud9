@@ -198,7 +198,7 @@ func (cd *ConsistencyDetector) partitionStaleReadsEvent(now time.Time, part Part
 		Source:      "detector",
 		Component:   "db",
 		RuleID:      rulePartitionStaleReads,
-		Audience:    "student",
+		Visibility:  VisibilityStudent,
 		Title:       "Consistency degraded under partition",
 		Description: desc,
 		Detail: map[string]string{
@@ -235,7 +235,7 @@ func (cd *ConsistencyDetector) partitionWriteStallEvent(now time.Time, part Part
 		Source:      "detector",
 		Component:   "db",
 		RuleID:      rulePartitionWriteStall,
-		Audience:    "student",
+		Visibility:  VisibilityStudent,
 		Title:       "Writes stalling under partition",
 		Description: desc,
 		Detail:      detail,

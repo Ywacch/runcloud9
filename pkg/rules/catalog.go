@@ -2,7 +2,7 @@
 package rules
 
 // CatalogVersion bumps when static rule metadata changes.
-const CatalogVersion = "1"
+const CatalogVersion = "2"
 
 // Family groups detector rules for filtering and narration.
 type Family string
@@ -23,7 +23,7 @@ type Rule struct {
 	Family         Family
 	Kind           string   // template invariant kind; empty for static detector rules
 	Component      string   // primary canvas role; empty when cross-cutting
-	Audience       string   // "student" | "both" | "operator"
+	Visibility     string   // "student" | "operator" | "all"
 	Summary        string   // one line, student-readable
 	CausedByConfig []string // design_config keys that make this rule possible
 }
@@ -54,102 +54,102 @@ const (
 
 var staticCatalog = []Rule{
 	{
-		ID: IDCacheHitLow, Family: FamilyThreshold, Component: "cache", Audience: "both",
+		ID: IDCacheHitLow, Family: FamilyThreshold, Component: "cache", Visibility: VisibilityAll,
 		Summary:        "Cache hit rate fell below the session threshold",
 		CausedByConfig: []string{"cacheStrategy", "evictionPolicy", "cacheTtlSeconds", "instanceSize", "resourceProfile"},
 	},
 	{
-		ID: IDErrorRate, Family: FamilyThreshold, Component: "app-server", Audience: "both",
+		ID: IDErrorRate, Family: FamilyThreshold, Component: "app-server", Visibility: VisibilityAll,
 		Summary:        "HTTP error rate exceeded the session threshold",
 		CausedByConfig: []string{"replicas", "instanceSize", "resourceProfile"},
 	},
 	{
-		ID: IDDBLatency, Family: FamilyThreshold, Component: "db", Audience: "both",
+		ID: IDDBLatency, Family: FamilyThreshold, Component: "db", Visibility: VisibilityAll,
 		Summary:        "Database query latency exceeded the session threshold",
 		CausedByConfig: []string{"readReplicas", "readConsistency", "replicationMode", "instanceSize", "resourceProfile"},
 	},
 	{
-		ID: IDQueueDepth, Family: FamilyThreshold, Component: "mq", Audience: "both",
+		ID: IDQueueDepth, Family: FamilyThreshold, Component: "mq", Visibility: VisibilityAll,
 		Summary:        "Message queue depth exceeded the session threshold",
 		CausedByConfig: []string{"workerPrefetch", "workerConcurrency", "replicas"},
 	},
 	{
-		ID: IDDBConnPressure, Family: FamilyThreshold, Component: "db", Audience: "both",
+		ID: IDDBConnPressure, Family: FamilyThreshold, Component: "db", Visibility: VisibilityAll,
 		Summary:        "Database connection pressure exceeded the session threshold",
 		CausedByConfig: []string{"replicas", "readReplicas", "instanceSize", "resourceProfile"},
 	},
 	{
-		ID: IDMQBackpressure, Family: FamilyThreshold, Component: "mq", Audience: "both",
+		ID: IDMQBackpressure, Family: FamilyThreshold, Component: "mq", Visibility: VisibilityAll,
 		Summary:        "Message queue publish backpressure exceeded the session threshold",
 		CausedByConfig: []string{"workerPrefetch", "workerConcurrency", "replicas"},
 	},
 	{
-		ID: IDCascadeCacheDB, Family: FamilyCascade, Component: "", Audience: "both",
+		ID: IDCascadeCacheDB, Family: FamilyCascade, Component: "", Visibility: VisibilityAll,
 		Summary:        "Cache miss pressure coincided with rising database query rate",
 		CausedByConfig: []string{"cacheStrategy", "evictionPolicy", "readReplicas", "readConsistency"},
 	},
 	{
-		ID: IDCascadeQueueWorker, Family: FamilyCascade, Component: "", Audience: "both",
+		ID: IDCascadeQueueWorker, Family: FamilyCascade, Component: "", Visibility: VisibilityAll,
 		Summary:        "Queue depth rose while workers were saturated",
 		CausedByConfig: []string{"workerPrefetch", "workerConcurrency", "replicas"},
 	},
 	{
-		ID: IDCascadeDBPoolErrors, Family: FamilyCascade, Component: "", Audience: "both",
+		ID: IDCascadeDBPoolErrors, Family: FamilyCascade, Component: "", Visibility: VisibilityAll,
 		Summary:        "Database pool errors rose with application error rate",
 		CausedByConfig: []string{"replicas", "readReplicas", "instanceSize", "resourceProfile"},
 	},
 	{
-		ID: IDCascadeLatencyMiss, Family: FamilyCascade, Component: "", Audience: "both",
+		ID: IDCascadeLatencyMiss, Family: FamilyCascade, Component: "", Visibility: VisibilityAll,
 		Summary:        "Latency rose together with cache misses",
 		CausedByConfig: []string{"cacheStrategy", "cacheTtlSeconds", "evictionPolicy"},
 	},
 	{
-		ID: IDCascadeMQBackpressure, Family: FamilyCascade, Component: "mq", Audience: "both",
+		ID: IDCascadeMQBackpressure, Family: FamilyCascade, Component: "mq", Visibility: VisibilityAll,
 		Summary:        "Queue backpressure coincided with worker or publish pressure",
 		CausedByConfig: []string{"workerPrefetch", "workerConcurrency", "replicas"},
 	},
 	{
-		ID: IDRYWViolation, Family: FamilyConsistency, Component: "db", Audience: "student",
+		ID: IDRYWViolation, Family: FamilyConsistency, Component: "db", Visibility: "student",
 		Summary:        "A read-your-writes guarantee was violated on real traffic",
 		CausedByConfig: []string{"readConsistency", "readReplicas", "replicationMode"},
 	},
 	{
-		ID: IDMonotonicViolation, Family: FamilyConsistency, Component: "db", Audience: "student",
+		ID: IDMonotonicViolation, Family: FamilyConsistency, Component: "db", Visibility: "student",
 		Summary:        "Monotonic read order was violated on real traffic",
 		CausedByConfig: []string{"readConsistency", "readReplicas", "replicationMode"},
 	},
 	{
-		ID: IDCacheDBStale, Family: FamilyConsistency, Component: "cache", Audience: "student",
+		ID: IDCacheDBStale, Family: FamilyConsistency, Component: "cache", Visibility: "student",
 		Summary:        "A cache hit served stale data relative to the database",
 		CausedByConfig: []string{"cacheStrategy", "cacheTtlSeconds", "writeBehindIntervalSeconds"},
 	},
 	{
-		ID: IDPartitionStaleReads, Family: FamilyPartition, Component: "db", Audience: "student",
+		ID: IDPartitionStaleReads, Family: FamilyPartition, Component: "db", Visibility: "student",
 		Summary:        "Partition or lag allowed stale reads from a replica",
 		CausedByConfig: []string{"readConsistency", "readReplicas", "replicationMode"},
 	},
 	{
-		ID: IDPartitionWriteStall, Family: FamilyPartition, Component: "db", Audience: "student",
+		ID: IDPartitionWriteStall, Family: FamilyPartition, Component: "db", Visibility: "student",
 		Summary:        "Writes stalled under partition or semi-sync replication pressure",
 		CausedByConfig: []string{"replicationMode", "syncCommitLevel", "readReplicas"},
 	},
 	{
-		ID: IDReplicaCannotCatchUp, Family: FamilyConsistency, Component: "db", Audience: "student",
+		ID: IDReplicaCannotCatchUp, Family: FamilyConsistency, Component: "db", Visibility: "student",
 		Summary:        "A replica could not catch up to the primary WAL stream",
 		CausedByConfig: []string{"readReplicas", "replicationMode", "instanceSize", "resourceProfile"},
 	},
 	{
-		ID: IDFailoverWriteLoss, Family: FamilyFailover, Component: "db", Audience: "student",
+		ID: IDFailoverWriteLoss, Family: FamilyFailover, Component: "db", Visibility: "student",
 		Summary:        "Failover promoted a standby that had not received all committed writes",
 		CausedByConfig: []string{"replicationMode", "syncCommitLevel", "readReplicas"},
 	},
 	{
-		ID: IDPodRestart, Family: FamilyRuntime, Component: "", Audience: "both",
+		ID: IDPodRestart, Family: FamilyRuntime, Component: "", Visibility: VisibilityAll,
 		Summary:        "A pod restarted during the session",
 		CausedByConfig: nil,
 	},
 	{
-		ID: IDPodOOM, Family: FamilyRuntime, Component: "", Audience: "both",
+		ID: IDPodOOM, Family: FamilyRuntime, Component: "", Visibility: VisibilityAll,
 		Summary:        "A pod was terminated for out-of-memory",
 		CausedByConfig: []string{"instanceSize", "resourceProfile"},
 	},

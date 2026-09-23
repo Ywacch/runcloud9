@@ -976,7 +976,7 @@ func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 			Type:        "action",
 			Source:      "loadgen",
 			Kind:        "loadgen_start",
-			Audience:    "both",
+			Visibility:  "all",
 			Title:       "Load generator started",
 			Description: fmt.Sprintf("template=%s rps=%d durationSeconds=%d", profile.Template, profile.RPS, profile.DurationSeconds),
 			Detail: map[string]string{
@@ -1021,7 +1021,7 @@ func (h *Handler) handleStopLoadGen(w http.ResponseWriter, r *http.Request) {
 			Type:        "action",
 			Source:      "loadgen",
 			Kind:        "loadgen_stop",
-			Audience:    "both",
+			Visibility:  "all",
 			Title:       "Load generator stopped",
 			Description: "Traffic generation halted for this deployment",
 		})
@@ -1094,7 +1094,7 @@ func (h *Handler) handleUpdateLoadGen(w http.ResponseWriter, r *http.Request) {
 				Type:        "action",
 				Source:      "loadgen",
 				Kind:        "loadgen_mix",
-				Audience:    "both",
+				Visibility:  "all",
 				Title:       "Load generator mix updated",
 				Description: fmt.Sprintf("distribution updated (%d endpoints)", len(body.Distribution)),
 				Detail:      detail,
@@ -1105,7 +1105,7 @@ func (h *Handler) handleUpdateLoadGen(w http.ResponseWriter, r *http.Request) {
 				Type:        "action",
 				Source:      "loadgen",
 				Kind:        "loadgen_rate",
-				Audience:    "both",
+				Visibility:  "all",
 				Title:       "Load generator rate updated",
 				Description: fmt.Sprintf("rps=%d", *body.RPS),
 				Detail: map[string]string{

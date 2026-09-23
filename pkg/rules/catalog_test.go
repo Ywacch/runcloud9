@@ -14,8 +14,8 @@ func TestCatalog_IDsUniqueAndNonEmpty(t *testing.T) {
 		if r.Summary == "" {
 			t.Fatalf("rule %q has empty summary", r.ID)
 		}
-		if r.Audience == "" {
-			t.Fatalf("rule %q has empty audience", r.ID)
+		if r.Visibility == "" {
+			t.Fatalf("rule %q has empty visibility", r.ID)
 		}
 		if _, dup := seen[r.ID]; dup {
 			t.Fatalf("duplicate rule id %q", r.ID)

@@ -21,7 +21,7 @@ type ruleView struct {
 	Family         string   `json:"family"`
 	Kind           string   `json:"kind,omitempty"`
 	Component      string   `json:"component,omitempty"`
-	Audience       string   `json:"audience"`
+	Visibility     string   `json:"visibility"`
 	Summary        string   `json:"summary"`
 	CausedByConfig []string `json:"causedByConfig,omitempty"`
 }
@@ -42,7 +42,7 @@ func rulesCatalogPayload() ([]byte, string) {
 				Family:         string(r.Family),
 				Kind:           r.Kind,
 				Component:      r.Component,
-				Audience:       r.Audience,
+				Visibility:     r.Visibility,
 				Summary:        r.Summary,
 				CausedByConfig: r.CausedByConfig,
 			}

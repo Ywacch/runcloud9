@@ -139,7 +139,7 @@ func (h *Handler) emitChaosHeal(namespace string, part chaos.ActivePartition, re
 		Source:      "chaos",
 		Component:   part.TargetComponent,
 		Kind:        "chaos_heal",
-		Audience:    "both",
+		Visibility:  "all",
 		Title:       "Chaos partition healed",
 		Description: part.Scenario,
 		Detail: map[string]string{

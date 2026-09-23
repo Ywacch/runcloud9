@@ -302,7 +302,7 @@ func (cd *ConsistencyDetector) rywTrafficEvent(now time.Time, delta float64) Eve
 		Source:      "detector",
 		Component:   "db",
 		RuleID:      ruleRYWViolation,
-		Audience:    "student",
+		Visibility:  VisibilityStudent,
 		Title:       "Read-your-writes violation",
 		Description: desc,
 		Detail: map[string]string{
@@ -324,7 +324,7 @@ func (cd *ConsistencyDetector) monotonicTrafficEvent(now time.Time, delta float6
 		Source:      "detector",
 		Component:   "db",
 		RuleID:      ruleMonotonicViolation,
-		Audience:    "student",
+		Visibility:  VisibilityStudent,
 		Title:       "Monotonic read violation",
 		Description: desc,
 		Detail: map[string]string{
@@ -359,7 +359,7 @@ func (cd *ConsistencyDetector) cacheDbStaleEvent(now time.Time, sample cacheStal
 		Source:      "detector",
 		Component:   "db",
 		RuleID:      ruleCacheDbStale,
-		Audience:    "student",
+		Visibility:  VisibilityStudent,
 		Title:       "Cache vs database staleness",
 		Description: desc,
 		Detail:      detail,

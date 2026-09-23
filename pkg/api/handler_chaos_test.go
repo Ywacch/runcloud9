@@ -136,8 +136,8 @@ func TestHandleChaos_PodKillOK(t *testing.T) {
 	if events[0].Detail["scenario"] != "pod_kill" || events[0].Detail["targetComponent"] != "app-server" {
 		t.Fatalf("detail: %+v", events[0].Detail)
 	}
-	if events[0].Audience != "both" {
-		t.Fatalf("audience: %q", events[0].Audience)
+	if events[0].Visibility != "all" {
+		t.Fatalf("visibility: %q", events[0].Visibility)
 	}
 
 	_, err := client.CoreV1().Pods(ns).Get(context.Background(), pod.Name, metav1.GetOptions{})

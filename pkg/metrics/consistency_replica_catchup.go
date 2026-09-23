@@ -73,7 +73,7 @@ func (cd *ConsistencyDetector) replicaCannotCatchUpEvent(now time.Time, pods []s
 		Source:      "detector",
 		Component:   "db",
 		RuleID:      ruleReplicaCannotCatchUp,
-		Audience:    "student",
+		Visibility:  VisibilityStudent,
 		Title:       "Replica cannot catch up",
 		Description: desc,
 		Detail: map[string]string{

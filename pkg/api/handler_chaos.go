@@ -174,7 +174,7 @@ func (h *Handler) handleChaosApply(w http.ResponseWriter, r *http.Request) {
 			Source:      "chaos",
 			Component:   req.TargetComponent,
 			Kind:        "chaos_inject",
-			Audience:    "both",
+			Visibility:  "all",
 			Title:       scenario.Description(req.TargetComponent),
 			Description: req.Scenario,
 			Detail:      detail,
@@ -318,7 +318,7 @@ func (h *Handler) followOrRecloneThenMaybeSync(namespace, promotedPod string, db
 					Source:      "chaos",
 					Component:   "db",
 					Kind:        "postgres_sync_reconcile_failed",
-					Audience:    "both",
+					Visibility:  "all",
 					Title:       "Postgres sync settings not restored",
 					Description: syncErr.Error(),
 				})
@@ -330,7 +330,7 @@ func (h *Handler) followOrRecloneThenMaybeSync(namespace, promotedPod string, db
 					Source:      "chaos",
 					Component:   "db",
 					Kind:        "postgres_sync_reconcile_ok",
-					Audience:    "both",
+					Visibility:  "all",
 					Title:       "Postgres synchronous replication restored",
 					Description: "Re-applied synchronous_standby_names after replica promotion",
 				})
@@ -355,7 +355,7 @@ func (h *Handler) followOrRecloneThenMaybeSync(namespace, promotedPod string, db
 				Source:      "chaos",
 				Component:   "db",
 				Kind:        "standby_reclone",
-				Audience:    "both",
+				Visibility:  "all",
 				Title:       "Standby rebuilt after timeline fork",
 				Description: "standby_reclone",
 				Detail:      detail,
@@ -388,7 +388,7 @@ func (h *Handler) reconcilePostgresSyncAfterChaos(namespace string, dbConfig map
 				Source:      "chaos",
 				Component:   "db",
 				Kind:        "postgres_sync_reconcile_failed",
-				Audience:    "both",
+				Visibility:  "all",
 				Title:       "Postgres sync settings not restored",
 				Description: err.Error(),
 			})
@@ -401,7 +401,7 @@ func (h *Handler) reconcilePostgresSyncAfterChaos(namespace string, dbConfig map
 			Source:      "chaos",
 			Component:   "db",
 			Kind:        "postgres_sync_reconcile_ok",
-			Audience:    "both",
+			Visibility:  "all",
 			Title:       "Postgres synchronous replication restored",
 			Description: "Re-applied synchronous_standby_names after primary pod recreate",
 		})
