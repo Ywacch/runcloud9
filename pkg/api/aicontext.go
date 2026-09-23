@@ -1,6 +1,9 @@
 package api
 
 import (
+	"encoding/json"
+	"fmt"
+
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/rules"
@@ -86,4 +89,52 @@ func BuildAIContext(in AIContextInput) AIContext {
 			Trajectories:       metrics.BuildTrajectories(in.Hist),
 		}},
 	}
+}
+
+// AIContextInputFromDeployment maps a stored deployment row into builder input.
+func AIContextInputFromDeployment(namespace, template string, design deployer.DesignConfig, hist []metrics.DeploymentMetrics, final *metrics.DeploymentMetrics) AIContextInput {
+	if design.Template == "" {
+		design.Template = template
+	}
+	var tmpl *templates.TemplateSpec
+	if template != "" {
+		tmpl = templates.GetTemplate(template)
+	}
+	return AIContextInput{
+		SessionID:    namespace,
+		DesignConfig: design,
+		Hist:         hist,
+		Final:        final,
+		Template:     tmpl,
+	}
+}
+
+// SessionHistoryFromSummary decodes persisted metrics_summary.session_history.
+func SessionHistoryFromSummary(summary map[string]any) ([]metrics.DeploymentMetrics, error) {
+	if summary == nil {
+		return nil, nil
+	}
+	raw, ok := summary["session_history"]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("marshal session_history: %w", err)
+	}
+	var hist []metrics.DeploymentMetrics
+	if err := json.Unmarshal(b, &hist); err != nil {
+		return nil, fmt.Errorf("unmarshal session_history: %w", err)
+	}
+	return hist, nil
+}
+
+func finalSnapshot(hist []metrics.DeploymentMetrics, latest *metrics.DeploymentMetrics) *metrics.DeploymentMetrics {
+	if latest != nil && !latest.CollectPending {
+		return latest
+	}
+	if len(hist) == 0 {
+		return latest
+	}
+	return &hist[len(hist)-1]
 }

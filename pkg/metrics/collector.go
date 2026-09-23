@@ -176,6 +176,26 @@ func (c *MetricsCollector) RingBufferFor(namespace string) *RingBuffer {
 	return c.history[namespace]
 }
 
+// AppendSessionSnapshots records snapshots into the namespace ring buffer.
+func (c *MetricsCollector) AppendSessionSnapshots(namespace string, snapshots ...DeploymentMetrics) {
+	if c == nil || namespace == "" || len(snapshots) == 0 {
+		return
+	}
+	c.historyMu.Lock()
+	if c.history == nil {
+		c.history = make(map[string]*RingBuffer)
+	}
+	rb := c.history[namespace]
+	if rb == nil {
+		rb = &RingBuffer{}
+		c.history[namespace] = rb
+	}
+	for _, dm := range snapshots {
+		rb.Add(dm)
+	}
+	c.historyMu.Unlock()
+}
+
 // SessionHistory returns oldest→newest snapshots for replay APIs (full buffer, not downsampled).
 func (c *MetricsCollector) SessionHistory(namespace string) []DeploymentMetrics {
 	rb := c.RingBufferFor(namespace)
