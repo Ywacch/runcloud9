@@ -9,18 +9,18 @@ import (
 
 // Mechanism is an authored causal story keyed to catalog rules and design choices.
 type Mechanism struct {
-	ID           string
-	TriggerRules []string
-	Precondition Precondition
-	CausalChain  []string
-	Suggestion   string
+	ID           string       `json:"id"`
+	TriggerRules []string     `json:"triggerRules"`
+	Precondition Precondition `json:"precondition"`
+	CausalChain  []string     `json:"causalChain"`
+	Suggestion   string       `json:"suggestion"`
 }
 
 // Precondition is machine-checkable against a session design_config projection.
 type Precondition struct {
-	Role  string // "cache" | "db" | ...
-	Key   string // "cacheStrategy"
-	AnyOf []string
+	Role  string   `json:"role,omitempty"` // "cache" | "db" | ...
+	Key   string   `json:"key,omitempty"`  // "cacheStrategy"
+	AnyOf []string `json:"anyOf,omitempty"`
 }
 
 // Holds reports whether any instance under Role has Settings[Key] matching AnyOf.

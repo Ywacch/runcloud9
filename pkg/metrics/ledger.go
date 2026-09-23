@@ -74,7 +74,7 @@ func BuildLedger(in LedgerInput) *Ledger {
 
 	violations := BuildViolations(in.Hist, in.DesignConfig, in.Template)
 	appendViolationFacts(l, violations)
-	appendRuleFacts(l, collectFiredRules(in.Hist, violations))
+	appendRuleFacts(l, FiredRuleIDs(in.Hist, violations))
 	appendEventFacts(l, in.Hist)
 
 	return l
@@ -260,7 +260,8 @@ func eventFactValue(ev Event) map[string]any {
 	return out
 }
 
-func collectFiredRules(hist []DeploymentMetrics, violations []ViolationRollup) []string {
+// FiredRuleIDs returns sorted unique rule IDs from session events and violations.
+func FiredRuleIDs(hist []DeploymentMetrics, violations []ViolationRollup) []string {
 	seen := make(map[string]bool)
 	for _, snap := range hist {
 		for _, ev := range snap.Events {
