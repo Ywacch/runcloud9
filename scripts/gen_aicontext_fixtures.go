@@ -1,6 +1,6 @@
 //go:build ignore
 
-// Generate labeled AIContext fixtures for ganymede-ai eval corpus.
+// Generate labeled AIContext fixtures for runcloud9-ai eval corpus.
 // Run from ganymede/: go run scripts/gen_aicontext_fixtures.go
 package main
 
@@ -266,7 +266,7 @@ func main() {
 		},
 	}
 
-	outDir := filepath.Join("..", "ganymede-ai", "fixtures")
+	outDir := fixturesOutDir()
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		panic(err)
 	}
@@ -287,6 +287,17 @@ func main() {
 
 func snapshotPtr(dm metrics.DeploymentMetrics) *metrics.DeploymentMetrics {
 	return &dm
+}
+
+// fixturesOutDir is the sibling Python repo (runcloud9-ai on GitHub).
+func fixturesOutDir() string {
+	for _, name := range []string{"runcloud9-ai", "ganymede-ai"} {
+		dir := filepath.Join("..", name, "fixtures")
+		if _, err := os.Stat(filepath.Join("..", name)); err == nil {
+			return dir
+		}
+	}
+	return filepath.Join("..", "runcloud9-ai", "fixtures")
 }
 
 func socialFeedDesign() deployer.DesignConfig {
