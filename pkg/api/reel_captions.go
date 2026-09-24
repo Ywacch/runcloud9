@@ -21,11 +21,6 @@ type ReelCaptionView struct {
 	MechanismID string               `json:"mechanismId,omitempty"`
 }
 
-// reelCaptionInference requests highlight captions from runcloud9-ai.
-type reelCaptionInference interface {
-	ReelCaptions(ctx context.Context, req inference.ReelCaptionsRequest) (*inference.ReelCaptionsResponse, error)
-}
-
 // ApplyReelCaptions verifies inference claims and merges accepted captions onto highlight rows.
 // Rejected captions leave the row unchanged (authored narrative remains the fallback).
 func ApplyReelCaptions(

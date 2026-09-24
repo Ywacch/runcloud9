@@ -56,7 +56,7 @@ type Handler struct {
 	provisionETA         *provisionETA
 	chaosTTLMu           sync.Mutex
 	chaosTTLTimers       map[string]*time.Timer
-	inferenceClient      reelCaptionInference
+	inferenceClient      inferenceService
 	inferenceTokenBudget *SessionTokenBudget
 }
 
@@ -120,7 +120,7 @@ func NewHandler(
 		}
 	}
 
-	var inferenceSvc reelCaptionInference
+	var inferenceSvc inferenceService
 	if inferenceURL := strings.TrimSpace(os.Getenv("INFERENCE_URL")); inferenceURL != "" {
 		inferenceSvc = inference.NewClient(inferenceURL)
 	}
@@ -1257,6 +1257,7 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 	if h.store != nil {
 		_ = h.store.UpdateStatus(context.Background(), namespace, "terminated")
 	}
+	h.schedulePostmortemAfterTeardown(namespace)
 	h.wakeDeployQueue()
 	w.WriteHeader(http.StatusNoContent)
 }
