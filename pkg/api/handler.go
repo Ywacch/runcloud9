@@ -19,6 +19,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/admission"
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/diagnostics"
+	"github.com/ywacch/cloud9/pkg/inference"
 	"github.com/ywacch/cloud9/pkg/loadgen"
 	"github.com/ywacch/cloud9/pkg/logs"
 	"github.com/ywacch/cloud9/pkg/metrics"
@@ -34,27 +35,29 @@ import (
 // This makes testing easier as you can swap in a mock deployer without
 // touching global state.
 type Handler struct {
-	deployers        map[string]deployer.ComponentDeployer
-	store            deploymentStore
-	scheduler        *teardown.Scheduler
-	seeder           seederService
-	metricsCollector *metrics.MetricsCollector
-	diagnostics      *diagnostics.Collector
-	clientset        kubernetes.Interface
-	loadgen          loadgen.LoadGenerator
-	eventBus         *metrics.EventBus
-	provisionMu      sync.Mutex
-	emitProvisionMu  sync.Mutex
-	provisionCancel  map[string]context.CancelFunc
-	door             *provisionDoor
-	admitMu          sync.Mutex
-	roomBudget       *admission.Config
-	maxDeployQueue   int
-	queueTTL         time.Duration
-	queueWake        chan struct{}
-	provisionETA     *provisionETA
-	chaosTTLMu       sync.Mutex
-	chaosTTLTimers   map[string]*time.Timer
+	deployers            map[string]deployer.ComponentDeployer
+	store                deploymentStore
+	scheduler            *teardown.Scheduler
+	seeder               seederService
+	metricsCollector     *metrics.MetricsCollector
+	diagnostics          *diagnostics.Collector
+	clientset            kubernetes.Interface
+	loadgen              loadgen.LoadGenerator
+	eventBus             *metrics.EventBus
+	provisionMu          sync.Mutex
+	emitProvisionMu      sync.Mutex
+	provisionCancel      map[string]context.CancelFunc
+	door                 *provisionDoor
+	admitMu              sync.Mutex
+	roomBudget           *admission.Config
+	maxDeployQueue       int
+	queueTTL             time.Duration
+	queueWake            chan struct{}
+	provisionETA         *provisionETA
+	chaosTTLMu           sync.Mutex
+	chaosTTLTimers       map[string]*time.Timer
+	inferenceClient      reelCaptionInference
+	inferenceTokenBudget *SessionTokenBudget
 }
 
 type deploymentStore interface {
@@ -117,23 +120,30 @@ func NewHandler(
 		}
 	}
 
+	var inferenceSvc reelCaptionInference
+	if inferenceURL := strings.TrimSpace(os.Getenv("INFERENCE_URL")); inferenceURL != "" {
+		inferenceSvc = inference.NewClient(inferenceURL)
+	}
+
 	return &Handler{
-		deployers:        deployers,
-		store:            store,
-		scheduler:        scheduler,
-		seeder:           seedSvc,
-		metricsCollector: metricsCollector,
-		diagnostics:      diagnosticsCollector,
-		clientset:        clientset,
-		loadgen:          lg,
-		eventBus:         eventBus,
-		provisionCancel:  make(map[string]context.CancelFunc),
-		door:             door,
-		roomBudget:       admission.ConfigFromEnv(),
-		maxDeployQueue:   maxQueue,
-		queueTTL:         queueTTL,
-		queueWake:        make(chan struct{}, 1),
-		provisionETA:     newProvisionETA(etaSec),
+		deployers:            deployers,
+		store:                store,
+		scheduler:            scheduler,
+		seeder:               seedSvc,
+		metricsCollector:     metricsCollector,
+		diagnostics:          diagnosticsCollector,
+		clientset:            clientset,
+		loadgen:              lg,
+		eventBus:             eventBus,
+		provisionCancel:      make(map[string]context.CancelFunc),
+		door:                 door,
+		roomBudget:           admission.ConfigFromEnv(),
+		maxDeployQueue:       maxQueue,
+		queueTTL:             queueTTL,
+		queueWake:            make(chan struct{}, 1),
+		provisionETA:         newProvisionETA(etaSec),
+		inferenceClient:      inferenceSvc,
+		inferenceTokenBudget: NewSessionTokenBudget(),
 	}
 }
 
@@ -1181,6 +1191,10 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 	// Persist final metrics summary before teardown (read-modify-write preserves 'seeded' and other fields).
 	if h.metricsCollector != nil && h.store != nil {
 		design, _ := deployer.DesignFromMap(row.Design)
+		if design == nil {
+			design = &deployer.DeploymentDesign{}
+		}
+		dc := deployer.DesignConfigFromDesign(design)
 		topo := MetricsTopologyFromDeploymentDesign(design, tpl)
 		dm, err := h.metricsCollector.Collect(r.Context(), namespace, tpl, topo)
 		if err == nil && dm != nil {
@@ -1188,7 +1202,13 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 			if rowErr == nil {
 				base = row.MetricsSummary
 			}
+			hist := h.metricsCollector.DownsampledSessionHistory(namespace)
 			summary := h.metricsCollector.SessionSummary(namespace, base, dm)
+			if len(hist) > 0 {
+				enrichCtx, enrichCancel := context.WithTimeout(r.Context(), 2*time.Minute)
+				h.enrichReelCaptionsInSummary(enrichCtx, namespace, summary, dc, tpl, hist, dm)
+				enrichCancel()
+			}
 			summary["terminated_at"] = time.Now().Format(time.RFC3339)
 			if rowErr == nil {
 				summary["actual_duration_seconds"] = int(time.Since(row.CreatedAt).Seconds())
