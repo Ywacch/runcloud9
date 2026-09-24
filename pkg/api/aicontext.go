@@ -18,7 +18,7 @@ const (
 	RunRoleCandidate = "candidate"
 )
 
-// AIContext is the versioned payload served to ganymede-brain and the claim verifier.
+// AIContext is the versioned payload served to runcloud9-ai and the claim verifier.
 type AIContext struct {
 	SchemaVersion  int    `json:"schemaVersion"`
 	CatalogVersion string `json:"catalogVersion"`
