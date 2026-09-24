@@ -41,7 +41,7 @@ func (p Precondition) Holds(dc deployer.DesignConfig) bool {
 		if !ok {
 			continue
 		}
-		if settingMatchesAny(value, p.AnyOf) {
+		if SettingMatchesAny(value, p.AnyOf) {
 			return true
 		}
 	}
@@ -82,7 +82,8 @@ func mechanismTriggered(m Mechanism, fired map[string]bool) bool {
 	return false
 }
 
-func settingMatchesAny(value any, allowed []string) bool {
+// SettingMatchesAny reports whether value stringifies to one of the allowed literals.
+func SettingMatchesAny(value any, allowed []string) bool {
 	got := formatSettingValue(value)
 	for _, want := range allowed {
 		if got == want {
