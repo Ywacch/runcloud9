@@ -99,7 +99,18 @@ func FilterVerifiedPostmortemClaims(
 	dc deployer.DesignConfig,
 	fired []string,
 ) []PostmortemClaimView {
+	views, _ := filterVerifiedPostmortemClaims(wire, ledger, dc, fired)
+	return views
+}
+
+func filterVerifiedPostmortemClaims(
+	wire []inference.WireClaim,
+	ledger *metrics.Ledger,
+	dc deployer.DesignConfig,
+	fired []string,
+) ([]PostmortemClaimView, []rules.Claim) {
 	var out []PostmortemClaimView
+	var rulesOut []rules.Claim
 	for _, w := range wire {
 		claim := wireClaimToRules(w)
 		verified, rejections := verify.Verify(claim, ledger, dc, fired)
@@ -107,8 +118,9 @@ func FilterVerifiedPostmortemClaims(
 			continue
 		}
 		out = append(out, claimViewFromRules(verified, w.RequestID))
+		rulesOut = append(rulesOut, verified)
 	}
-	return out
+	return out, rulesOut
 }
 
 func buildAIPostmortem(resp *inference.PostmortemResponse, claims []PostmortemClaimView) AIPostmortem {
@@ -193,10 +205,13 @@ func (h *Handler) runPostmortemAfterTeardown(namespace string) {
 		Final:        final,
 		Template:     tmpl,
 	})
-	verified := FilterVerifiedPostmortemClaims(resp.Claims, ledger, dc, fired)
+	verified, verifiedRules := filterVerifiedPostmortemClaims(resp.Claims, ledger, dc, fired)
 	pm := buildAIPostmortem(resp, verified)
 	if err := h.persistAIPostmortem(ctx, namespace, pm); err != nil {
 		log.Printf("postmortem %s: persist: %v", namespace, err)
+	}
+	if st, ok := h.store.(mechanismPromotionStore); ok {
+		recordInferredMechanismPromotions(ctx, st, row.Template, namespace, row.UserID, verifiedRules, ledger)
 	}
 }
 

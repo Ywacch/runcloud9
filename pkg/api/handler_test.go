@@ -1954,6 +1954,8 @@ type fakeDeploymentStore struct {
 	forcedMonthlyCount *int
 	monthlyCountErr    error
 	events             []store.AdmissionEvent
+	promotionRows      []store.InferredMechanismPromotionRow
+	promotionSummaries []store.InferredMechanismPromotionSummary
 }
 
 func newFakeDeploymentStore() *fakeDeploymentStore {
@@ -2122,6 +2124,21 @@ func (f *fakeDeploymentStore) InsertAdmissionEvent(_ context.Context, ev store.A
 	defer f.mu.Unlock()
 	f.events = append(f.events, ev)
 	return nil
+}
+
+func (f *fakeDeploymentStore) InsertInferredMechanismPromotion(_ context.Context, row store.InferredMechanismPromotionRow) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.promotionRows = append(f.promotionRows, row)
+	return nil
+}
+
+func (f *fakeDeploymentStore) ListInferredMechanismPromotionSummaries(_ context.Context, _ int) ([]store.InferredMechanismPromotionSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]store.InferredMechanismPromotionSummary, len(f.promotionSummaries))
+	copy(out, f.promotionSummaries)
+	return out, nil
 }
 
 func (f *fakeDeploymentStore) UpdateStatus(_ context.Context, namespace, status string) error {

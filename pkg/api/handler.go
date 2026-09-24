@@ -203,6 +203,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /meta/resource-profiles", routePublic(rl, http.HandlerFunc(h.handleGetResourceProfiles)))
 	mux.Handle("GET /meta/topology-rules", routePublic(rl, http.HandlerFunc(h.handleGetTopologyRules)))
 	mux.Handle("GET /meta/rules", routePublic(rl, http.HandlerFunc(h.handleGetRules)))
+	mux.Handle("GET /meta/inferred-mechanism-promotions", routePublic(rl, http.HandlerFunc(h.handleListInferredMechanismPromotions)))
 }
 
 // handleMetricsStream upgrades the HTTP connection to WebSocket and streams
