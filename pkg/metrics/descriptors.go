@@ -90,6 +90,14 @@ var signalDescriptorCatalog = map[string]signalMeta{
 		unit: "rps", semantic: "rate", meaning: "cache key expirations per second",
 		freshnessGroup: SignalThroughput,
 	},
+	"evictionsLast9m": {
+		unit: "count", semantic: "counter", meaning: "session total cache key evictions",
+		freshnessGroup: SignalThroughput,
+	},
+	"expirationsLast9m": {
+		unit: "count", semantic: "counter", meaning: "session total cache key expirations",
+		freshnessGroup: SignalThroughput,
+	},
 	"lagBytes": {
 		unit: "bytes", semantic: "gauge", meaning: "replication lag in bytes behind primary",
 		freshnessGroup: SignalReplication,

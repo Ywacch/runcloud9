@@ -16,6 +16,8 @@ const (
 	seriesCacheMisses     = "cache_misses"
 	seriesRedisRead       = "redis_read"
 	seriesRedisWrite      = "redis_write"
+	seriesRedisEvicted    = "redis_evicted"
+	seriesRedisExpired    = "redis_expired"
 	seriesPgRead          = "pg_read"
 	seriesPgWrite         = "pg_write"
 	seriesPgXact          = "pg_xact"

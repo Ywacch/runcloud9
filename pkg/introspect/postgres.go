@@ -76,9 +76,12 @@ func (d *PostgresDriver) ListTables(ctx context.Context) ([]TableInfo, error) {
 		}
 		var est int64
 		_ = d.conn.QueryRow(ctx, `
-			SELECT COALESCE(reltuples::bigint, 0)
-			FROM pg_class
-			WHERE relname = $1`, name).Scan(&est)
+			SELECT COALESCE(n_live_tup, 0)::bigint
+			FROM pg_stat_user_tables
+			WHERE schemaname = 'public' AND relname = $1`, name).Scan(&est)
+		if est < 0 {
+			est = 0
+		}
 		out = append(out, TableInfo{Name: name, RowCount: est})
 	}
 	return out, rows.Err()

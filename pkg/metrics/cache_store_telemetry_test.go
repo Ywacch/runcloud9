@@ -50,10 +50,14 @@ func TestFillRedisCacheStoreTelemetry(t *testing.T) {
 				q := r.URL.Query().Get("query")
 				w.Header().Set("Content-Type", "application/json")
 				switch {
-				case strings.Contains(q, "redis_evicted_keys_total"):
+				case strings.Contains(q, "rate(redis_evicted_keys_total"):
 					_ = json.NewEncoder(w).Encode(promVectorJSON(tt.evicted))
-				case strings.Contains(q, "redis_expired_keys_total"):
+				case strings.Contains(q, "rate(redis_expired_keys_total"):
 					_ = json.NewEncoder(w).Encode(promVectorJSON(tt.expired))
+				case strings.Contains(q, "redis_evicted_keys_total"):
+					_ = json.NewEncoder(w).Encode(promVectorWithPodJSON("redis-0", tt.evicted))
+				case strings.Contains(q, "redis_expired_keys_total"):
+					_ = json.NewEncoder(w).Encode(promVectorWithPodJSON("redis-0", tt.expired))
 				default:
 					_ = json.NewEncoder(w).Encode(promEmptyJSON())
 				}
@@ -68,7 +72,25 @@ func TestFillRedisCacheStoreTelemetry(t *testing.T) {
 			if got.ExpirationsPerSec != tt.wantExpires {
 				t.Fatalf("ExpirationsPerSec: got %v want %v", got.ExpirationsPerSec, tt.wantExpires)
 			}
+			if tt.wantEvictions > 0 && got.EvictionsLast9m <= 0 {
+				t.Fatalf("EvictionsLast9m: got %v want > 0", got.EvictionsLast9m)
+			}
 		})
+	}
+}
+
+func promVectorWithPodJSON(pod, value string) map[string]any {
+	return map[string]any{
+		"status": "success",
+		"data": map[string]any{
+			"resultType": "vector",
+			"result": []map[string]any{
+				{
+					"metric": map[string]string{"pod": pod},
+					"value":  []any{float64(1), value},
+				},
+			},
+		},
 	}
 }
 

@@ -178,8 +178,11 @@ type ComponentMetrics struct {
 	RedisRejectedRate   float64 `json:"redisRejectedRate,omitempty"`
 	// EvictionsPerSec / ExpirationsPerSec are engine-agnostic cache store rates (L0).
 	// Redis filler uses redis_evicted_keys_total / redis_expired_keys_total today.
-	EvictionsPerSec     float64 `json:"evictionsPerSec,omitempty"`
-	ExpirationsPerSec   float64 `json:"expirationsPerSec,omitempty"`
+	EvictionsPerSec   float64 `json:"evictionsPerSec,omitempty"`
+	ExpirationsPerSec float64 `json:"expirationsPerSec,omitempty"`
+	// EvictionsLast9m / ExpirationsLast9m are session sums from redis_evicted_keys_total / redis_expired_keys_total.
+	EvictionsLast9m     float64 `json:"evictionsLast9m,omitempty"`
+	ExpirationsLast9m   float64 `json:"expirationsLast9m,omitempty"`
 	CacheStrategy       string  `json:"cacheStrategy,omitempty"`
 	CacheMetricMode     string  `json:"cacheMetricMode,omitempty"`
 	CacheReadOperation  string  `json:"cacheReadOperation,omitempty"`
@@ -281,6 +284,8 @@ type ComponentLayerMetrics struct {
 	// Engine-agnostic store rates (backing-store layer).
 	EvictionsPerSec   float64 `json:"evictionsPerSec,omitempty"`
 	ExpirationsPerSec float64 `json:"expirationsPerSec,omitempty"`
+	EvictionsLast9m   float64 `json:"evictionsLast9m,omitempty"`
+	ExpirationsLast9m float64 `json:"expirationsLast9m,omitempty"`
 	RestartCount      int32   `json:"restartCount,omitempty"`
 	// ReplicationLagSeconds is primary-side replay lag on replica layers (seconds).
 	// Pointer so a successful query of 0 serializes; nil when the series is absent.
