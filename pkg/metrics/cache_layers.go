@@ -96,6 +96,8 @@ func (c *MetricsCollector) collectCacheLayerSplit(ctx context.Context, ns string
 	tel := c.fillRedisCacheStoreTelemetry(ctx, ns)
 	out.redis.EvictionsPerSec = tel.EvictionsPerSec
 	out.redis.ExpirationsPerSec = tel.ExpirationsPerSec
+	out.redis.EvictionsLast9m = tel.EvictionsLast9m
+	out.redis.ExpirationsLast9m = tel.ExpirationsLast9m
 
 	return out
 }
@@ -115,6 +117,12 @@ func applyCacheLayers(cm *ComponentMetrics, split cacheLayerSplit) {
 	}
 	if backing.ExpirationsPerSec == 0 {
 		backing.ExpirationsPerSec = cm.ExpirationsPerSec
+	}
+	if backing.EvictionsLast9m == 0 {
+		backing.EvictionsLast9m = cm.EvictionsLast9m
+	}
+	if backing.ExpirationsLast9m == 0 {
+		backing.ExpirationsLast9m = cm.ExpirationsLast9m
 	}
 	cm.CacheMetricMode = "layered"
 	cm.Layers = []ComponentLayerMetrics{backing, split.proxy}

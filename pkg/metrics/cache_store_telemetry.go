@@ -12,6 +12,8 @@ type CacheStoreTelemetry struct {
 	EvictionsPerSec float64
 	// ExpirationsPerSec is TTL-driven key removals per second.
 	ExpirationsPerSec float64
+	EvictionsLast9m   float64
+	ExpirationsLast9m float64
 }
 
 // fillRedisCacheStoreTelemetry reads redis_exporter series into normalized fields.
@@ -35,6 +37,16 @@ func (c *MetricsCollector) fillRedisCacheStoreTelemetry(ctx context.Context, ns 
 	if expired > 0 {
 		out.ExpirationsPerSec = expired
 	}
+	evictedByPod := c.queryMultiResult(ctx, fmt.Sprintf(
+		`sum by (pod) (redis_evicted_keys_total{namespace=%q})`,
+		ns,
+	), "pod")
+	expiredByPod := c.queryMultiResult(ctx, fmt.Sprintf(
+		`sum by (pod) (redis_expired_keys_total{namespace=%q})`,
+		ns,
+	), "pod")
+	out.EvictionsLast9m = c.sessionAcc.Observe(ns, seriesRedisEvicted, evictedByPod)
+	out.ExpirationsLast9m = c.sessionAcc.Observe(ns, seriesRedisExpired, expiredByPod)
 	return out
 }
 
@@ -44,4 +56,6 @@ func applyCacheStoreTelemetry(cm *ComponentMetrics, tel CacheStoreTelemetry) {
 	}
 	cm.EvictionsPerSec = tel.EvictionsPerSec
 	cm.ExpirationsPerSec = tel.ExpirationsPerSec
+	cm.EvictionsLast9m = tel.EvictionsLast9m
+	cm.ExpirationsLast9m = tel.ExpirationsLast9m
 }
