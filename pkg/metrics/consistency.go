@@ -31,6 +31,7 @@ type appTrafficConsistency struct {
 	MonoTotal         float64
 	LeaderReads       int64
 	ReplicaReads      int64
+	ReadRateByReplica map[string]float64
 	LeaderRedirects   float64
 	ReplicaStaleTotal float64
 }
@@ -250,6 +251,7 @@ func (cd *ConsistencyDetector) statusFor(namespace string, result probes.ProbeRe
 		ReplicaCannotCatchUp: cd.violationCount(namespace, ruleReplicaCannotCatchUp),
 		LeaderReads:          traffic.LeaderReads,
 		ReplicaReads:         traffic.ReplicaReads,
+		ReadRateByReplica:    cloneFloatMap(traffic.ReadRateByReplica),
 		ReplicaStaleReads:    int64(traffic.ReplicaStaleTotal + 0.5),
 		GuaranteeHeldBy:      guaranteeHeldByFrom(traffic, topo, postgresSync),
 	}

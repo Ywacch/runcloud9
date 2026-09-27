@@ -207,8 +207,22 @@ func (c *MetricsCollector) scrapeAppTrafficConsistency(ctx context.Context, nsSe
 	out.LeaderRedirects = redirects
 	out.ReplicaStaleTotal = stale
 
-	byRoute := c.queryMultiResult(ctx, fmt.Sprintf(`sum(db_read_total{%s}) by (route)`, nsSel), "route")
-	out.LeaderReads = int64(byRoute["leader"] + 0.5)
-	out.ReplicaReads = int64(byRoute["replica"] + 0.5)
+	byReplicaCum := c.queryMultiResult(ctx, fmt.Sprintf(`sum(db_read_total{%s}) by (replica)`, nsSel), "replica")
+	out.LeaderReads = int64(byReplicaCum["leader"] + 0.5)
+	var replicaCum float64
+	for host, v := range byReplicaCum {
+		if host != "leader" {
+			replicaCum += v
+		}
+	}
+	out.ReplicaReads = int64(replicaCum + 0.5)
+
+	rates := c.queryMultiResult(ctx, fmt.Sprintf(
+		`sum by (replica) (rate(db_read_total{%s}%s))`,
+		nsSel, promRateRange(),
+	), "replica")
+	if len(rates) > 0 {
+		out.ReadRateByReplica = rates
+	}
 	return out
 }

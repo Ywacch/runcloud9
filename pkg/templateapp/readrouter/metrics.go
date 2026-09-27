@@ -5,13 +5,16 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+// DBReadLeaderLabel is the db_read_total replica label for primary reads.
+const DBReadLeaderLabel = "leader"
+
 var (
 	dbReadTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "db_read_total",
-			Help: "Database reads routed to leader or replica",
+			Help: "Database reads routed to leader or replica host",
 		},
-		[]string{"route"},
+		[]string{"replica"},
 	)
 	rywViolationsTotal = promauto.NewCounter(
 		prometheus.CounterOpts{
@@ -38,3 +41,7 @@ var (
 		},
 	)
 )
+
+func incDBRead(replica string) {
+	dbReadTotal.WithLabelValues(replica).Inc()
+}

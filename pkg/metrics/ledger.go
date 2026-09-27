@@ -71,6 +71,7 @@ func BuildLedger(in LedgerInput) *Ledger {
 
 	appendMetricFacts(l, internals, descriptorIndex)
 	appendDerivedCacheFacts(l, final, in.DesignConfig.Template)
+	appendReplicaReadSplitFacts(l, final)
 	appendSessionPeakFacts(l, PeakSummary(final))
 	appendTrajectoryFacts(l, BuildTrajectories(in.Hist))
 

@@ -70,7 +70,7 @@ func (r *ReadRouter) queryLeader(
 	if err := scan(row, nil); err != nil {
 		return r.leaderTarget(), err
 	}
-	dbReadTotal.WithLabelValues(RouteLeader.String()).Inc()
+	incDBRead(DBReadLeaderLabel)
 	return r.leaderTarget(), nil
 }
 
@@ -103,18 +103,18 @@ func (r *ReadRouter) queryReplicaRoundRobin(
 				if rywRedirect && tokenBehindBaseline(tok, writeBaseline) {
 					return "", errRYWRedirectLeader
 				}
-				dbReadTotal.WithLabelValues(RouteReplica.String()).Inc()
+				incDBRead(entry.host)
 				r.recordReadAgainst(clientID, tok, writeBaseline)
 				return entry.host, nil
 			}
-			dbReadTotal.WithLabelValues(RouteReplica.String()).Inc()
+			incDBRead(entry.host)
 			return entry.host, nil
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			if rywRedirect && writeBaseline != nil {
 				return "", errRYWRedirectLeader
 			}
-			dbReadTotal.WithLabelValues(RouteReplica.String()).Inc()
+			incDBRead(entry.host)
 			return entry.host, err
 		}
 		if shouldFailover(err) {
@@ -178,7 +178,7 @@ func (r *ReadRouter) QueryRows(
 	if err := run(ctx, r.writePool); err != nil {
 		return RouteLeader, r.leaderTarget(), err
 	}
-	dbReadTotal.WithLabelValues(RouteLeader.String()).Inc()
+	incDBRead(DBReadLeaderLabel)
 	return RouteLeader, r.leaderTarget(), nil
 }
 
@@ -231,7 +231,7 @@ func (r *ReadRouter) queryRowsReplicaRoundRobin(
 			return entry.host, err
 		}
 
-		dbReadTotal.WithLabelValues(RouteReplica.String()).Inc()
+		incDBRead(entry.host)
 		if tok != nil {
 			r.recordReadAgainst(clientID, tok, writeBaseline)
 		}
