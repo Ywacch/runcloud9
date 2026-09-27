@@ -61,6 +61,11 @@ func aiContextFromSummary(namespace, template string, dc deployer.DesignConfig, 
 	if err != nil {
 		return AIContext{}, err
 	}
+	traceSamples, err := metrics.TraceSamplesFromSummary(summary)
+	if err != nil {
+		return AIContext{}, err
+	}
 	in := AIContextInputFromDeployment(namespace, template, dc, hist, finalSnapshot(hist, nil))
+	in.TraceSamples = traceSamples
 	return BuildAIContext(in), nil
 }

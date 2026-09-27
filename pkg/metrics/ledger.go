@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/deployer"
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 	"github.com/ywacch/cloud9/pkg/templates"
 )
 
@@ -18,6 +19,7 @@ import (
 //   - fact:event:{index}
 //   - fact:rule:{ruleID}
 //   - fact:violation:{ruleID}
+//   - fact:trace:{requestId}
 type FactRef string
 
 // FactKind categorizes ledger entries for verifier checks.
@@ -29,6 +31,7 @@ const (
 	FactKindRule       = "rule"
 	FactKindViolation  = "violation"
 	FactKindDerived    = "derived"
+	FactKindTrace      = "trace"
 )
 
 // Fact is one citable object in a session fact ledger.
@@ -53,6 +56,7 @@ type LedgerInput struct {
 	Hist         []DeploymentMetrics
 	Final        *DeploymentMetrics
 	Template     *templates.TemplateSpec
+	TraceSamples []trace.JourneySample
 }
 
 // BuildLedger assembles config, metric, trajectory, event, rule, and violation
@@ -79,6 +83,7 @@ func BuildLedger(in LedgerInput) *Ledger {
 	appendViolationFacts(l, violations)
 	appendRuleFacts(l, FiredRuleIDs(in.Hist, violations))
 	appendEventFacts(l, in.Hist)
+	appendTraceFacts(l, in.TraceSamples)
 
 	return l
 }

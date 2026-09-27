@@ -197,6 +197,7 @@ func (h *Handler) runPostmortemAfterTeardown(namespace string) {
 		return
 	}
 
+	traceSamples, _ := metrics.TraceSamplesFromSummary(row.MetricsSummary)
 	violations := metrics.BuildViolations(hist, dc, tmpl)
 	fired := metrics.FiredRuleIDs(hist, violations)
 	ledger := metrics.BuildLedger(metrics.LedgerInput{
@@ -204,6 +205,7 @@ func (h *Handler) runPostmortemAfterTeardown(namespace string) {
 		Hist:         hist,
 		Final:        final,
 		Template:     tmpl,
+		TraceSamples: traceSamples,
 	})
 	verified, verifiedRules := filterVerifiedPostmortemClaims(resp.Claims, ledger, dc, fired)
 	pm := buildAIPostmortem(resp, verified)

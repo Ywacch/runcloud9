@@ -7,6 +7,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/rules"
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 	"github.com/ywacch/cloud9/pkg/templates"
 )
 
@@ -47,6 +48,7 @@ type AIContextInput struct {
 	Hist         []metrics.DeploymentMetrics
 	Final        *metrics.DeploymentMetrics
 	Template     *templates.TemplateSpec
+	TraceSamples []trace.JourneySample
 }
 
 // BuildAIContext assembles the baseline run from design_config, the fact ledger,
@@ -67,6 +69,7 @@ func BuildAIContext(in AIContextInput) AIContext {
 		Hist:         in.Hist,
 		Final:        final,
 		Template:     in.Template,
+		TraceSamples: in.TraceSamples,
 	})
 	facts := []metrics.Fact{}
 	if ledger != nil {

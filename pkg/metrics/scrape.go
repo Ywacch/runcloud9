@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 )
 
 type rabbitCounterSnapshot struct {
@@ -256,6 +258,53 @@ func (c *MetricsCollector) scrapeAppTrafficConsistency(ctx context.Context, nsSe
 	), "replica")
 	if len(rates) > 0 {
 		out.ReadRateByReplica = rates
+	}
+	return out
+}
+
+type traceSamplesPayload struct {
+	Samples []trace.JourneySample `json:"samples"`
+}
+
+// scrapeTraceSamples returns sampled request journeys from app-server.
+func (c *MetricsCollector) scrapeTraceSamples(ctx context.Context, namespace string) []trace.JourneySample {
+	if c == nil || c.scrapeClient == nil || namespace == "" {
+		return nil
+	}
+	u := fmt.Sprintf("http://app-server.%s.svc.cluster.local:8080/trace/samples", namespace)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil
+	}
+	resp, err := c.scrapeClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
+	if err != nil {
+		return nil
+	}
+	return parseTraceSamplesJSON(body)
+}
+
+func parseTraceSamplesJSON(body []byte) []trace.JourneySample {
+	var payload traceSamplesPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil
+	}
+	if len(payload.Samples) == 0 {
+		return nil
+	}
+	out := make([]trace.JourneySample, 0, len(payload.Samples))
+	for _, s := range payload.Samples {
+		if strings.TrimSpace(s.RequestID) == "" {
+			continue
+		}
+		out = append(out, s)
 	}
 	return out
 }

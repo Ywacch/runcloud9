@@ -15,9 +15,11 @@ import (
 func withMetrics(pathPattern string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r = trace.ContextFromRequest(r)
+		r = trace.BindJourney(r, pathPattern)
 		start := time.Now()
 		rw := &statusResponseWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rw, r)
+		trace.FinishJourney(r.Context(), time.Since(start))
 		duration := time.Since(start).Seconds()
 
 		httpRequestsTotal.WithLabelValues(

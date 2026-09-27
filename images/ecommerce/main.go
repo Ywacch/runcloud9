@@ -22,6 +22,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/templateapp/consistency"
 	"github.com/ywacch/cloud9/pkg/templateapp/postgres"
 	"github.com/ywacch/cloud9/pkg/templateapp/readrouter"
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 )
 
 type Config struct {
@@ -174,6 +175,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.Handle("/health/ready", withRecovery(http.HandlerFunc(s.handleReady)))
 	mux.Handle("/cache-stats", withRecovery(http.HandlerFunc(s.handleCacheStats)))
 	mux.Handle("/consistency/samples", withRecovery(consistency.SamplesHandler(s.verifier, s.db.ReplicaSamplesSource())))
+	mux.Handle("/trace/samples", withRecovery(trace.SamplesHandler(trace.DefaultStore())))
 	mux.Handle("/metrics", promhttp.Handler())
 
 	return mux

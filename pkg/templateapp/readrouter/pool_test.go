@@ -112,6 +112,9 @@ func TestQueryRead_replicaRoundRobinRotatesTargets(t *testing.T) {
 func TestQueryRead_incrementsDBReadByReplicaHost(t *testing.T) {
 	t.Parallel()
 
+	// Unique replica label so parallel tests do not race on the global db_read_total vec.
+	const metricHost = "test-increment-db-read-by-replica-host"
+
 	replica := stubPool{row: stubRow{}}
 	leader := stubPool{row: stubRow{}}
 	r := &ReadRouter{
@@ -123,7 +126,7 @@ func TestQueryRead_incrementsDBReadByReplicaHost(t *testing.T) {
 		writePool:   leader,
 		writeTarget: defaultWriteTarget,
 		readPools: []replicaEntry{
-			{pool: replica, host: "postgres-replica-0"},
+			{pool: replica, host: metricHost},
 		},
 	}
 	build := func(readTokenExpr string) (string, []any) {
@@ -132,17 +135,17 @@ func TestQueryRead_incrementsDBReadByReplicaHost(t *testing.T) {
 	scan := func(row pgx.Row, replayToken *string) error {
 		return row.Scan(new(int))
 	}
-	before := testutil.ToFloat64(dbReadTotal.WithLabelValues("postgres-replica-0"))
+	before := testutil.ToFloat64(dbReadTotal.WithLabelValues(metricHost))
 	_, target, err := r.QueryRead(context.Background(), "client-metrics", build, scan)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if target != "postgres-replica-0" {
+	if target != metricHost {
 		t.Fatalf("target: %q", target)
 	}
-	after := testutil.ToFloat64(dbReadTotal.WithLabelValues("postgres-replica-0"))
+	after := testutil.ToFloat64(dbReadTotal.WithLabelValues(metricHost))
 	if after-before != 1 {
-		t.Fatalf("db_read_total replica-0: before %v after %v", before, after)
+		t.Fatalf("db_read_total %s: before %v after %v", metricHost, before, after)
 	}
 }
 

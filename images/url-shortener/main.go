@@ -23,6 +23,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/ywacch/cloud9/pkg/templateapp/postgres"
 	"github.com/ywacch/cloud9/pkg/templateapp/readrouter"
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 )
 
 type Config struct {
@@ -195,6 +196,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.Handle("/health/ready", withRecovery(http.HandlerFunc(s.handleReady)))
 	mux.Handle("/cache-stats", withRecovery(http.HandlerFunc(s.handleCacheStats)))
 	mux.Handle("/code-pool", withRecovery(http.HandlerFunc(s.handleCodePool)))
+	mux.Handle("/trace/samples", withRecovery(trace.SamplesHandler(trace.DefaultStore())))
 
 	// promhttp.Handler() serves the Prometheus exposition format
 	// that Prometheus scrapes. This is separate from /cache-stats (our JSON endpoint).

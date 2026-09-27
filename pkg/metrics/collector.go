@@ -58,6 +58,9 @@ type MetricsCollector struct {
 	history                 map[string]*RingBuffer // namespace → last 300 snapshots
 	clientLatencyMu         sync.Mutex
 	clientLatency           map[string]*clientLatencyAccumulator
+	traceSampleMu           sync.Mutex
+	traceSamples            map[string]*traceSampleAccumulator
+	traceCollectTick        map[string]int
 	mqRateMu                sync.Mutex
 	mqRates                 map[string]rabbitCounterSnapshot
 	podHealthMu             sync.Mutex
@@ -262,6 +265,9 @@ func (c *MetricsCollector) SessionSummary(namespace string, base map[string]any,
 	}
 	if clh := c.ClientLatencyHistoryFor(namespace); len(clh) > 0 {
 		summary["client_latency_history"] = clh
+	}
+	if ts := c.TraceSamplesFor(namespace); len(ts) > 0 {
+		summary["trace_samples"] = ts
 	}
 	return appendSessionFreshness(summary, dm)
 }
@@ -1293,6 +1299,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		ev = append(ev, c.consistency.Eval(namespace, dm, topo, tmpl)...)
 	}
 	dm.Events = ev
+
+	c.maybeScrapeTraceSamples(ctx, namespace)
 
 	c.historyMu.Lock()
 	if c.history == nil {

@@ -99,6 +99,10 @@ func SetOutboundHeaders(req *http.Request, ctx context.Context) {
 
 // LogDB logs a database operation when tracing is enabled.
 func LogDB(ctx context.Context, operation string, start time.Time) {
+	elapsed := time.Since(start)
+	if Sampled(ctx) {
+		RecordSpan(ctx, "db", operation, elapsed)
+	}
 	if !ShouldTrace(ctx) {
 		return
 	}
@@ -106,11 +110,15 @@ func LogDB(ctx context.Context, operation string, start time.Time) {
 	if rid == "" {
 		return
 	}
-	slog.Info("db op", "request_id", rid, "op", "db_query", "operation", operation, "duration_ms", time.Since(start).Milliseconds())
+	slog.Info("db op", "request_id", rid, "op", "db_query", "operation", operation, "duration_ms", elapsed.Milliseconds())
 }
 
 // LogCacheGet logs a cache get when tracing is enabled.
 func LogCacheGet(ctx context.Context, key string, hit bool, start time.Time) {
+	elapsed := time.Since(start)
+	if Sampled(ctx) {
+		RecordSpan(ctx, "cache", "cache_get", elapsed)
+	}
 	if !ShouldTrace(ctx) {
 		return
 	}
@@ -118,11 +126,15 @@ func LogCacheGet(ctx context.Context, key string, hit bool, start time.Time) {
 	if rid == "" {
 		return
 	}
-	slog.Info("cache op", "request_id", rid, "op", "cache_get", "key", key, "hit", hit, "duration_ms", time.Since(start).Milliseconds())
+	slog.Info("cache op", "request_id", rid, "op", "cache_get", "key", key, "hit", hit, "duration_ms", elapsed.Milliseconds())
 }
 
 // LogCacheSet logs a cache set when tracing is enabled.
 func LogCacheSet(ctx context.Context, key string, start time.Time) {
+	elapsed := time.Since(start)
+	if Sampled(ctx) {
+		RecordSpan(ctx, "cache", "cache_set", elapsed)
+	}
 	if !ShouldTrace(ctx) {
 		return
 	}
@@ -130,11 +142,15 @@ func LogCacheSet(ctx context.Context, key string, start time.Time) {
 	if rid == "" {
 		return
 	}
-	slog.Info("cache op", "request_id", rid, "op", "cache_set", "key", key, "duration_ms", time.Since(start).Milliseconds())
+	slog.Info("cache op", "request_id", rid, "op", "cache_set", "key", key, "duration_ms", elapsed.Milliseconds())
 }
 
 // LogCacheDelete logs a cache delete when tracing is enabled.
 func LogCacheDelete(ctx context.Context, start time.Time) {
+	elapsed := time.Since(start)
+	if Sampled(ctx) {
+		RecordSpan(ctx, "cache", "cache_del", elapsed)
+	}
 	if !ShouldTrace(ctx) {
 		return
 	}
@@ -142,11 +158,15 @@ func LogCacheDelete(ctx context.Context, start time.Time) {
 	if rid == "" {
 		return
 	}
-	slog.Info("cache op", "request_id", rid, "op", "cache_del", "duration_ms", time.Since(start).Milliseconds())
+	slog.Info("cache op", "request_id", rid, "op", "cache_del", "duration_ms", elapsed.Milliseconds())
 }
 
 // LogProxy logs a caching-proxy operation when tracing is enabled.
 func LogProxy(ctx context.Context, op, key string, start time.Time) {
+	elapsed := time.Since(start)
+	if Sampled(ctx) {
+		RecordSpan(ctx, "cache", op, elapsed)
+	}
 	if !ShouldTrace(ctx) {
 		return
 	}
@@ -154,11 +174,15 @@ func LogProxy(ctx context.Context, op, key string, start time.Time) {
 	if rid == "" {
 		return
 	}
-	slog.Info("proxy op", "request_id", rid, "op", op, "key", key, "duration_ms", time.Since(start).Milliseconds())
+	slog.Info("proxy op", "request_id", rid, "op", op, "key", key, "duration_ms", elapsed.Milliseconds())
 }
 
 // LogWorker logs a worker operation when tracing is enabled.
 func LogWorker(ctx context.Context, op string, start time.Time) {
+	elapsed := time.Since(start)
+	if Sampled(ctx) {
+		RecordSpan(ctx, "mq", op, elapsed)
+	}
 	if !ShouldTrace(ctx) {
 		return
 	}
@@ -166,5 +190,5 @@ func LogWorker(ctx context.Context, op string, start time.Time) {
 	if rid == "" {
 		return
 	}
-	slog.Info("worker op", "request_id", rid, "op", op, "duration_ms", time.Since(start).Milliseconds())
+	slog.Info("worker op", "request_id", rid, "op", op, "duration_ms", elapsed.Milliseconds())
 }

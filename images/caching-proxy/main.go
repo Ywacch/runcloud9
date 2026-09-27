@@ -108,35 +108,40 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle("/get/", withRecovery(withTrace(s.handleGet)))       // GET /get/{code}
-	mux.Handle("/set/", withRecovery(withTrace(s.handleSet)))       // POST /set/{code}
-	mux.Handle("/del/", withRecovery(withTrace(s.handleDel)))       // DELETE /del/{code}
-	mux.Handle("/exists/", withRecovery(withTrace(s.handleExists))) // GET /exists/{code}
-	mux.Handle("/stats/", withRecovery(withTrace(s.handleStats)))   // GET /stats/{code}
-	mux.Handle("/codes", withRecovery(s.handleCodes))
-	mux.Handle("/health", withRecovery(s.handleHealth))
-	mux.Handle("/health/live", withRecovery(s.handleLive))
-	mux.Handle("/health/ready", withRecovery(s.handleReady))
+	mux.Handle("/get/", withRecovery(withTrace("/get", s.handleGet)))          // GET /get/{code}
+	mux.Handle("/set/", withRecovery(withTrace("/set", s.handleSet)))          // POST /set/{code}
+	mux.Handle("/del/", withRecovery(withTrace("/del", s.handleDel)))          // DELETE /del/{code}
+	mux.Handle("/exists/", withRecovery(withTrace("/exists", s.handleExists))) // GET /exists/{code}
+	mux.Handle("/stats/", withRecovery(withTrace("/stats", s.handleStats)))    // GET /stats/{code}
+	mux.Handle("/codes", withRecovery(http.HandlerFunc(s.handleCodes)))
+	mux.Handle("/health", withRecovery(http.HandlerFunc(s.handleHealth)))
+	mux.Handle("/health/live", withRecovery(http.HandlerFunc(s.handleLive)))
+	mux.Handle("/health/ready", withRecovery(http.HandlerFunc(s.handleReady)))
+	mux.Handle("/trace/samples", withRecovery(trace.SamplesHandler(trace.DefaultStore())))
 	mux.Handle("/metrics", promhttp.Handler())
 	return mux
 }
 
-func withTrace(next http.HandlerFunc) http.HandlerFunc {
+func withTrace(routePattern string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		next(w, trace.ContextFromRequest(r))
+		r = trace.ContextFromRequest(r)
+		r = trace.BindJourney(r, routePattern)
+		start := time.Now()
+		next(w, r)
+		trace.FinishJourney(r.Context(), time.Since(start))
 	}
 }
 
-func withRecovery(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func withRecovery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
 				slog.Error("panic recovered", "error", rec)
 				jsonError(w, http.StatusInternalServerError, "internal server error")
 			}
 		}()
-		next(w, r)
-	}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
