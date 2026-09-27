@@ -1365,16 +1365,16 @@ func (h *Handler) writeDiagnosticsSummary(namespace, url, outcome, collectionRea
 }
 
 // generateNamespace returns a DNS-safe namespace that avoids same-second collisions.
-// Format: cloud9-{template}-{userPrefix}-{random6}
+// Format: cloud9-{template}-{userPrefix}-{random8}
 func generateNamespace(template, userID string) string {
 	tpl := sanitizeNamespacePart(template, "template", 20)
 	uid := sanitizeNamespacePart(userID, "dev-user", 8)
 
-	b := make([]byte, 3) // 6 hex chars
+	b := make([]byte, 4) // 8 hex chars
 	if _, err := crand.Read(b); err != nil {
 		// Very unlikely; fallback keeps rollout unblocked while still being mostly unique.
 		now := time.Now().UnixNano()
-		return fmt.Sprintf("cloud9-%s-%s-%06x", tpl, uid, now&0xFFFFFF)
+		return fmt.Sprintf("cloud9-%s-%s-%08x", tpl, uid, uint32(now&0xFFFFFFFF))
 	}
 	return fmt.Sprintf("cloud9-%s-%s-%x", tpl, uid, b)
 }

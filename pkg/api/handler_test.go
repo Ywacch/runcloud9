@@ -1774,7 +1774,7 @@ func TestHandleStartLoadGen_RequestBodyTooLarge(t *testing.T) {
 
 func TestGenerateNamespace_FormatAndUniqueness(t *testing.T) {
 	t.Parallel()
-	re := regexp.MustCompile(`^cloud9-[a-z0-9-]+-[a-z0-9-]+-[a-f0-9]{6}$`)
+	re := regexp.MustCompile(`^cloud9-[a-z0-9-]+-[a-z0-9-]+-[a-f0-9]{8}$`)
 	seen := map[string]bool{}
 	for i := 0; i < 200; i++ {
 		ns := generateNamespace("url-shortener", "dev-user")
