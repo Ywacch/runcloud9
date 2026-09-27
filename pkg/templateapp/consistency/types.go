@@ -22,6 +22,24 @@ type Sample struct {
 	At        time.Time `json:"at"`
 }
 
+// ReplicaSample is a bounded replica consistency violation row from the read router.
+type ReplicaSample struct {
+	Kind          string    `json:"kind"`
+	TableOrKey    string    `json:"tableOrKey,omitempty"`
+	ReplicaHost   string    `json:"replicaHost"`
+	WriteToken    string    `json:"writeToken"`
+	ObservedToken string    `json:"observedToken"`
+	LagBytes      int64     `json:"lagBytes"`
+	At            time.Time `json:"at"`
+	RequestID     string    `json:"requestId"`
+	ClientIDHash  string    `json:"clientIdHash"`
+}
+
+// ReplicaSamplesSource exposes read-router violation samples for /consistency/samples.
+type ReplicaSamplesSource interface {
+	ReplicaSamples() []ReplicaSample
+}
+
 // TruthReader loads the source-of-truth value for a cache key (primary DB in cache-aside).
 type TruthReader func(ctx context.Context, key string) (truth string, err error)
 

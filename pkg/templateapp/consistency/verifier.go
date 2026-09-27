@@ -126,15 +126,23 @@ func (v *Verifier) Samples() []Sample {
 	return out
 }
 
-// SamplesHandler serves GET JSON {"samples":[...]} for the latest stale evidence rows.
-func SamplesHandler(v *Verifier) http.Handler {
+type samplesResponse struct {
+	Samples        []Sample        `json:"samples"`
+	ReplicaSamples []ReplicaSample `json:"replicaSamples"`
+}
+
+// SamplesHandler serves GET JSON with cache stale rows and optional read-router replica samples.
+func SamplesHandler(v *Verifier, replicaSrc ReplicaSamplesSource) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if v == nil {
-			_ = json.NewEncoder(w).Encode(map[string][]Sample{"samples": {}})
-			return
+		resp := samplesResponse{Samples: []Sample{}, ReplicaSamples: []ReplicaSample{}}
+		if v != nil {
+			resp.Samples = v.Samples()
 		}
-		_ = json.NewEncoder(w).Encode(map[string][]Sample{"samples": v.Samples()})
+		if replicaSrc != nil {
+			resp.ReplicaSamples = replicaSrc.ReplicaSamples()
+		}
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 }
 

@@ -104,7 +104,7 @@ func (r *ReadRouter) queryReplicaRoundRobin(
 					return "", errRYWRedirectLeader
 				}
 				incDBRead(entry.host)
-				r.recordReadAgainst(clientID, tok, writeBaseline)
+				r.recordReadAgainst(ctx, clientID, entry.host, "", tok, writeBaseline)
 				return entry.host, nil
 			}
 			incDBRead(entry.host)
@@ -233,7 +233,7 @@ func (r *ReadRouter) queryRowsReplicaRoundRobin(
 
 		incDBRead(entry.host)
 		if tok != nil {
-			r.recordReadAgainst(clientID, tok, writeBaseline)
+			r.recordReadAgainst(ctx, clientID, entry.host, "", tok, writeBaseline)
 		}
 		return entry.host, nil
 	}

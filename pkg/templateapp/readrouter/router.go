@@ -13,6 +13,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/ywacch/cloud9/pkg/templateapp/consistency"
 )
 
 const (
@@ -143,6 +145,9 @@ type ReadRouter struct {
 	writeTarget string
 	readPools   []replicaEntry
 	rrIndex     atomic.Uint64
+
+	sampleMu         sync.RWMutex
+	violationSamples []consistency.ReplicaSample
 }
 
 // NewReadRouter builds a router. Pools may be nil when only testing enforcement.
@@ -263,10 +268,12 @@ func (r *ReadRouter) RecordRead(clientID string, t ConsistencyToken) (rywViolati
 		if st.lastWrite != nil && !t.GTE(st.lastWrite) {
 			rywViolation = true
 			rywViolationsTotal.Inc()
+			r.recordViolationSample(context.Background(), "ryw", clientID, "", "", st.lastWrite, t)
 		}
 	case PolicyReplica:
 		if st.lastWrite != nil && !t.GTE(st.lastWrite) {
 			replicaStaleReadsTotal.Inc()
+			r.recordViolationSample(context.Background(), "replica_stale", clientID, "", "", st.lastWrite, t)
 		}
 	}
 
@@ -275,6 +282,7 @@ func (r *ReadRouter) RecordRead(clientID string, t ConsistencyToken) (rywViolati
 		if st.lastRead != nil && !t.GTE(st.lastRead) {
 			monotonicViolation = true
 			monotonicViolationsTotal.Inc()
+			r.recordViolationSample(context.Background(), "monotonic", clientID, "", "", st.lastRead, t)
 		}
 	}
 	return rywViolation, monotonicViolation
@@ -284,7 +292,11 @@ func (r *ReadRouter) RecordRead(clientID string, t ConsistencyToken) (rywViolati
 // the start of QueryRows. RYW and replica-stale checks compare against
 // writeBaseline, not live lastWrite, so concurrent writes during run() do not
 // count as violations.
-func (r *ReadRouter) recordReadAgainst(clientID string, t, writeBaseline ConsistencyToken) (rywViolation, monotonicViolation bool) {
+func (r *ReadRouter) recordReadAgainst(
+	ctx context.Context,
+	clientID, replicaHost, tableOrKey string,
+	t, writeBaseline ConsistencyToken,
+) (rywViolation, monotonicViolation bool) {
 	if clientID == "" || t == nil {
 		return false, false
 	}
@@ -301,10 +313,12 @@ func (r *ReadRouter) recordReadAgainst(clientID string, t, writeBaseline Consist
 		if tokenBehindBaseline(t, writeBaseline) {
 			rywViolation = true
 			rywViolationsTotal.Inc()
+			r.recordViolationSample(ctx, "ryw", clientID, replicaHost, tableOrKey, writeBaseline, t)
 		}
 	case PolicyReplica:
 		if tokenBehindBaseline(t, writeBaseline) {
 			replicaStaleReadsTotal.Inc()
+			r.recordViolationSample(ctx, "replica_stale", clientID, replicaHost, tableOrKey, writeBaseline, t)
 		}
 	}
 
@@ -313,6 +327,7 @@ func (r *ReadRouter) recordReadAgainst(clientID string, t, writeBaseline Consist
 		if st.lastRead != nil && !t.GTE(st.lastRead) {
 			monotonicViolation = true
 			monotonicViolationsTotal.Inc()
+			r.recordViolationSample(ctx, "monotonic", clientID, replicaHost, tableOrKey, st.lastRead, t)
 		}
 	}
 	return rywViolation, monotonicViolation

@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/ywacch/cloud9/pkg/templateapp/consistency"
 	"github.com/ywacch/cloud9/pkg/templateapp/postgres"
 	"github.com/ywacch/cloud9/pkg/templateapp/readrouter"
 	"github.com/ywacch/cloud9/pkg/templateapp/trace"
@@ -71,6 +72,16 @@ func (db *DB) Close() {
 			p.Close()
 		}
 	}
+}
+
+func (db *DB) ReplicaSamplesSource() consistency.ReplicaSamplesSource {
+	if db == nil {
+		return nil
+	}
+	if ptr, ok := db.router.(*readrouter.ReadRouter); ok {
+		return ptr
+	}
+	return nil
 }
 
 func routerActive(r readSplitRouter) bool {

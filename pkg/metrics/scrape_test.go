@@ -70,11 +70,20 @@ func TestParseConsistencySamplesJSON(t *testing.T) {
 			body: `{`,
 		},
 	}
+	t.Run("replica samples", func(t *testing.T) {
+		t.Parallel()
+		body := `{"samples":[],"replicaSamples":[{"kind":"ryw","replicaHost":"postgres-replica-0","writeToken":"A/B","observedToken":"A/A","lagBytes":8,"requestId":"rid-r"}]}`
+		_, replicas := parseConsistencySamplesJSON([]byte(body))
+		if len(replicas) != 1 || replicas[0].Kind != "ryw" || replicas[0].ReplicaHost != "postgres-replica-0" {
+			t.Fatalf("replicas: %+v", replicas)
+		}
+	})
+
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := parseConsistencySamplesJSON([]byte(tc.body))
+			got, replicas := parseConsistencySamplesJSON([]byte(tc.body))
 			if got.Key != tc.wantKey {
 				t.Fatalf("key=%q want %q full=%+v", got.Key, tc.wantKey, got)
 			}
@@ -82,6 +91,9 @@ func TestParseConsistencySamplesJSON(t *testing.T) {
 				if got.Served != "5" || got.Truth != "2" || got.RequestID != "rid-1" {
 					t.Fatalf("sample=%+v", got)
 				}
+			}
+			if len(replicas) != 0 {
+				t.Fatalf("replicas=%+v", replicas)
 			}
 		})
 	}

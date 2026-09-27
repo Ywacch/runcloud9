@@ -113,7 +113,7 @@ func (cd *ConsistencyDetector) evalPartitionAsyncCAP(namespace string, now time.
 		return nil
 	}
 	cd.incrementViolation(namespace, rulePartitionStaleReads)
-	return []Event{cd.partitionStaleReadsEvent(now, part, mode)}
+	return []Event{cd.partitionStaleReadsEvent(now, part, mode, dm)}
 }
 
 func (cd *ConsistencyDetector) evalPartitionSyncCAP(namespace string, now time.Time, dm *DeploymentMetrics, part PartitionContext, mode string) []Event {
@@ -187,10 +187,20 @@ func maxReplicaLagSeconds(dm *DeploymentMetrics) float64 {
 	return maxLag
 }
 
-func (cd *ConsistencyDetector) partitionStaleReadsEvent(now time.Time, part PartitionContext, mode string) Event {
+func (cd *ConsistencyDetector) partitionStaleReadsEvent(now time.Time, part PartitionContext, mode string, dm *DeploymentMetrics) Event {
 	desc := "Under partition, replicas can fall behind while writes keep succeeding"
 	if part.Scenario != "" {
 		desc = fmt.Sprintf("Partition %s on %s: reads can go stale while %s replication keeps accepting writes", part.Scenario, part.TargetComponent, mode)
+	}
+	lagSec := maxReplicaLagSeconds(dm)
+	lagBytes := maxReplicaLagBytes(dm)
+	detail := map[string]string{
+		"scenario":        part.Scenario,
+		"targetComponent": part.TargetComponent,
+		"replicationMode": mode,
+		"capTradeoff":     "availability_over_consistency",
+		"lagSeconds":      fmt.Sprintf("%g", lagSec),
+		"lagBytes":        fmt.Sprintf("%d", lagBytes),
 	}
 	return Event{
 		Timestamp:   now,
@@ -201,13 +211,28 @@ func (cd *ConsistencyDetector) partitionStaleReadsEvent(now time.Time, part Part
 		Visibility:  VisibilityStudent,
 		Title:       "Consistency degraded under partition",
 		Description: desc,
-		Detail: map[string]string{
-			"scenario":        part.Scenario,
-			"targetComponent": part.TargetComponent,
-			"replicationMode": mode,
-			"capTradeoff":     "availability_over_consistency",
-		},
+		Detail:      detail,
 	}
+}
+
+func maxReplicaLagBytes(dm *DeploymentMetrics) int64 {
+	if dm == nil {
+		return 0
+	}
+	db, ok := dm.Components["db"]
+	if !ok {
+		return 0
+	}
+	var maxLag int64
+	for _, layer := range db.Layers {
+		if layer.LagBytes == nil {
+			continue
+		}
+		if *layer.LagBytes > maxLag {
+			maxLag = *layer.LagBytes
+		}
+	}
+	return maxLag
 }
 
 func (cd *ConsistencyDetector) partitionWriteStallEvent(now time.Time, part PartitionContext, mode string, dm *DeploymentMetrics) Event {

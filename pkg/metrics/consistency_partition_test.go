@@ -13,6 +13,35 @@ func eventForRule(ev []Event, ruleID string) (Event, bool) {
 	return Event{}, false
 }
 
+func TestPartitionStaleReads_DetailIncludesLag(t *testing.T) {
+	t.Parallel()
+
+	lag := 0.12
+	lagBytes := int64(4096)
+	cd := NewConsistencyDetector(&stubConsistencyProbeReader{ok: false})
+	ns := "ns-partition-lag"
+	topo := TopologyFlags{HasDB: true, ReplicationMode: "async"}
+	dm := &DeploymentMetrics{Components: map[string]ComponentMetrics{
+		"db": {
+			Component: "db",
+			Layers: []ComponentLayerMetrics{{
+				ReplicationLagSeconds: &lag,
+				LagBytes:              &lagBytes,
+			}},
+		},
+	}}
+
+	cd.NoteActivePartition(ns, &PartitionContext{Scenario: "stall_replica", TargetComponent: "db"})
+	ev := cd.Eval(ns, dm, topo, nil)
+	partEv, ok := eventForRule(ev, rulePartitionStaleReads)
+	if !ok {
+		t.Fatalf("events: %+v", ev)
+	}
+	if partEv.Detail["lagSeconds"] != "0.12" || partEv.Detail["lagBytes"] != "4096" {
+		t.Fatalf("detail: %+v", partEv.Detail)
+	}
+}
+
 func TestConsistencyDetector_PartitionCAP(t *testing.T) {
 	t.Parallel()
 
