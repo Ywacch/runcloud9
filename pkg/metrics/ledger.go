@@ -18,6 +18,7 @@ import (
 //   - fact:event:{index}
 //   - fact:rule:{ruleID}
 //   - fact:violation:{ruleID}
+//   - fact:wiring:{sourceNode}->{targetNode}.{field}
 type FactRef string
 
 // FactKind categorizes ledger entries for verifier checks.
@@ -29,6 +30,7 @@ const (
 	FactKindRule       = "rule"
 	FactKindViolation  = "violation"
 	FactKindDerived    = "derived"
+	FactKindWiring     = "wiring"
 )
 
 // Fact is one citable object in a session fact ledger.
@@ -50,6 +52,7 @@ type Ledger struct {
 // LedgerInput feeds BuildLedger from session evidence projections.
 type LedgerInput struct {
 	DesignConfig deployer.DesignConfig
+	Design       *deployer.DeploymentDesign
 	Hist         []DeploymentMetrics
 	Final        *DeploymentMetrics
 	Template     *templates.TemplateSpec
@@ -60,6 +63,8 @@ type LedgerInput struct {
 func BuildLedger(in LedgerInput) *Ledger {
 	l := &Ledger{index: make(map[FactRef]int)}
 	appendConfigFacts(l, in.DesignConfig)
+	appendLoadgenMixFacts(l, in.DesignConfig.Template, in.Template)
+	appendWiringFacts(l, in.Design)
 
 	final := in.Final
 	if final == nil && len(in.Hist) > 0 {

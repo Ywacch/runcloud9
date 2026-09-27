@@ -29,9 +29,9 @@ func (h *Handler) handleAIContext(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch row.Status {
 	case "terminated":
-		ctx, err = aiContextFromSummary(namespace, row.Template, dc, row.MetricsSummary)
+		ctx, err = aiContextFromSummary(namespace, row.Template, dc, design, row.MetricsSummary)
 	default:
-		ctx = h.aiContextFromLive(namespace, row.Template, dc)
+		ctx = h.aiContextFromLive(namespace, row.Template, dc, design)
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -42,7 +42,7 @@ func (h *Handler) handleAIContext(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(ctx)
 }
 
-func (h *Handler) aiContextFromLive(namespace, template string, dc deployer.DesignConfig) AIContext {
+func (h *Handler) aiContextFromLive(namespace, template string, dc deployer.DesignConfig, design *deployer.DeploymentDesign) AIContext {
 	var hist []metrics.DeploymentMetrics
 	var latest *metrics.DeploymentMetrics
 	if h.metricsCollector != nil {
@@ -52,15 +52,15 @@ func (h *Handler) aiContextFromLive(namespace, template string, dc deployer.Desi
 		}
 		latest = h.metricsCollector.Latest(namespace)
 	}
-	in := AIContextInputFromDeployment(namespace, template, dc, hist, finalSnapshot(hist, latest))
+	in := AIContextInputFromDeploymentDesign(namespace, template, dc, design, hist, finalSnapshot(hist, latest))
 	return BuildAIContext(in)
 }
 
-func aiContextFromSummary(namespace, template string, dc deployer.DesignConfig, summary map[string]any) (AIContext, error) {
+func aiContextFromSummary(namespace, template string, dc deployer.DesignConfig, design *deployer.DeploymentDesign, summary map[string]any) (AIContext, error) {
 	hist, err := SessionHistoryFromSummary(summary)
 	if err != nil {
 		return AIContext{}, err
 	}
-	in := AIContextInputFromDeployment(namespace, template, dc, hist, finalSnapshot(hist, nil))
+	in := AIContextInputFromDeploymentDesign(namespace, template, dc, design, hist, finalSnapshot(hist, nil))
 	return BuildAIContext(in), nil
 }

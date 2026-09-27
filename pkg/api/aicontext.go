@@ -44,6 +44,7 @@ type Run struct {
 type AIContextInput struct {
 	SessionID    string
 	DesignConfig deployer.DesignConfig
+	Design       *deployer.DeploymentDesign
 	Hist         []metrics.DeploymentMetrics
 	Final        *metrics.DeploymentMetrics
 	Template     *templates.TemplateSpec
@@ -64,6 +65,7 @@ func BuildAIContext(in AIContextInput) AIContext {
 
 	ledger := metrics.BuildLedger(metrics.LedgerInput{
 		DesignConfig: in.DesignConfig,
+		Design:       in.Design,
 		Hist:         in.Hist,
 		Final:        final,
 		Template:     in.Template,
@@ -92,9 +94,20 @@ func BuildAIContext(in AIContextInput) AIContext {
 }
 
 // AIContextInputFromDeployment maps a stored deployment row into builder input.
-func AIContextInputFromDeployment(namespace, template string, design deployer.DesignConfig, hist []metrics.DeploymentMetrics, final *metrics.DeploymentMetrics) AIContextInput {
-	if design.Template == "" {
-		design.Template = template
+func AIContextInputFromDeployment(namespace, template string, dc deployer.DesignConfig, hist []metrics.DeploymentMetrics, final *metrics.DeploymentMetrics) AIContextInput {
+	return AIContextInputFromDeploymentDesign(namespace, template, dc, nil, hist, final)
+}
+
+// AIContextInputFromDeploymentDesign builds AI context input with optional full design for wiring facts.
+func AIContextInputFromDeploymentDesign(
+	namespace, template string,
+	dc deployer.DesignConfig,
+	design *deployer.DeploymentDesign,
+	hist []metrics.DeploymentMetrics,
+	final *metrics.DeploymentMetrics,
+) AIContextInput {
+	if dc.Template == "" {
+		dc.Template = template
 	}
 	var tmpl *templates.TemplateSpec
 	if template != "" {
@@ -102,7 +115,8 @@ func AIContextInputFromDeployment(namespace, template string, design deployer.De
 	}
 	return AIContextInput{
 		SessionID:    namespace,
-		DesignConfig: design,
+		DesignConfig: dc,
+		Design:       design,
 		Hist:         hist,
 		Final:        final,
 		Template:     tmpl,
