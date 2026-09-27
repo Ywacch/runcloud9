@@ -17,6 +17,46 @@ func (s *stubConsistencyProbeReader) Latest(string) (probes.ProbeResult, bool) {
 	return s.result, s.ok
 }
 
+func TestRYWEvent_AttachesReplicaSample(t *testing.T) {
+	t.Parallel()
+
+	cd := NewConsistencyDetector(&stubConsistencyProbeReader{ok: false})
+	ns := "ns-ryw-sample"
+	topo := TopologyFlags{HasDB: true}
+	dm := &DeploymentMetrics{Components: map[string]ComponentMetrics{"db": {Component: "db"}}}
+
+	cd.NoteAppTrafficConsistency(ns, appTrafficConsistency{RYWTotal: 1})
+	cd.Eval(ns, dm, topo, nil)
+
+	cd.NoteAppTrafficConsistency(ns, appTrafficConsistency{RYWTotal: 1})
+	cd.Eval(ns, dm, topo, nil)
+	cd.NoteAppTrafficConsistency(ns, appTrafficConsistency{RYWTotal: 1})
+	cd.Eval(ns, dm, topo, nil)
+
+	cd.NoteAppCacheStale(ns, 0, cacheStaleSample{}, []replicaViolationSample{{
+		Kind:          "ryw",
+		ReplicaHost:   "postgres-replica-0",
+		WriteToken:    "1/2",
+		ObservedToken: "1/1",
+		LagBytes:      16,
+		RequestID:     "req-ryw",
+		ClientIDHash:  "deadbeef",
+	}})
+
+	cd.NoteAppTrafficConsistency(ns, appTrafficConsistency{RYWTotal: 2})
+	ev := cd.Eval(ns, dm, topo, nil)
+	if len(ev) != 1 {
+		t.Fatalf("events: %d", len(ev))
+	}
+	detail := ev[0].Detail
+	if detail["replicaHost"] != "postgres-replica-0" || detail["writeToken"] != "1/2" {
+		t.Fatalf("detail: %+v", detail)
+	}
+	if detail["requestId"] != "req-ryw" || detail["lagBytes"] != "16" {
+		t.Fatalf("detail: %+v", detail)
+	}
+}
+
 func TestConsistencyDetector_ReplicaStaleReadsOnStatus(t *testing.T) {
 	t.Parallel()
 
@@ -288,7 +328,7 @@ func TestConsistencyDetector_AppCacheStale(t *testing.T) {
 		RequestID: "req-abc",
 	}
 
-	cd.NoteAppCacheStale(ns, 1, sample)
+	cd.NoteAppCacheStale(ns, 1, sample, nil)
 	ev := cd.Eval(ns, dm, topo, nil)
 	if len(ev) != 1 {
 		t.Fatalf("want 1 event on 0→1, got %d", len(ev))
@@ -312,12 +352,12 @@ func TestConsistencyDetector_AppCacheStale(t *testing.T) {
 		t.Fatalf("status evidence: %+v", cons)
 	}
 
-	cd.NoteAppCacheStale(ns, 1, sample)
+	cd.NoteAppCacheStale(ns, 1, sample, nil)
 	if again := cd.Eval(ns, dm, topo, nil); len(again) != 0 {
 		t.Fatalf("same total should not refire, got %d", len(again))
 	}
 
-	cd.NoteAppCacheStale(ns, 2, sample)
+	cd.NoteAppCacheStale(ns, 2, sample, nil)
 	if refire := cd.Eval(ns, dm, topo, nil); len(refire) != 1 {
 		t.Fatalf("want refire on 1→2, got %d", len(refire))
 	}

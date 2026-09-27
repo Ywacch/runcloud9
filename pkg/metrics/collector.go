@@ -1280,7 +1280,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	if c.consistency != nil {
 		if topo.HasCache && topo.HasDB {
 			staleTotal, _, _ := c.queryScalar(ctx, fmt.Sprintf(`sum(consistency_read_stale_total{%s})`, nsSel))
-			c.consistency.NoteAppCacheStale(namespace, staleTotal, c.scrapeConsistencySample(ctx, namespace))
+			cacheSample, replicaSamples := c.scrapeConsistencySamples(ctx, namespace)
+			c.consistency.NoteAppCacheStale(namespace, staleTotal, cacheSample, replicaSamples)
 		}
 		if topo.HasDB {
 			c.noteActiveChaosPartition(ctx, namespace)

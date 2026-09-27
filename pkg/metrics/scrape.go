@@ -147,48 +147,81 @@ type consistencySamplesPayload struct {
 		Truth     string `json:"truth"`
 		RequestID string `json:"requestId"`
 	} `json:"samples"`
+	ReplicaSamples []struct {
+		Kind          string `json:"kind"`
+		TableOrKey    string `json:"tableOrKey"`
+		ReplicaHost   string `json:"replicaHost"`
+		WriteToken    string `json:"writeToken"`
+		ObservedToken string `json:"observedToken"`
+		LagBytes      int64  `json:"lagBytes"`
+		RequestID     string `json:"requestId"`
+		ClientIDHash  string `json:"clientIdHash"`
+	} `json:"replicaSamples"`
 }
 
-// scrapeConsistencySample returns the newest stale-read evidence row from app-server, or zero value on failure.
-func (c *MetricsCollector) scrapeConsistencySample(ctx context.Context, namespace string) cacheStaleSample {
+// scrapeConsistencySamples returns cache and replica violation rows from app-server.
+func (c *MetricsCollector) scrapeConsistencySamples(ctx context.Context, namespace string) (cacheStaleSample, []replicaViolationSample) {
 	if c == nil || c.scrapeClient == nil || namespace == "" {
-		return cacheStaleSample{}
+		return cacheStaleSample{}, nil
 	}
 	u := fmt.Sprintf("http://app-server.%s.svc.cluster.local:8080/consistency/samples", namespace)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return cacheStaleSample{}
+		return cacheStaleSample{}, nil
 	}
 	resp, err := c.scrapeClient.Do(req)
 	if err != nil {
-		return cacheStaleSample{}
+		return cacheStaleSample{}, nil
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return cacheStaleSample{}
+		return cacheStaleSample{}, nil
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if err != nil {
-		return cacheStaleSample{}
+		return cacheStaleSample{}, nil
 	}
-	return parseConsistencySamplesJSON(body)
+	cache, replicas := parseConsistencySamplesJSON(body)
+	return cache, replicas
 }
 
-func parseConsistencySamplesJSON(body []byte) cacheStaleSample {
+func parseConsistencySamplesJSON(body []byte) (cacheStaleSample, []replicaViolationSample) {
 	var payload consistencySamplesPayload
-	if err := json.Unmarshal(body, &payload); err != nil || len(payload.Samples) == 0 {
-		return cacheStaleSample{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return cacheStaleSample{}, nil
 	}
-	row := payload.Samples[0]
-	if strings.TrimSpace(row.Key) == "" {
-		return cacheStaleSample{}
+	var cache cacheStaleSample
+	if len(payload.Samples) > 0 {
+		row := payload.Samples[0]
+		if strings.TrimSpace(row.Key) != "" {
+			cache = cacheStaleSample{
+				Key:       row.Key,
+				Served:    row.Served,
+				Truth:     row.Truth,
+				RequestID: row.RequestID,
+			}
+		}
 	}
-	return cacheStaleSample{
-		Key:       row.Key,
-		Served:    row.Served,
-		Truth:     row.Truth,
-		RequestID: row.RequestID,
+	if len(payload.ReplicaSamples) == 0 {
+		return cache, nil
 	}
+	replicas := make([]replicaViolationSample, 0, len(payload.ReplicaSamples))
+	for _, row := range payload.ReplicaSamples {
+		if strings.TrimSpace(row.Kind) == "" {
+			continue
+		}
+		replicas = append(replicas, replicaViolationSample{
+			Kind:          row.Kind,
+			TableOrKey:    row.TableOrKey,
+			ReplicaHost:   row.ReplicaHost,
+			WriteToken:    row.WriteToken,
+			ObservedToken: row.ObservedToken,
+			LagBytes:      row.LagBytes,
+			RequestID:     row.RequestID,
+			ClientIDHash:  row.ClientIDHash,
+		})
+	}
+	return cache, replicas
 }
 
 // scrapeAppTrafficConsistency reads cumulative readrouter counters from Prometheus for student RYW/monotonic.

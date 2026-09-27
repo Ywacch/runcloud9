@@ -25,6 +25,12 @@ type cacheStaleSample struct {
 	Key, Served, Truth, RequestID string
 }
 
+// replicaViolationSample is a read-router consistency row scraped from app-server.
+type replicaViolationSample struct {
+	Kind, TableOrKey, ReplicaHost, WriteToken, ObservedToken, RequestID, ClientIDHash string
+	LagBytes                                                                          int64
+}
+
 // appTrafficConsistency is scraped readrouter Prometheus state for one Collect tick.
 type appTrafficConsistency struct {
 	RYWTotal          float64
@@ -43,9 +49,10 @@ type ConsistencyDetector struct {
 	suppressed map[string]map[string]bool
 	violations map[string]map[string]int64
 
-	appStaleTotal map[string]float64
-	appStaleSeen  map[string]float64
-	lastSample    map[string]cacheStaleSample
+	appStaleTotal      map[string]float64
+	appStaleSeen       map[string]float64
+	lastSample         map[string]cacheStaleSample
+	lastReplicaSamples map[string][]replicaViolationSample
 
 	appTraffic  map[string]appTrafficConsistency
 	appRYWSeen  map[string]float64
@@ -70,6 +77,7 @@ func NewConsistencyDetector(reader consistencyProbeReader) *ConsistencyDetector 
 		appStaleTotal:             make(map[string]float64),
 		appStaleSeen:              make(map[string]float64),
 		lastSample:                make(map[string]cacheStaleSample),
+		lastReplicaSamples:        make(map[string][]replicaViolationSample),
 		appTraffic:                make(map[string]appTrafficConsistency),
 		appRYWSeen:                make(map[string]float64),
 		appMonoSeen:               make(map[string]float64),
@@ -84,7 +92,7 @@ func NewConsistencyDetector(reader consistencyProbeReader) *ConsistencyDetector 
 
 // NoteAppCacheStale records the scraped app-server stale-read counter and optional evidence sample.
 // Call once per Collect tick before Eval.
-func (cd *ConsistencyDetector) NoteAppCacheStale(namespace string, total float64, sample cacheStaleSample) {
+func (cd *ConsistencyDetector) NoteAppCacheStale(namespace string, total float64, sample cacheStaleSample, replicaSamples []replicaViolationSample) {
 	if cd == nil || namespace == "" {
 		return
 	}
@@ -93,6 +101,9 @@ func (cd *ConsistencyDetector) NoteAppCacheStale(namespace string, total float64
 	cd.appStaleTotal[namespace] = total
 	if sample.Key != "" {
 		cd.lastSample[namespace] = sample
+	}
+	if len(replicaSamples) > 0 {
+		cd.lastReplicaSamples[namespace] = append([]replicaViolationSample(nil), replicaSamples...)
 	}
 }
 
@@ -164,6 +175,7 @@ func (cd *ConsistencyDetector) Cleanup(namespace string) {
 	delete(cd.appStaleTotal, namespace)
 	delete(cd.appStaleSeen, namespace)
 	delete(cd.lastSample, namespace)
+	delete(cd.lastReplicaSamples, namespace)
 	delete(cd.appTraffic, namespace)
 	delete(cd.appRYWSeen, namespace)
 	delete(cd.appMonoSeen, namespace)
@@ -206,7 +218,7 @@ func (cd *ConsistencyDetector) evalAppRYW(namespace string, now time.Time) []Eve
 	if total > lastSeen {
 		if cd.fire(namespace, ruleRYWViolation) {
 			cd.incrementViolation(namespace, ruleRYWViolation)
-			return []Event{cd.rywTrafficEvent(now, total-lastSeen)}
+			return []Event{cd.rywTrafficEvent(namespace, now, total-lastSeen)}
 		}
 		return nil
 	}
@@ -226,7 +238,7 @@ func (cd *ConsistencyDetector) evalAppMonotonic(namespace string, now time.Time)
 	if total > lastSeen {
 		if cd.fire(namespace, ruleMonotonicViolation) {
 			cd.incrementViolation(namespace, ruleMonotonicViolation)
-			return []Event{cd.monotonicTrafficEvent(now, total-lastSeen)}
+			return []Event{cd.monotonicTrafficEvent(namespace, now, total-lastSeen)}
 		}
 		return nil
 	}
@@ -293,11 +305,17 @@ func (cd *ConsistencyDetector) sampleFor(namespace string) (cacheStaleSample, bo
 	return sample, ok && sample.Key != ""
 }
 
-func (cd *ConsistencyDetector) rywTrafficEvent(now time.Time, delta float64) Event {
+func (cd *ConsistencyDetector) rywTrafficEvent(namespace string, now time.Time, delta float64) Event {
 	desc := "A replica read observed a write that has not replayed yet"
 	if delta >= 1 {
 		desc = fmt.Sprintf("App observed %.0f read-your-writes violation(s) on replica traffic", delta)
 	}
+	detail := map[string]string{
+		"kind":   "ryw",
+		"source": "traffic",
+		"delta":  fmt.Sprintf("%.0f", delta),
+	}
+	cd.attachReplicaSampleDetail(namespace, "ryw", detail)
 	return Event{
 		Timestamp:   now,
 		Type:        "invariant",
@@ -307,19 +325,21 @@ func (cd *ConsistencyDetector) rywTrafficEvent(now time.Time, delta float64) Eve
 		Visibility:  VisibilityStudent,
 		Title:       "Read-your-writes violation",
 		Description: desc,
-		Detail: map[string]string{
-			"kind":   "ryw",
-			"source": "traffic",
-			"delta":  fmt.Sprintf("%.0f", delta),
-		},
+		Detail:      detail,
 	}
 }
 
-func (cd *ConsistencyDetector) monotonicTrafficEvent(now time.Time, delta float64) Event {
+func (cd *ConsistencyDetector) monotonicTrafficEvent(namespace string, now time.Time, delta float64) Event {
 	desc := "A later replica read observed an earlier replication position"
 	if delta >= 1 {
 		desc = fmt.Sprintf("App observed %.0f monotonic-read violation(s) on replica traffic", delta)
 	}
+	detail := map[string]string{
+		"kind":   "monotonic",
+		"source": "traffic",
+		"delta":  fmt.Sprintf("%.0f", delta),
+	}
+	cd.attachReplicaSampleDetail(namespace, "monotonic", detail)
 	return Event{
 		Timestamp:   now,
 		Type:        "invariant",
@@ -329,11 +349,40 @@ func (cd *ConsistencyDetector) monotonicTrafficEvent(now time.Time, delta float6
 		Visibility:  VisibilityStudent,
 		Title:       "Monotonic read violation",
 		Description: desc,
-		Detail: map[string]string{
-			"kind":   "monotonic",
-			"source": "traffic",
-			"delta":  fmt.Sprintf("%.0f", delta),
-		},
+		Detail:      detail,
+	}
+}
+
+func (cd *ConsistencyDetector) attachReplicaSampleDetail(namespace, kind string, detail map[string]string) {
+	cd.mu.Lock()
+	samples := cd.lastReplicaSamples[namespace]
+	cd.mu.Unlock()
+	for _, sample := range samples {
+		if sample.Kind != kind {
+			continue
+		}
+		if sample.TableOrKey != "" {
+			detail["tableOrKey"] = sample.TableOrKey
+		}
+		if sample.ReplicaHost != "" {
+			detail["replicaHost"] = sample.ReplicaHost
+		}
+		if sample.WriteToken != "" {
+			detail["writeToken"] = sample.WriteToken
+		}
+		if sample.ObservedToken != "" {
+			detail["observedToken"] = sample.ObservedToken
+		}
+		if sample.LagBytes > 0 {
+			detail["lagBytes"] = fmt.Sprintf("%d", sample.LagBytes)
+		}
+		if sample.RequestID != "" {
+			detail["requestId"] = sample.RequestID
+		}
+		if sample.ClientIDHash != "" {
+			detail["clientIdHash"] = sample.ClientIDHash
+		}
+		return
 	}
 }
 

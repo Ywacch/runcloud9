@@ -232,7 +232,7 @@ func TestSamplesHandler_JSON(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/consistency/samples", nil)
 	rec := httptest.NewRecorder()
-	SamplesHandler(v).ServeHTTP(rec, req)
+	SamplesHandler(v, nil).ServeHTTP(rec, req)
 
 	var body struct {
 		Samples []Sample `json:"samples"`
@@ -249,7 +249,7 @@ func TestSamplesHandler_JSON(t *testing.T) {
 	}
 
 	recNil := httptest.NewRecorder()
-	SamplesHandler(nil).ServeHTTP(recNil, httptest.NewRequest(http.MethodGet, "/", nil))
+	SamplesHandler(nil, nil).ServeHTTP(recNil, httptest.NewRequest(http.MethodGet, "/", nil))
 	var empty struct {
 		Samples []Sample `json:"samples"`
 	}

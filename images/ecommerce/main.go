@@ -173,7 +173,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.Handle("/health/live", withRecovery(http.HandlerFunc(s.handleLive)))
 	mux.Handle("/health/ready", withRecovery(http.HandlerFunc(s.handleReady)))
 	mux.Handle("/cache-stats", withRecovery(http.HandlerFunc(s.handleCacheStats)))
-	mux.Handle("/consistency/samples", withRecovery(consistency.SamplesHandler(s.verifier)))
+	mux.Handle("/consistency/samples", withRecovery(consistency.SamplesHandler(s.verifier, s.db.ReplicaSamplesSource())))
 	mux.Handle("/metrics", promhttp.Handler())
 
 	return mux
