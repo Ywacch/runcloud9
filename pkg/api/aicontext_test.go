@@ -11,6 +11,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/rules"
+	"github.com/ywacch/cloud9/pkg/templates"
 )
 
 func TestBuildAIContext_GoldenFile(t *testing.T) {
@@ -150,7 +151,26 @@ func aiContextTestInput() AIContextInput {
 	return AIContextInput{
 		SessionID:    "sess-golden-1",
 		DesignConfig: dc,
+		Design:       aiContextGoldenDesign(),
 		Hist:         hist,
 		Final:        &hist[1],
+		Template:     templates.GetTemplate("social-feed"),
+	}
+}
+
+func aiContextGoldenDesign() *deployer.DeploymentDesign {
+	return &deployer.DeploymentDesign{
+		Template: "social-feed",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app1", Type: "app-server", Name: "API"},
+			{ID: "db1", Type: "db", Name: "PostgreSQL", Config: map[string]any{
+				"readReplicas":    float64(2),
+				"readConsistency": "replica",
+				"replicationMode": "async",
+			}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app1", TargetID: "db1", Protocol: "TCP"},
+		},
 	}
 }

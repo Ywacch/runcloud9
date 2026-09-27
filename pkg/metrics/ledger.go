@@ -19,6 +19,7 @@ import (
 //   - fact:event:{index}
 //   - fact:rule:{ruleID}
 //   - fact:violation:{ruleID}
+//   - fact:wiring:{sourceNode}->{targetNode}.{field}
 //   - fact:trace:{requestId}
 type FactRef string
 
@@ -31,6 +32,7 @@ const (
 	FactKindRule       = "rule"
 	FactKindViolation  = "violation"
 	FactKindDerived    = "derived"
+	FactKindWiring     = "wiring"
 	FactKindTrace      = "trace"
 )
 
@@ -53,6 +55,7 @@ type Ledger struct {
 // LedgerInput feeds BuildLedger from session evidence projections.
 type LedgerInput struct {
 	DesignConfig deployer.DesignConfig
+	Design       *deployer.DeploymentDesign
 	Hist         []DeploymentMetrics
 	Final        *DeploymentMetrics
 	Template     *templates.TemplateSpec
@@ -64,6 +67,8 @@ type LedgerInput struct {
 func BuildLedger(in LedgerInput) *Ledger {
 	l := &Ledger{index: make(map[FactRef]int)}
 	appendConfigFacts(l, in.DesignConfig)
+	appendLoadgenMixFacts(l, in.DesignConfig.Template, in.Template)
+	appendWiringFacts(l, in.Design)
 
 	final := in.Final
 	if final == nil && len(in.Hist) > 0 {

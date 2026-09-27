@@ -176,7 +176,7 @@ func (h *Handler) runPostmortemAfterTeardown(namespace string) {
 		return
 	}
 	final := finalSnapshot(hist, nil)
-	aiCtx, err := aiContextFromSummary(namespace, row.Template, dc, row.MetricsSummary)
+	aiCtx, err := aiContextFromSummary(namespace, row.Template, dc, design, row.MetricsSummary)
 	if err != nil {
 		log.Printf("postmortem %s: ai context: %v", namespace, err)
 		return
@@ -202,6 +202,7 @@ func (h *Handler) runPostmortemAfterTeardown(namespace string) {
 	fired := metrics.FiredRuleIDs(hist, violations)
 	ledger := metrics.BuildLedger(metrics.LedgerInput{
 		DesignConfig: dc,
+		Design:       design,
 		Hist:         hist,
 		Final:        final,
 		Template:     tmpl,
