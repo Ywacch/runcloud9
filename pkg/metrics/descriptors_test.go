@@ -12,8 +12,8 @@ func TestDescriptors_CoverEveryComponentInternalsField(t *testing.T) {
 	}
 
 	for key := range signalKeys {
-		if _, ok := signalDescriptorCatalog[key]; !ok {
-			t.Fatalf("missing descriptor catalog entry for signal %q", key)
+		if _, ok := signalMetaFor(key); !ok {
+			t.Fatalf("missing descriptor metadata for signal %q", key)
 		}
 	}
 
@@ -139,6 +139,12 @@ func maximalDeploymentMetricsForDescriptors() *DeploymentMetrics {
 				EvictionsPerSec:   1,
 				ExpirationsPerSec: 0.5,
 				AvgLatency:        0.001,
+				RedisOpsPerSec:    12,
+				RedisCmdRates: map[string]float64{
+					"get":  8,
+					"set":  3,
+					"scan": 1,
+				},
 			},
 			"app-server": {
 				Component:         "app-server",

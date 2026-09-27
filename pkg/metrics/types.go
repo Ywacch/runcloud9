@@ -172,10 +172,11 @@ type ComponentMetrics struct {
 	DbActiveConnections float64 `json:"dbActiveConnections,omitempty"`
 	MaxConnections      float64 `json:"maxConnections,omitempty"`
 	// Redis exporter keyspace rates (supplement app-reported cache hit/miss).
-	RedisKeyspaceHits   float64 `json:"redisKeyspaceHits,omitempty"`
-	RedisKeyspaceMisses float64 `json:"redisKeyspaceMisses,omitempty"`
-	RedisOpsPerSec      float64 `json:"redisOpsPerSec,omitempty"`
-	RedisRejectedRate   float64 `json:"redisRejectedRate,omitempty"`
+	RedisKeyspaceHits   float64            `json:"redisKeyspaceHits,omitempty"`
+	RedisKeyspaceMisses float64            `json:"redisKeyspaceMisses,omitempty"`
+	RedisOpsPerSec      float64            `json:"redisOpsPerSec,omitempty"`
+	RedisCmdRates       map[string]float64 `json:"redisCmdRates,omitempty"`
+	RedisRejectedRate   float64            `json:"redisRejectedRate,omitempty"`
 	// EvictionsPerSec / ExpirationsPerSec are engine-agnostic cache store rates (L0).
 	// Redis filler uses redis_evicted_keys_total / redis_expired_keys_total today.
 	EvictionsPerSec   float64 `json:"evictionsPerSec,omitempty"`
@@ -277,10 +278,11 @@ type ComponentLayerMetrics struct {
 	CPUSource      string  `json:"cpuSource,omitempty"`
 	MemSource      string  `json:"memSource,omitempty"`
 	// Redis exporter signals (backing-store layer only).
-	RedisOpsPerSec      float64 `json:"redisOpsPerSec,omitempty"`
-	RedisKeyspaceHits   float64 `json:"redisKeyspaceHits,omitempty"`
-	RedisKeyspaceMisses float64 `json:"redisKeyspaceMisses,omitempty"`
-	RedisRejectedRate   float64 `json:"redisRejectedRate,omitempty"`
+	RedisOpsPerSec      float64            `json:"redisOpsPerSec,omitempty"`
+	RedisCmdRates       map[string]float64 `json:"redisCmdRates,omitempty"`
+	RedisKeyspaceHits   float64            `json:"redisKeyspaceHits,omitempty"`
+	RedisKeyspaceMisses float64            `json:"redisKeyspaceMisses,omitempty"`
+	RedisRejectedRate   float64            `json:"redisRejectedRate,omitempty"`
 	// Engine-agnostic store rates (backing-store layer).
 	EvictionsPerSec   float64 `json:"evictionsPerSec,omitempty"`
 	ExpirationsPerSec float64 `json:"expirationsPerSec,omitempty"`

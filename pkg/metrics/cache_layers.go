@@ -109,6 +109,7 @@ func applyCacheLayers(cm *ComponentMetrics, split cacheLayerSplit) {
 	}
 	backing := split.redis
 	backing.RedisOpsPerSec = cm.RedisOpsPerSec
+	backing.RedisCmdRates = cm.RedisCmdRates
 	backing.RedisKeyspaceHits = cm.RedisKeyspaceHits
 	backing.RedisKeyspaceMisses = cm.RedisKeyspaceMisses
 	backing.RedisRejectedRate = cm.RedisRejectedRate
