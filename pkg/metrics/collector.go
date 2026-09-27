@@ -583,7 +583,7 @@ func redisCommandPattern(template string) string {
 	case "social-feed":
 		return "^(zadd|zrevrange|zremrangebyrank)$"
 	default:
-		return "^(get|set|del|mget|mset)$"
+		return "^(get|set|del|mget|mset|scan)$"
 	}
 }
 
@@ -959,10 +959,20 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmCache.CacheHitsLast9m = cmApp.CacheHitsLast9m
 	cmCache.CacheMissesLast9m = cmApp.CacheMissesLast9m
 	redisCmdPattern := redisCommandPattern(template)
-	redisOps, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(redis_commands_total{namespace=%q,cmd=~%q}%s))`,
+	redisCmdRates := c.queryMultiResult(ctx, fmt.Sprintf(
+		`sum by (cmd) (rate(redis_commands_total{namespace=%q,cmd=~%q}%s))`,
 		ns, redisCmdPattern, promRateRange(),
-	))
+	), "cmd")
+	if len(redisCmdRates) > 0 {
+		cmCache.RedisCmdRates = redisCmdRates
+	}
+	redisOps := RequestPathRedisOpsPerSec(cmCache.RedisCmdRates)
+	if redisOps <= 0 {
+		redisOps, _ = c.query(ctx, fmt.Sprintf(
+			`sum(rate(redis_commands_total{namespace=%q,cmd=~%q}%s))`,
+			ns, redisCmdPattern, promRateRange(),
+		))
+	}
 	cmCache.RedisOpsPerSec = redisOps
 	if redisOps > 0 {
 		cmCache.RequestRate = redisOps

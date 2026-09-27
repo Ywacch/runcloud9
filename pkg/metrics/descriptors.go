@@ -1,6 +1,9 @@
 package metrics
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // SignalDescriptor explains one normalized signal for brain context. Freshness
 // is resolved from component_internals tags or the existing tier tables, never
@@ -166,6 +169,10 @@ var signalDescriptorCatalog = map[string]signalMeta{
 		unit: "count", semantic: "gauge", meaning: "replication lag in seconds",
 		freshnessGroup: SignalReplication,
 	},
+	"redisOpsPerSec": {
+		unit: "ops/s", semantic: "rate", meaning: "redis request-path command rate excluding SCAN",
+		freshnessGroup: SignalThroughput,
+	},
 	"requestRate": {
 		unit: "rps", semantic: "rate", meaning: "HTTP or worker request rate",
 		freshnessGroup: SignalThroughput,
@@ -186,6 +193,24 @@ var signalDescriptorCatalog = map[string]signalMeta{
 		unit: "percent", semantic: "ratio", meaning: "worker queue saturation ratio",
 		freshnessGroup: SignalThroughput,
 	},
+}
+
+// signalMetaFor returns catalog metadata for a component_internals signal name.
+func signalMetaFor(signalName string) (signalMeta, bool) {
+	meta, ok := signalDescriptorCatalog[signalName]
+	if ok {
+		return meta, true
+	}
+	if strings.HasPrefix(signalName, "redisCmd.") {
+		cmd := strings.TrimPrefix(signalName, "redisCmd.")
+		return signalMeta{
+			unit:           "ops/s",
+			semantic:       "rate",
+			meaning:        "redis " + cmd + " command rate",
+			freshnessGroup: SignalThroughput,
+		}, true
+	}
+	return signalMeta{}, false
 }
 
 // BuildDescriptors emits one descriptor per (component role, signal name) pair
@@ -211,7 +236,7 @@ func BuildDescriptors(internals ComponentInternals) []SignalDescriptor {
 					continue
 				}
 				seen[key] = true
-				meta, ok := signalDescriptorCatalog[signalName]
+				meta, ok := signalMetaFor(signalName)
 				if !ok {
 					continue
 				}

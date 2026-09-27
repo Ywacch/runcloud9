@@ -28,6 +28,7 @@ const (
 	FactKindEvent      = "event"
 	FactKindRule       = "rule"
 	FactKindViolation  = "violation"
+	FactKindDerived    = "derived"
 )
 
 // Fact is one citable object in a session fact ledger.
@@ -69,6 +70,7 @@ func BuildLedger(in LedgerInput) *Ledger {
 	descriptorIndex := indexDescriptors(descriptors)
 
 	appendMetricFacts(l, internals, descriptorIndex)
+	appendDerivedCacheFacts(l, final, in.DesignConfig.Template)
 	appendSessionPeakFacts(l, PeakSummary(final))
 	appendTrajectoryFacts(l, BuildTrajectories(in.Hist))
 
