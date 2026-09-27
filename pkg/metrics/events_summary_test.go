@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -95,6 +96,118 @@ func TestBuildEventsSummary_InvariantSortOrder(t *testing.T) {
 	}
 	if got[0]["type"] != "cascade" || got[1]["type"] != "invariant" || got[2]["type"] != "threshold" {
 		t.Fatalf("sort order: %#v", got)
+	}
+}
+
+func TestBuildEventsSummary_RetainsDetail(t *testing.T) {
+	t.Parallel()
+	t1 := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	t2 := t1.Add(time.Minute)
+	hist := []DeploymentMetrics{
+		{Timestamp: t1, Events: []Event{{
+			Timestamp: t1,
+			Type:      "invariant",
+			RuleID:    "cache_db_stale",
+			Title:     "Stale cache",
+			Detail:    map[string]string{"kind": "cache_db_stale", "delta": "12"},
+		}}},
+		{Timestamp: t2, Events: []Event{{
+			Timestamp: t2,
+			Type:      "invariant",
+			RuleID:    "cache_db_stale",
+			Title:     "Stale cache",
+			Detail:    map[string]string{"kind": "cache_db_stale", "delta": "99"},
+		}, {
+			Timestamp: t2,
+			Type:      "invariant",
+			RuleID:    "failover_write_loss",
+			Title:     "Write loss",
+			Detail:    map[string]string{"rowsLost": "3"},
+		}}},
+	}
+	got := BuildEventsSummary(hist, 10)
+	var stale, failover map[string]any
+	for _, row := range got {
+		switch row["ruleId"] {
+		case "cache_db_stale":
+			stale = row
+		case "failover_write_loss":
+			failover = row
+		}
+	}
+	if stale == nil || failover == nil {
+		t.Fatalf("rows: %#v", got)
+	}
+	staleDetail, ok := stale["detail"].(map[string]string)
+	if !ok || staleDetail["delta"] != "99" {
+		t.Fatalf("latest detail per rule: %#v", stale["detail"])
+	}
+	failDetail, ok := failover["detail"].(map[string]string)
+	if !ok || failDetail["rowsLost"] != "3" {
+		t.Fatalf("failover detail: %#v", failover["detail"])
+	}
+}
+
+func TestBuildEventsSummary_OmitsEmptyDetail(t *testing.T) {
+	t.Parallel()
+	ts := time.Now()
+	hist := []DeploymentMetrics{{
+		Timestamp: ts,
+		Events: []Event{{
+			Timestamp: ts,
+			Type:      "threshold",
+			RuleID:    "db_latency",
+			Title:     "DB",
+		}},
+	}}
+	got := BuildEventsSummary(hist, 10)
+	if len(got) != 1 {
+		t.Fatalf("want 1 row, got %d", len(got))
+	}
+	if _, ok := got[0]["detail"]; ok {
+		t.Fatalf("detail key should be omitted: %#v", got[0])
+	}
+}
+
+func TestBuildEventsSummary_CapsDetailValueLength(t *testing.T) {
+	t.Parallel()
+	ts := time.Now()
+	long := strings.Repeat("a", 300)
+	hist := []DeploymentMetrics{{
+		Timestamp: ts,
+		Events: []Event{{
+			Timestamp: ts,
+			Type:      "threshold",
+			RuleID:    "cache_hit_low",
+			Detail:    map[string]string{"note": long},
+		}},
+	}}
+	got := BuildEventsSummary(hist, 10)
+	detail, ok := got[0]["detail"].(map[string]string)
+	if !ok {
+		t.Fatalf("detail: %#v", got[0]["detail"])
+	}
+	if len(detail["note"]) != eventSummaryDetailMaxLen {
+		t.Fatalf("cap: got len %d want %d", len(detail["note"]), eventSummaryDetailMaxLen)
+	}
+}
+
+func TestBuildEventsSummary_DetailCopyIsolatedFromEvent(t *testing.T) {
+	t.Parallel()
+	ts := time.Now()
+	detail := map[string]string{"delta": "1"}
+	ev := Event{
+		Timestamp: ts,
+		Type:      "invariant",
+		RuleID:    "cache_db_stale",
+		Detail:    detail,
+	}
+	hist := []DeploymentMetrics{{Timestamp: ts, Events: []Event{ev}}}
+	got := BuildEventsSummary(hist, 10)
+	detail["delta"] = "mutated"
+	rowDetail, ok := got[0]["detail"].(map[string]string)
+	if !ok || rowDetail["delta"] != "1" {
+		t.Fatalf("summary should not alias event detail: %#v", got[0]["detail"])
 	}
 }
 

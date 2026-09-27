@@ -5,7 +5,10 @@ import (
 	"time"
 )
 
-const defaultEventsSummaryMax = 10
+const (
+	defaultEventsSummaryMax  = 10
+	eventSummaryDetailMaxLen = 256
+)
 
 // BuildEventsSummary scans downsampled session history (oldest → newest) for threshold, cascade,
 // and invariant events. Each ruleId appears at most once, using the latest snapshot's copy. The slice
@@ -24,6 +27,7 @@ func BuildEventsSummary(hist []DeploymentMetrics, maxEntries int) []map[string]a
 		narrative  string
 		suggestion string
 		related    []string
+		detail     map[string]string
 	}
 	byRule := make(map[string]acc)
 	for _, snap := range hist {
@@ -43,6 +47,7 @@ func BuildEventsSummary(hist []DeploymentMetrics, maxEntries int) []map[string]a
 				narrative:  ev.Narrative,
 				suggestion: ev.Suggestion,
 				related:    append([]string(nil), ev.Related...),
+				detail:     cloneEventSummaryDetail(ev.Detail),
 			}
 		}
 	}
@@ -62,7 +67,7 @@ func BuildEventsSummary(hist []DeploymentMetrics, maxEntries int) []map[string]a
 	}
 	rows := make([]map[string]any, len(out))
 	for i, v := range out {
-		rows[i] = map[string]any{
+		row := map[string]any{
 			"timestamp":  v.ts.UTC().Format(time.RFC3339Nano),
 			"type":       v.typ,
 			"ruleId":     v.ruleID,
@@ -72,8 +77,26 @@ func BuildEventsSummary(hist []DeploymentMetrics, maxEntries int) []map[string]a
 			"suggestion": v.suggestion,
 			"related":    v.related,
 		}
+		if len(v.detail) > 0 {
+			row["detail"] = v.detail
+		}
+		rows[i] = row
 	}
 	return rows
+}
+
+func cloneEventSummaryDetail(m map[string]string) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		if len(v) > eventSummaryDetailMaxLen {
+			v = v[:eventSummaryDetailMaxLen]
+		}
+		out[k] = v
+	}
+	return out
 }
 
 func eventSummaryRank(typ string) int {
