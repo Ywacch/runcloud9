@@ -253,9 +253,11 @@ type ConsistencyStatus struct {
 	LastCacheServed          string `json:"lastCacheServed,omitempty"`
 	LastCacheTruth           string `json:"lastCacheTruth,omitempty"`
 	LastCacheRequestID       string `json:"lastCacheRequestId,omitempty"`
-	// LeaderReads / ReplicaReads are cumulative app db_read_total by route (read offload split).
+	// LeaderReads / ReplicaReads are cumulative app db_read_total by replica label (read offload split).
 	LeaderReads  int64 `json:"leaderReads"`
 	ReplicaReads int64 `json:"replicaReads"`
+	// ReadRateByReplica is live db_read_total rate per replica label over the Prom rate window.
+	ReadRateByReplica map[string]float64 `json:"readRateByReplica,omitempty"`
 	// ReplicaStaleReads is cumulative replica_stale_reads_total (eventual policy tradeoff).
 	ReplicaStaleReads int64 `json:"replicaStaleReads"`
 	// GuaranteeHeldBy is "app" when the in-app read router has redirected for RYW,

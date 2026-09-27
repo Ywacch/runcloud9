@@ -371,9 +371,9 @@ func (r *ReadRouter) ReadTarget(clientID string) (queryPool, string) {
 	if route == RouteReplica && len(r.readPools) > 0 {
 		idx := r.nextReplicaStart()
 		entry := r.readPools[idx]
-		dbReadTotal.WithLabelValues(RouteReplica.String()).Inc()
+		incDBRead(entry.host)
 		return entry.pool, entry.host
 	}
-	dbReadTotal.WithLabelValues(RouteLeader.String()).Inc()
+	incDBRead(DBReadLeaderLabel)
 	return r.writePool, r.leaderTarget()
 }

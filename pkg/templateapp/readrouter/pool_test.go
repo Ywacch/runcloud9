@@ -109,6 +109,43 @@ func TestQueryRead_replicaRoundRobinRotatesTargets(t *testing.T) {
 	}
 }
 
+func TestQueryRead_incrementsDBReadByReplicaHost(t *testing.T) {
+	t.Parallel()
+
+	replica := stubPool{row: stubRow{}}
+	leader := stubPool{row: stubRow{}}
+	r := &ReadRouter{
+		engine:      PostgresEngine{},
+		policy:      PolicyReplica,
+		clients:     make(map[string]*clientState),
+		maxSize:     defaultMaxClients,
+		clientTTL:   defaultClientTTL,
+		writePool:   leader,
+		writeTarget: defaultWriteTarget,
+		readPools: []replicaEntry{
+			{pool: replica, host: "postgres-replica-0"},
+		},
+	}
+	build := func(readTokenExpr string) (string, []any) {
+		return "SELECT 1", nil
+	}
+	scan := func(row pgx.Row, replayToken *string) error {
+		return row.Scan(new(int))
+	}
+	before := testutil.ToFloat64(dbReadTotal.WithLabelValues("postgres-replica-0"))
+	_, target, err := r.QueryRead(context.Background(), "client-metrics", build, scan)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if target != "postgres-replica-0" {
+		t.Fatalf("target: %q", target)
+	}
+	after := testutil.ToFloat64(dbReadTotal.WithLabelValues("postgres-replica-0"))
+	if after-before != 1 {
+		t.Fatalf("db_read_total replica-0: before %v after %v", before, after)
+	}
+}
+
 func TestQueryRead_failFirstReplicaUsesSecond(t *testing.T) {
 	t.Parallel()
 
