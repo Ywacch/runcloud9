@@ -964,6 +964,20 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmCache.CacheMisses = cmApp.CacheMisses
 	cmCache.CacheHitsLast9m = cmApp.CacheHitsLast9m
 	cmCache.CacheMissesLast9m = cmApp.CacheMissesLast9m
+	if template == "social-feed" {
+		timelineKeys, _ := c.query(ctx, fmt.Sprintf(`max(social_timeline_keys{%s})`, nsSel))
+		cmCache.TimelineKeyCount = timelineKeys
+		pushFeed, _ := c.query(ctx, fmt.Sprintf(
+			`sum(rate(social_feed_request_total{%s,mode="push-redis"}%s))`,
+			nsSel, promRateRange(),
+		))
+		pullFeed, _ := c.query(ctx, fmt.Sprintf(
+			`sum(rate(social_feed_request_total{%s,mode="pull"}%s))`,
+			nsSel, promRateRange(),
+		))
+		cmCache.FeedRequestRatePush = pushFeed
+		cmCache.FeedRequestRatePull = pullFeed
+	}
 	redisCmdPattern := redisCommandPattern(template)
 	redisCmdRates := c.queryMultiResult(ctx, fmt.Sprintf(
 		`sum by (cmd) (rate(redis_commands_total{namespace=%q,cmd=~%q}%s))`,

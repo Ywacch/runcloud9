@@ -33,6 +33,11 @@ var (
 		Help: "Total cache misses",
 	})
 
+	socialTimelineKeys = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "social_timeline_keys",
+		Help: "Number of materialized follower timeline keys (timeline:*) in Redis",
+	})
+
 	postTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "social_post_total",

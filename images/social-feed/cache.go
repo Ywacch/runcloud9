@@ -19,6 +19,13 @@ type Cache struct {
 	stampedeProtection bool
 }
 
+func (c *Cache) redisClient() *redis.Client {
+	if c == nil {
+		return nil
+	}
+	return c.client
+}
+
 func newCache(client *redis.Client, stampedeProtection bool) *Cache {
 	return &Cache{
 		client:             client,

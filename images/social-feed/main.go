@@ -299,7 +299,8 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	var items []FeedItem
-	items, mode, err = fetchFeedItems(ctx, s.cache, s.cfg.FeedPageSize, userID, s.db.GetFeedPull)
+	stats := &feedCacheStats{hits: &s.cacheHits, misses: &s.cacheMisses}
+	items, mode, err = fetchFeedItems(ctx, s.cache, s.cfg.FeedPageSize, userID, stats, s.db.GetFeedPull)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to fetch feed")
 		return
@@ -640,6 +641,7 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 				slog.Warn("redis ping failed; continuing with cache disabled", "error", err)
 			} else {
 				s.cache = newCache(client, cfg.Stampede)
+				go runTimelineKeyReporter(ctx, s.cache.redisClient())
 				slog.Info("cache mode: redis", "host", cfg.CacheHost, "port", cfg.CachePort)
 			}
 		}
