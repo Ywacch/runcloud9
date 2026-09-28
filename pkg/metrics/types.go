@@ -188,6 +188,11 @@ type ComponentMetrics struct {
 	CacheMetricMode     string  `json:"cacheMetricMode,omitempty"`
 	CacheReadOperation  string  `json:"cacheReadOperation,omitempty"`
 	CacheWriteOperation string  `json:"cacheWriteOperation,omitempty"`
+	// TimelineKeyCount is the number of timeline:* keys (social-feed gauge social_timeline_keys).
+	TimelineKeyCount float64 `json:"timelineKeyCount,omitempty"`
+	// FeedRequestRatePush / FeedRequestRatePull are social_feed_request_total rates by mode.
+	FeedRequestRatePush float64 `json:"feedRequestRatePush,omitempty"`
+	FeedRequestRatePull float64 `json:"feedRequestRatePull,omitempty"`
 	// kube_pod_container_resource_limits / redis maxmemory (capacity denominator for UI %).
 	// When redis_exporter reports maxmemory, MemoryLimit is that value (used vs maxmemory for UI %).
 	CPULimit    float64 `json:"cpuLimit,omitempty"`
