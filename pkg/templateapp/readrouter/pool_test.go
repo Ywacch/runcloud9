@@ -352,8 +352,7 @@ func TestQueryRead_RYW_replicaCaughtUp(t *testing.T) {
 }
 
 func TestQueryRead_RYW_errNoRowsAfterWriteRedirectsLeader(t *testing.T) {
-	t.Parallel()
-
+	// Serial: asserts a delta on global rywLeaderRedirectsTotal (parallel RYW tests would flake).
 	replica := stubPool{row: stubRow{err: pgx.ErrNoRows}}
 	leader := stubPool{row: stubRow{}}
 	r := &ReadRouter{
@@ -379,7 +378,10 @@ func TestQueryRead_RYW_errNoRowsAfterWriteRedirectsLeader(t *testing.T) {
 			return "SELECT 1, " + readTokenExpr, nil
 		},
 		func(row pgx.Row, replayToken *string) error {
-			return row.Scan(replayToken)
+			if replayToken != nil {
+				return row.Scan(new(int), replayToken)
+			}
+			return row.Scan(new(int))
 		},
 	)
 	if err != nil {
