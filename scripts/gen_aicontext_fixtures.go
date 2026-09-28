@@ -15,6 +15,8 @@ import (
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/rules"
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
+	"github.com/ywacch/cloud9/pkg/templates"
 )
 
 type fixtureSpec struct {
@@ -85,6 +87,17 @@ func main() {
 			input: api.AIContextInput{
 				SessionID:    "cache_flush",
 				DesignConfig: socialFeedDesign(),
+				Design:       socialFeedDeploymentDesign(),
+				Template:     templates.GetTemplate("social-feed"),
+				TraceSamples: []trace.JourneySample{{
+					RequestID:  "req-cache-flush-sample",
+					Op:         "GET /feed",
+					DurationMs: 52,
+					Spans: []trace.JourneySpan{
+						{Component: "cache", Op: "get", DurationMs: 1},
+						{Component: "db", Op: "query", DurationMs: 44},
+					},
+				}},
 				Hist: []metrics.DeploymentMetrics{
 					{Timestamp: t0, Components: map[string]metrics.ComponentMetrics{
 						"cache": {Component: "cache", CacheHitsLast9m: 500, CacheMissesLast9m: 50},
@@ -105,6 +118,23 @@ func main() {
 				Final: snapshotPtr(metrics.DeploymentMetrics{
 					Timestamp: t1,
 					Components: map[string]metrics.ComponentMetrics{
+						"app-server": {
+							Component:   "app-server",
+							RequestRate: 100,
+							CacheHits:   10,
+							CacheMisses: 400,
+						},
+						"cache": {
+							Component:         "cache",
+							CacheStrategy:     "cache-aside",
+							CacheHitsLast9m:   10,
+							CacheMissesLast9m: 400,
+							RedisOpsPerSec:    850,
+							RedisCmdRates: map[string]float64{
+								"get": 600,
+								"set": 250,
+							},
+						},
 						"db": {Component: "db", CPUUsage: 0.7, CPULimit: 1, CPUSource: metrics.ResourceSourceMetricsAPI, DbQueryRate: 120},
 					},
 				}),
@@ -351,4 +381,25 @@ func writeThroughCacheDesign() deployer.DesignConfig {
 		},
 	}}
 	return dc
+}
+
+func socialFeedDeploymentDesign() *deployer.DeploymentDesign {
+	return &deployer.DeploymentDesign{
+		Template: "social-feed",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app1", Type: "app-server", Name: "API"},
+			{ID: "cache1", Type: "cache", Name: "Redis", Config: map[string]any{
+				"cacheStrategy": "cache-aside",
+			}},
+			{ID: "db1", Type: "db", Name: "PostgreSQL", Config: map[string]any{
+				"readReplicas":    float64(2),
+				"readConsistency": "replica",
+				"replicationMode": "async",
+			}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app1", TargetID: "cache1", Protocol: "TCP"},
+			{SourceID: "app1", TargetID: "db1", Protocol: "TCP"},
+		},
+	}
 }
