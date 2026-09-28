@@ -208,7 +208,7 @@ func narrateDBConnPressure(dm *DeploymentMetrics, topo TopologyFlags) NarrativeO
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Postgres reports about %.0f active connections out of %.0f max (%.1f%%). ", db.DbActiveConnections, db.MaxConnections, pct)
+	fmt.Fprintf(&b, "Postgres reports about %.0f open connections out of %.0f max (%.1f%%). ", db.DbActiveConnections, db.MaxConnections, pct)
 	fmt.Fprintf(&b, "The app-server is offering roughly %.1f req/s, so pool contention can surface as timeouts once the database stops accepting new sessions.", app.RequestRate)
 
 	sug := "Add a cache node to shrink read load on the primary, or add read replicas so connections and queries spread across more database instances."

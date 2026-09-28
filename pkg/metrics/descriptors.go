@@ -66,7 +66,7 @@ var signalDescriptorCatalog = map[string]signalMeta{
 		freshnessGroup: SignalContainerCPU,
 	},
 	"dbActiveConnections": {
-		unit: "count", semantic: "gauge", meaning: "open database connections",
+		unit: "count", semantic: "gauge", meaning: "open postgres backends (pg_stat_database numbackends)",
 		freshnessGroup: SignalConnections,
 	},
 	"dbQueryLatency": {

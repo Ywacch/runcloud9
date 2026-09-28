@@ -396,15 +396,38 @@ func (c *MetricsCollector) dbLayerRequestRateByPod(ctx context.Context, ns, writ
 	return mapPostgresLayerRequestRates(c.queryMultiResult(ctx, postgresXactRateByPodQuery(ns), "pod"), writerPod)
 }
 
+func postgresClusterNumBackendsQuery(ns string) string {
+	return fmt.Sprintf(
+		`sum(pg_stat_database_numbackends{namespace=%q,datname!=""})`,
+		ns,
+	)
+}
+
+// postgresClusterBackends is the live client session count on postgres (pg_stat_database.numbackends).
+func (c *MetricsCollector) postgresClusterBackends(ctx context.Context, ns string) float64 {
+	if c == nil || c.prometheusURL == "" {
+		return 0
+	}
+	v, _ := c.query(ctx, postgresClusterNumBackendsQuery(ns))
+	if v > 0 {
+		return v
+	}
+	v, _ = c.query(ctx, fmt.Sprintf(
+		`sum(pg_stat_database_numbackends{namespace=%q})`,
+		ns,
+	))
+	return v
+}
+
 func (c *MetricsCollector) postgresConnectionsByPod(ctx context.Context, ns string) map[string]float64 {
 	if c == nil || c.prometheusURL == "" {
 		return nil
 	}
-	byPod := c.queryMultiResult(ctx, postgresActiveConnectionsByPodQuery(ns), "pod")
-	if len(byPod) == 0 {
-		byPod = c.queryMultiResult(ctx, postgresNumBackendsByPodQuery(ns), "pod")
+	byPod := c.queryMultiResult(ctx, postgresNumBackendsByPodQuery(ns), "pod")
+	if len(byPod) > 0 {
+		return byPod
 	}
-	return byPod
+	return c.queryMultiResult(ctx, postgresActiveConnectionsByPodQuery(ns), "pod")
 }
 
 func replicaReadOnlyStorageIO(cluster *StorageIO, readRate, readTotal9m float64) *StorageIO {

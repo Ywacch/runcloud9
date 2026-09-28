@@ -168,7 +168,7 @@ type ComponentMetrics struct {
 	// DbTotalQueries is the session sum of db_query_duration_seconds_count on app-server pods.
 	// App SQL only (not worker). Resets when cloud9-api restarts or Cleanup runs.
 	DbTotalQueries float64 `json:"dbTotalQueries"`
-	// Postgres exporter (when scraped); complements DbQueryRate from app metrics.
+	// Postgres exporter numbackends (open sessions), not active-query count.
 	DbActiveConnections float64 `json:"dbActiveConnections,omitempty"`
 	MaxConnections      float64 `json:"maxConnections,omitempty"`
 	// Redis exporter keyspace rates (supplement app-reported cache hit/miss).
@@ -313,7 +313,7 @@ type ComponentLayerMetrics struct {
 	RequestRate float64 `json:"requestRate,omitempty"`
 	// TotalRequests is the session sum of pg_stat_database xact commit+rollback for this layer.
 	TotalRequests float64 `json:"totalRequests,omitempty"`
-	// DbActiveConnections is active backends on this layer's postgres pod(s).
+	// DbActiveConnections is open backends (numbackends) on this layer's postgres pod(s).
 	DbActiveConnections float64 `json:"dbActiveConnections,omitempty"`
 	// StorageIO holds engine-native I/O for this layer. Primary layers copy cluster
 	// storageIo (read+write). Replica layers expose read scans only (no write totals).

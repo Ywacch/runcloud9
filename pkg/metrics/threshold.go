@@ -132,7 +132,7 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics, topo T
 				Component:   "db",
 				RuleID:      ruleDBConnPressure,
 				Title:       "Database connection pressure",
-				Description: "Active connections exceed 80% of max_connections",
+				Description: "Open connections exceed 80% of max_connections",
 			}
 			n := Narrate(ruleDBConnPressure, dm, topo, tmpl)
 			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related
