@@ -775,17 +775,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmDB.AvgLatency = cmDB.DbQueryLatency
 	// DbTotalQueries is filled after app-server by-pod SQL counters are scraped.
 
-	dbActive, _ := c.query(ctx, fmt.Sprintf(
-		`sum(pg_stat_activity_count{namespace=%q,state="active"})`,
-		ns,
-	))
-	if dbActive == 0 {
-		dbActive, _ = c.query(ctx, fmt.Sprintf(
-			`sum(pg_stat_database_numbackends{namespace=%q})`,
-			ns,
-		))
-	}
-	cmDB.DbActiveConnections = dbActive
+	cmDB.DbActiveConnections = c.postgresClusterBackends(ctx, ns)
 
 	maxConn, _ := c.query(ctx, fmt.Sprintf(
 		`max(pg_settings{namespace=%q,name="max_connections"})`,

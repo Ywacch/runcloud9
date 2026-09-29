@@ -1073,6 +1073,11 @@ func TestCollectDBReplicaLayers_engineMetrics(t *testing.T) {
 		switch {
 		case strings.Contains(q, "pg_stat_database_xact_commit") && !strings.Contains(q, "rate("):
 			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", xactTotals))
+		case strings.Contains(q, "pg_stat_database_numbackends"):
+			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
+				primaryPod: "75",
+				replicaPod: "4",
+			}))
 		case strings.Contains(q, "pg_stat_activity_count"):
 			_ = json.NewEncoder(w).Encode(promMultiVectorJSON("pod", map[string]string{
 				primaryPod: "3",
@@ -1108,16 +1113,16 @@ func TestCollectDBReplicaLayers_engineMetrics(t *testing.T) {
 	if split.primary.StorageIO.ReadRate != 100 || split.primary.StorageIO.WriteRate != 40 {
 		t.Fatalf("primary storageIo: %+v", split.primary.StorageIO)
 	}
-	if split.primary.DbActiveConnections != 3 {
-		t.Fatalf("primary connections: got %v want 3", split.primary.DbActiveConnections)
+	if split.primary.DbActiveConnections != 75 {
+		t.Fatalf("primary connections: got %v want 75", split.primary.DbActiveConnections)
 	}
 
 	if len(split.replicas) != 1 {
 		t.Fatalf("replicas: got %d want 1", len(split.replicas))
 	}
 	replica := split.replicas[0]
-	if replica.DbActiveConnections != 1 {
-		t.Fatalf("replica connections: got %v want 1", replica.DbActiveConnections)
+	if replica.DbActiveConnections != 4 {
+		t.Fatalf("replica connections: got %v want 4", replica.DbActiveConnections)
 	}
 	if replica.StorageIO == nil {
 		t.Fatal("replica layer should have read-only storageIo")
