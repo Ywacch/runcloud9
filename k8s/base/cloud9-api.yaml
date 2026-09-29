@@ -125,6 +125,8 @@ spec:
               value: "1"
             - name: PROMETHEUS_URL
               value: "http://prometheus.monitoring.svc.cluster.local:9090"
+            - name: INFERENCE_URL
+              value: "http://runcloud9-ai:5000"
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:
