@@ -10,4 +10,5 @@ import (
 type inferenceService interface {
 	ReelCaptions(ctx context.Context, req inference.ReelCaptionsRequest) (*inference.ReelCaptionsResponse, error)
 	Postmortem(ctx context.Context, aiContext any) (*inference.PostmortemResponse, error)
+	Chat(ctx context.Context, req inference.ChatRequest) (*inference.ChatResponse, error)
 }

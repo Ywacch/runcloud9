@@ -68,3 +68,11 @@ func (b *SessionTokenBudget) Spent(sessionID string) int {
 	defer b.mu.Unlock()
 	return b.used[sessionID]
 }
+
+// Limit returns the per-session token ceiling.
+func (b *SessionTokenBudget) Limit() int {
+	if b == nil {
+		return 0
+	}
+	return b.limit
+}

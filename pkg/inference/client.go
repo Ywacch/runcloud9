@@ -96,3 +96,38 @@ func (c *Client) Postmortem(ctx context.Context, aiContext any) (*PostmortemResp
 	}
 	return &out, nil
 }
+
+// Chat sends session context and prior turns for one inspector chat reply.
+func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	if c == nil || c.baseURL == "" {
+		return nil, fmt.Errorf("inference client not configured")
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal chat request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build chat request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("chat request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read chat response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("chat status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	var out ChatResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("decode chat response: %w", err)
+	}
+	return &out, nil
+}
