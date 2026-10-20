@@ -184,10 +184,13 @@ func PodTargeterBuilder(body PodStartBody) TargeterBuilder {
 			cfg := *body.Actor
 			cfg.Distribution = EffectiveDistributionMap(baseDist, phase)
 			cfg.ParamValues = EffectiveActorParamsMap(body.Actor.ParamValues, phase)
+			if cfg.ActiveUsers == 0 {
+				cfg.ActiveUsers = body.ActiveUsers
+			}
 			return BuildTargeterFromPodActor(cfg), cfg.Distribution, nil
 		}
 		targets := applyPhaseToStaticTargets(body.Targets, baseDist, phase)
-		return BuildTargeterFromResolved(targets), EffectiveDistributionMap(baseDist, phase), nil
+		return BuildTargeterFromResolved(targets, body.ActiveUsers), EffectiveDistributionMap(baseDist, phase), nil
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ywacch/cloud9/pkg/deployer"
+	"github.com/ywacch/cloud9/pkg/rules"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -193,5 +194,25 @@ func TestOneShotScenarios_revertNoOp(t *testing.T) {
 	}
 	if err := killReplica.Revert(context.Background(), "ns", design, "db"); err != nil {
 		t.Fatalf("Revert kill_replica: %v", err)
+	}
+}
+
+func TestScenarioFidelity(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		scenario string
+		want     string
+	}{
+		{scenario: "pod_kill", want: rules.FidelityReal},
+		{scenario: "cache_flush", want: rules.FidelityReal},
+		{scenario: "not-a-scenario", want: rules.FidelityReal},
+	}
+	for _, tc := range tests {
+		t.Run(tc.scenario, func(t *testing.T) {
+			t.Parallel()
+			if got := ScenarioFidelity(tc.scenario); got != tc.want {
+				t.Fatalf("ScenarioFidelity(%q) = %q want %q", tc.scenario, got, tc.want)
+			}
+		})
 	}
 }

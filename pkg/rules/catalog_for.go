@@ -20,6 +20,7 @@ func CatalogFor(tmpl *templates.TemplateSpec) []Rule {
 			Kind:       inv.Kind,
 			Visibility: VisibilityAll,
 			Summary:    summary,
+			Fidelity:   FidelityReal,
 		})
 	}
 	return out

@@ -2,9 +2,12 @@ package loadgen
 
 import (
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 )
 
 func virtualClientSubnetPrefix(a, b, c byte) string {
@@ -112,5 +115,31 @@ func TestVirtualClientSubnets_nginxIPHashBuckets(t *testing.T) {
 		if !found {
 			t.Fatalf("missing nginx ip_hash bucket %d for subnets; got %v", bucket, got)
 		}
+	}
+}
+
+func TestApplyClientIdentityHeaders(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		seed    string
+		wantID  string
+		wantXFF string
+	}{
+		{name: "seed is client id", seed: "user-7", wantID: "user-7", wantXFF: virtualClientIP("user-7")},
+		{name: "empty seed", seed: "", wantID: defaultClientID, wantXFF: defaultVirtualClientIP},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := make(http.Header)
+			ApplyClientIdentityHeaders(h, tc.seed)
+			if got := h.Get(trace.HeaderClientID); got != tc.wantID {
+				t.Fatalf("client id: got %q want %q", got, tc.wantID)
+			}
+			if got := h.Get("X-Forwarded-For"); got != tc.wantXFF {
+				t.Fatalf("X-Forwarded-For: got %q want %q", got, tc.wantXFF)
+			}
+		})
 	}
 }

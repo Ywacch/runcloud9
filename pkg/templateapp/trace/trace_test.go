@@ -34,6 +34,17 @@ func TestContextFromRequest_ClientID(t *testing.T) {
 	}
 }
 
+func TestContextFromRequest_ClientIDPrefersHeader(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	req.Header.Set(HeaderClientID, "user-42")
+	req.Header.Set("X-Forwarded-For", "203.0.113.7")
+	req = ContextFromRequest(req)
+	if got := ClientID(req.Context()); got != "user-42" {
+		t.Fatalf("ClientID() = %q want user-42", got)
+	}
+}
+
 func TestClientID_remoteAddrFallback(t *testing.T) {
 	t.Parallel()
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)

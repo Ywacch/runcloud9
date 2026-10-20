@@ -36,17 +36,17 @@ func profileToTargetPlan(ctx context.Context, namespace string, profile LoadProf
 
 	paramDefs, hasActor := actorParamsFromTemplate(profile.Template)
 	if hasActor {
-		flatPools := fetchParamPools(ctx, baseURL, specs)
-		segmentPools := actorSegmentPoolsFromTemplate(ctx, baseURL, profile.Template)
+		flatPools := capIdentityPools(fetchParamPools(ctx, baseURL, specs), profile.ActiveUsers)
+		segmentPools := capIdentityPools(actorSegmentPoolsFromTemplate(ctx, baseURL, profile.Template), profile.ActiveUsers)
 		model := newActorModel(baseURL, specs, profile.Distribution, flatPools, segmentPools, paramDefs, profile.ActorParams)
-		return TargetPlan{Actor: model, Distribution: distribution}, nil
+		return TargetPlan{Actor: model, Distribution: distribution, ActiveUsers: profile.ActiveUsers}, nil
 	}
 
 	targets, err := expandStaticTargets(baseURL, specs, flatPoolsFromSpecs(ctx, baseURL, specs))
 	if err != nil {
 		return TargetPlan{}, err
 	}
-	return TargetPlan{Static: targets, Distribution: distribution}, nil
+	return TargetPlan{Static: targets, Distribution: distribution, ActiveUsers: profile.ActiveUsers}, nil
 }
 
 func flatPoolsFromSpecs(ctx context.Context, baseURL string, specs []EndpointSpec) map[string][]string {
@@ -121,7 +121,7 @@ func expandBodyTemplate(tmpl, param string) string {
 }
 
 // buildTargeterFromResolved creates a vegeta targeter from pre-resolved targets.
-func buildTargeterFromResolved(targets []ResolvedTarget) vegeta.Targeter {
+func buildTargeterFromResolved(targets []ResolvedTarget, activeUsers int) vegeta.Targeter {
 	var list []resolvedWeighted
 	total := 0
 	for _, t := range targets {
@@ -140,12 +140,12 @@ func buildTargeterFromResolved(targets []ResolvedTarget) vegeta.Targeter {
 		total = 1
 	}
 
-	return newWeightedTargeter(list, total)
+	return newWeightedTargeter(list, total, activeUsers)
 }
 
 // BuildTargeterFromResolved exposes the resolved-target vegeta targeter for the loadgen pod.
-func BuildTargeterFromResolved(targets []ResolvedTarget) vegeta.Targeter {
-	return buildTargeterFromResolved(targets)
+func BuildTargeterFromResolved(targets []ResolvedTarget, activeUsers int) vegeta.Targeter {
+	return buildTargeterFromResolved(targets, activeUsers)
 }
 
 type resolvedWeighted struct {
@@ -153,7 +153,7 @@ type resolvedWeighted struct {
 	weight int
 }
 
-func newWeightedTargeter(list []resolvedWeighted, total int) vegeta.Targeter {
+func newWeightedTargeter(list []resolvedWeighted, total, activeUsers int) vegeta.Targeter {
 	var mu sync.Mutex
 	return func(tgt *vegeta.Target) error {
 		mu.Lock()
@@ -179,7 +179,11 @@ func newWeightedTargeter(list []resolvedWeighted, total int) vegeta.Targeter {
 			endpointKey = selected.Method + " " + selected.URL
 		}
 		ApplyTraceSampleHeaders(h, rid, endpointKey, nil, TraceSampleRate())
-		ApplyClientIdentityHeaders(h, rid)
+		seed := rid
+		if activeUsers > 0 {
+			seed = fmt.Sprintf("c9-%d", rand.Intn(activeUsers))
+		}
+		ApplyClientIdentityHeaders(h, seed)
 		if selected.Body != "" {
 			body := strings.ReplaceAll(selected.Body, "{{.Rand}}", strconv.Itoa(rand.Intn(1_000_000)))
 			if strings.Contains(selected.Body, "{{.Param}}") {

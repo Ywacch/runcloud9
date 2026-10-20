@@ -42,3 +42,24 @@ func TestValidateAndNormalizeProfile_actorParams(t *testing.T) {
 		t.Fatalf("expected no-params error, got %v", err)
 	}
 }
+
+func TestValidateAndNormalizeProfile_activeUsers(t *testing.T) {
+	t.Parallel()
+	p, err := ValidateAndNormalizeProfile(LoadProfile{RPS: 10, ActiveUsers: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.RPS != 10 || p.ActiveUsers != 3 {
+		t.Fatalf("profile: rps=%d activeUsers=%d", p.RPS, p.ActiveUsers)
+	}
+	if _, err := ValidateAndNormalizeProfile(LoadProfile{ActiveUsers: -1}); err == nil {
+		t.Fatal("expected error for negative activeUsers")
+	}
+	capped, err := ValidateAndNormalizeProfile(LoadProfile{RPS: 10, ActiveUsers: maxActiveUsers + 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capped.ActiveUsers != maxActiveUsers || capped.RPS != 10 {
+		t.Fatalf("capped: rps=%d activeUsers=%d", capped.RPS, capped.ActiveUsers)
+	}
+}

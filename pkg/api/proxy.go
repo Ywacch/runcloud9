@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/ywacch/cloud9/pkg/loadgen"
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
@@ -49,6 +50,9 @@ func proxyRESTHeaders(r *http.Request, requestID, seed string) map[string]string
 	loadgen.ApplyClientIdentityHeaders(tmp, seed)
 	if xff := tmp.Get("X-Forwarded-For"); xff != "" {
 		h["X-Forwarded-For"] = xff
+	}
+	if id := tmp.Get(trace.HeaderClientID); id != "" {
+		h[trace.HeaderClientID] = id
 	}
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		h["Content-Type"] = ct
