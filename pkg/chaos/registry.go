@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ywacch/cloud9/pkg/deployer"
+	"github.com/ywacch/cloud9/pkg/rules"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -12,7 +13,23 @@ type scenarioRegistration struct {
 	scenario string
 	engine   string // empty = engine-agnostic
 	targets  []string
+	fidelity string // real | simulated | compressed; empty means real
 	new      func(client kubernetes.Interface) ChaosScenario
+}
+
+// ScenarioFidelity reports the fidelity tag for a registered scenario.
+// Unknown scenarios return real.
+func ScenarioFidelity(scenario string) string {
+	for _, reg := range scenarioRegistry {
+		if reg.scenario != scenario {
+			continue
+		}
+		if reg.fidelity == "" {
+			return rules.FidelityReal
+		}
+		return reg.fidelity
+	}
+	return rules.FidelityReal
 }
 
 var scenarioRegistry = []scenarioRegistration{

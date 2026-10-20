@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/ywacch/cloud9/pkg/loadgen"
+	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
@@ -37,6 +38,7 @@ func TestProxyRESTHeaders_includesRequestID(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Request-ID", "persona-trace-1")
+	req.Header.Set(trace.HeaderClientID, "attacker")
 
 	h := proxyRESTHeaders(req, proxyRequestID(req), "owner-u1")
 	if h["X-Request-ID"] != "persona-trace-1" {
@@ -49,6 +51,9 @@ func TestProxyRESTHeaders_includesRequestID(t *testing.T) {
 	loadgen.ApplyClientIdentityHeaders(wantXFF, "owner-u1")
 	if h["X-Forwarded-For"] != wantXFF.Get("X-Forwarded-For") {
 		t.Fatalf("X-Forwarded-For: got %q want %q", h["X-Forwarded-For"], wantXFF.Get("X-Forwarded-For"))
+	}
+	if h[trace.HeaderClientID] != "owner-u1" {
+		t.Fatalf("X-C9-Client-ID: got %q want owner-u1", h[trace.HeaderClientID])
 	}
 	if h["Content-Type"] != "application/json" {
 		t.Fatalf("Content-Type: got %q", h["Content-Type"])

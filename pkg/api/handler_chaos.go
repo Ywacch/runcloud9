@@ -157,6 +157,7 @@ func (h *Handler) handleChaosApply(w http.ResponseWriter, r *http.Request) {
 		detail := map[string]string{
 			"scenario":        req.Scenario,
 			"targetComponent": req.TargetComponent,
+			"fidelity":        chaos.ScenarioFidelity(req.Scenario),
 		}
 		if part, ok := scenario.(*chaos.PartitionScenario); ok && part.TargetPod != "" {
 			detail["targetPod"] = part.TargetPod

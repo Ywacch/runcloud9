@@ -14,6 +14,7 @@ type PodStartBody struct {
 	Targets         []PodStartTarget `json:"targets,omitempty"`
 	Actor           *PodActorConfig  `json:"actor,omitempty"`
 	Distribution    map[string]int   `json:"distribution,omitempty"`
+	ActiveUsers     int              `json:"activeUsers,omitempty"`
 }
 
 // PodStartTarget is one pre-resolved static target for the loadgen pod.
@@ -38,6 +39,7 @@ func BuildPodStartBody(ctx context.Context, namespace string, profile LoadProfil
 		ScheduleID:      profile.ScheduleID,
 		Phases:          append([]Phase(nil), profile.Phases...),
 		Distribution:    plan.Distribution,
+		ActiveUsers:     profile.ActiveUsers,
 	}
 
 	if plan.Actor != nil {
@@ -51,8 +53,9 @@ func BuildPodStartBody(ctx context.Context, namespace string, profile LoadProfil
 			BaseURL:      baseURL,
 			Endpoints:    specs,
 			Distribution: plan.Distribution,
-			Pools:        flatPoolsFromSpecs(ctx, baseURL, specs),
-			SegmentPools: actorSegmentPoolsFromTemplate(ctx, baseURL, profile.Template),
+			Pools:        capIdentityPools(flatPoolsFromSpecs(ctx, baseURL, specs), profile.ActiveUsers),
+			SegmentPools: capIdentityPools(actorSegmentPoolsFromTemplate(ctx, baseURL, profile.Template), profile.ActiveUsers),
+			ActiveUsers:  profile.ActiveUsers,
 			ParamDefs:    paramDefs,
 			ParamValues:  profile.ActorParams,
 		}

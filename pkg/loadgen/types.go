@@ -1,10 +1,14 @@
 package loadgen
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/templates"
 )
+
+// maxActiveUsers caps LoadProfile.ActiveUsers so a client cannot request an unbounded identity set.
+const maxActiveUsers = 10000
 
 // EndpointSpec describes one endpoint the load generator can target.
 // UNDERSTAND: templates define their own endpoints — the load generator
@@ -51,6 +55,9 @@ type LoadProfile struct {
 	ActorParams map[string]float64 `json:"actorParams,omitempty"`
 	// ScheduleID selects a template-declared load schedule (YAML loadgen.schedules).
 	ScheduleID string `json:"scheduleId,omitempty"`
+	// ActiveUsers is the number of distinct logical identities the pressure lane draws from.
+	// Zero keeps today's behavior: actor mode uses the template pool, static mode a new seed per request.
+	ActiveUsers int `json:"activeUsers,omitempty"`
 	// Phases is resolved from the template schedule during normalization (not sent by clients).
 	Phases []Phase `json:"-"`
 }
@@ -119,6 +126,12 @@ func ValidateAndNormalizeProfile(p LoadProfile) (LoadProfile, error) {
 	}
 	if p.DurationSeconds < 0 {
 		p.DurationSeconds = 0
+	}
+	if p.ActiveUsers < 0 {
+		return p, fmt.Errorf("loadgen: activeUsers must be >= 0")
+	}
+	if p.ActiveUsers > maxActiveUsers {
+		p.ActiveUsers = maxActiveUsers
 	}
 
 	if p.Template == "" {

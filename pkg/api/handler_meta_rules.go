@@ -24,6 +24,7 @@ type ruleView struct {
 	Visibility     string   `json:"visibility"`
 	Summary        string   `json:"summary"`
 	CausedByConfig []string `json:"causedByConfig,omitempty"`
+	Fidelity       string   `json:"fidelity,omitempty"`
 }
 
 var (
@@ -45,6 +46,7 @@ func rulesCatalogPayload() ([]byte, string) {
 				Visibility:     r.Visibility,
 				Summary:        r.Summary,
 				CausedByConfig: r.CausedByConfig,
+				Fidelity:       r.Fidelity,
 			}
 		}
 		resp := rulesCatalogResponse{

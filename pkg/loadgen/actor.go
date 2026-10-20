@@ -47,6 +47,7 @@ type TargetPlan struct {
 	Actor        *ActorModel
 	Static       []ResolvedTarget
 	Distribution map[string]int
+	ActiveUsers  int
 }
 
 // BuildTargeter returns a vegeta targeter for this plan.
@@ -54,7 +55,7 @@ func (p TargetPlan) BuildTargeter() vegeta.Targeter {
 	if p.Actor != nil {
 		return p.Actor.targeter()
 	}
-	return buildTargeterFromResolved(p.Static)
+	return buildTargeterFromResolved(p.Static, p.ActiveUsers)
 }
 
 func newActorModel(
@@ -251,6 +252,7 @@ type PodActorConfig struct {
 	SegmentPools map[string][]string `json:"segmentPools"`
 	ParamDefs    []ActorParam        `json:"paramDefs"`
 	ParamValues  map[string]float64  `json:"paramValues"`
+	ActiveUsers  int                 `json:"activeUsers,omitempty"`
 }
 
 // BuildTargeterFromPodActor reconstructs an actor targeter in the loadgen pod.
@@ -259,8 +261,8 @@ func BuildTargeterFromPodActor(cfg PodActorConfig) vegeta.Targeter {
 		cfg.BaseURL,
 		cfg.Endpoints,
 		cfg.Distribution,
-		cfg.Pools,
-		cfg.SegmentPools,
+		capIdentityPools(cfg.Pools, cfg.ActiveUsers),
+		capIdentityPools(cfg.SegmentPools, cfg.ActiveUsers),
 		cfg.ParamDefs,
 		cfg.ParamValues,
 	)

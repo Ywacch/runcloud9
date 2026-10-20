@@ -2,7 +2,14 @@
 package rules
 
 // CatalogVersion bumps when static rule metadata changes.
-const CatalogVersion = "2"
+const CatalogVersion = "3"
+
+// Fidelity labels how close a rule or scenario is to production behavior.
+const (
+	FidelityReal       = "real"
+	FidelitySimulated  = "simulated"
+	FidelityCompressed = "compressed"
+)
 
 // Family groups detector rules for filtering and narration.
 type Family string
@@ -26,6 +33,7 @@ type Rule struct {
 	Visibility     string   // "student" | "operator" | "all"
 	Summary        string   // one line, student-readable
 	CausedByConfig []string // design_config keys that make this rule possible
+	Fidelity       string   // real | simulated | compressed
 }
 
 // Static catalog ids (template invariants overlay in CatalogFor, PR-3).
@@ -159,7 +167,11 @@ var catalogByID map[string]Rule
 
 func init() {
 	catalogByID = make(map[string]Rule, len(staticCatalog))
-	for _, r := range staticCatalog {
+	for i, r := range staticCatalog {
+		if r.Fidelity == "" {
+			r.Fidelity = FidelityReal
+			staticCatalog[i] = r
+		}
 		catalogByID[r.ID] = r
 	}
 }

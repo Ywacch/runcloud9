@@ -15,6 +15,9 @@ type requestIDKey struct{}
 type traceSampleKey struct{}
 type clientIDKey struct{}
 
+// HeaderClientID is the logical user identity. X-Forwarded-For stays the network identity used by nginx ip_hash.
+const HeaderClientID = "X-C9-Client-ID"
+
 // VerboseEnabled reports whether LOG_VERBOSE=1.
 func VerboseEnabled() bool {
 	return os.Getenv("LOG_VERBOSE") == "1"
@@ -36,6 +39,9 @@ func ContextFromRequest(r *http.Request) *http.Request {
 }
 
 func clientIDFromRequest(r *http.Request) string {
+	if id := strings.TrimSpace(r.Header.Get(HeaderClientID)); id != "" {
+		return id
+	}
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		parts := strings.Split(xff, ",")
 		if ip := strings.TrimSpace(parts[0]); ip != "" {
@@ -70,7 +76,8 @@ func RequestID(ctx context.Context) string {
 }
 
 // ClientID returns the sticky client identity from ctx, if any.
-// Loadgen sets X-Forwarded-For per virtual user; nginx ip_hash pins that user to one app pod.
+// Loadgen sets X-C9-Client-ID to the logical user and X-Forwarded-For to a virtual IP.
+// nginx ip_hash pins that IP to one app pod.
 func ClientID(ctx context.Context) string {
 	v, _ := ctx.Value(clientIDKey{}).(string)
 	return v

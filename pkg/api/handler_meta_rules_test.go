@@ -43,6 +43,11 @@ func TestHandleGetRules_ReturnsCatalogWithETag(t *testing.T) {
 	if resp.Rules[0].ID == "" || resp.Rules[0].Family == "" || resp.Rules[0].Summary == "" {
 		t.Fatalf("first rule missing fields: %+v", resp.Rules[0])
 	}
+	for _, rule := range resp.Rules {
+		if rule.Fidelity != rules.FidelityReal {
+			t.Fatalf("rule %s fidelity: want %q, got %q", rule.ID, rules.FidelityReal, rule.Fidelity)
+		}
+	}
 
 	req304 := httptest.NewRequest(http.MethodGet, "/meta/rules", nil)
 	req304.Header.Set("If-None-Match", etag)
