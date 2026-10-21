@@ -14,6 +14,20 @@ deployable: true
 # Lower default loadgen rate: most traffic hits expensive fan-out-on-read feed queries at alpha resources.
 loadgen:
   defaultRps: 25
+  # Virtual users: closed-loop scripts (post a root, then reply) beside open-loop RPS.
+  vu:
+    identity: { poolEndpoint: /user-pool, poolField: userIds }
+    actions:
+      create_root:
+        method: POST
+        path: /post
+        body: '{"user_id":{{.UserID}},"content":"c9 root {{.Seq}}"}'
+        idField: post_id
+      create_reply:
+        method: POST
+        path: /post
+        body: '{"user_id":{{.UserID}},"content":"c9 reply","reply_to_id":{{.ParentID}}}'
+        idField: post_id
   endpoints:
     - method: GET
       pathTemplate: /feed/{userId}

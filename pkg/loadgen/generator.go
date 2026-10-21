@@ -93,6 +93,9 @@ func resolveLoadgenBaseURL(namespace string, profile LoadProfile) string {
 // but within the cluster, K8s DNS resolves "app-server.{namespace}" just fine.
 func (lg *LocalLoadGenerator) Start(ctx context.Context, namespace string, profile LoadProfile) error {
 	profile = NormalizeProfile(profile)
+	if profile.VU != nil {
+		return fmt.Errorf("loadgen: vu lane requires the loadgen pod")
+	}
 	plan, err := profileToTargetPlan(ctx, namespace, profile)
 	if err != nil {
 		return err

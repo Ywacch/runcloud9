@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/loadgen"
+	"github.com/ywacch/cloud9/pkg/loadgen/vu"
 )
 
 const listenAddr = ":9100"
@@ -27,6 +28,8 @@ type server struct {
 	control   *loadgen.AttackControl
 
 	allowedDistKeys map[string]struct{}
+
+	vuRunner *vu.Runner
 
 	statsMu sync.RWMutex
 	stats   loadgen.LoadStats
@@ -93,6 +96,16 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var vuRunner *vu.Runner
+	if body.VU != nil {
+		r, err := loadgen.NewVURunner(body.VU)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		vuRunner = r
+	}
+
 	s.mu.Lock()
 	if s.running {
 		s.mu.Unlock()
@@ -126,9 +139,24 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recent = loadgen.LatencyRing{}
 	s.statsMu.Unlock()
+	s.vuRunner = vuRunner
 	s.mu.Unlock()
 
-	go s.runAttack(attackCtx, body, control)
+	if vuRunner != nil {
+		if err := vuRunner.Start(attackCtx); err != nil {
+			cancel()
+			s.mu.Lock()
+			s.running = false
+			s.cancel = nil
+			s.control = nil
+			s.vuRunner = nil
+			s.mu.Unlock()
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	go s.runAttack(attackCtx, body, control, vuRunner)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
 }
@@ -191,7 +219,12 @@ func (s *server) handleStop(w http.ResponseWriter, r *http.Request) {
 	s.running = false
 	s.cancel = nil
 	s.control = nil
+	vuRunner := s.vuRunner
 	s.mu.Unlock()
+
+	if vuRunner != nil {
+		vuRunner.Stop()
+	}
 
 	s.statsMu.Lock()
 	s.stats.Active = false
@@ -204,11 +237,20 @@ func (s *server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	s.statsMu.RLock()
 	out := s.stats
 	s.statsMu.RUnlock()
+	s.mu.Lock()
+	if s.vuRunner != nil {
+		st := s.vuRunner.Stats()
+		out.VU = &st
+	}
+	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (s *server) runAttack(ctx context.Context, body loadgen.PodStartBody, control *loadgen.AttackControl) {
+func (s *server) runAttack(ctx context.Context, body loadgen.PodStartBody, control *loadgen.AttackControl, vuRunner *vu.Runner) {
 	defer func() {
+		if vuRunner != nil {
+			vuRunner.Stop()
+		}
 		s.mu.Lock()
 		s.running = false
 		s.cancel = nil

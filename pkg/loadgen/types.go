@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ywacch/cloud9/pkg/loadgen/vu"
 	"github.com/ywacch/cloud9/pkg/templates"
 )
 
@@ -60,6 +61,9 @@ type LoadProfile struct {
 	ActiveUsers int `json:"activeUsers,omitempty"`
 	// Phases is resolved from the template schedule during normalization (not sent by clients).
 	Phases []Phase `json:"-"`
+	// VU (virtual user) selects closed-loop scripted traffic (post, then reply)
+	// beside Vegeta's open-loop requests per second. Loadgen pod only.
+	VU *VUConfig `json:"vu,omitempty"`
 }
 
 // AttackDuration returns vegeta attack duration; 0 means run until Stop().
@@ -96,6 +100,8 @@ type LoadStats struct {
 	PhaseIndex        int            `json:"phaseIndex,omitempty"`
 	// Stale is true when the last-known stats are returned after a fetch error.
 	Stale bool `json:"stale,omitempty"`
+	// VU (virtual user) reports closed-loop script stats when that traffic is active.
+	VU *vu.Stats `json:"vu,omitempty"`
 }
 
 // DefaultProfile returns default RPS only. Template and distribution come from the handler or JSON.
@@ -134,6 +140,10 @@ func ValidateAndNormalizeProfile(p LoadProfile) (LoadProfile, error) {
 		p.ActiveUsers = maxActiveUsers
 	}
 
+	if p.VU != nil && p.Template == "" {
+		return p, fmt.Errorf("loadgen: vu lane requires a template")
+	}
+
 	if p.Template == "" {
 		return p, nil
 	}
@@ -169,6 +179,9 @@ func ValidateAndNormalizeProfile(p LoadProfile) (LoadProfile, error) {
 		}
 	}
 	p.Distribution = base
+	if err := validateVUProfile(p); err != nil {
+		return p, err
+	}
 	return p, nil
 }
 

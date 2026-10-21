@@ -17,6 +17,27 @@ type LoadgenSpec struct {
 	Endpoints  []LoadgenEndpointSpec `yaml:"endpoints" json:"endpoints,omitempty"`
 	Params     []LoadgenActorParam   `yaml:"params" json:"params,omitempty"`
 	Schedules  []LoadgenSchedule     `yaml:"schedules" json:"schedules,omitempty"`
+	VU         *LoadgenVUSpec        `yaml:"vu" json:"vu,omitempty"`
+}
+
+// LoadgenVUSpec declares identity pool and named HTTP actions for the VU lane.
+type LoadgenVUSpec struct {
+	Identity LoadgenVUIdentity          `yaml:"identity" json:"identity"`
+	Actions  map[string]LoadgenVUAction `yaml:"actions" json:"actions,omitempty"`
+}
+
+// LoadgenVUIdentity selects the user identity pool for VU behaviors.
+type LoadgenVUIdentity struct {
+	PoolEndpoint string `yaml:"poolEndpoint" json:"poolEndpoint"`
+	PoolField    string `yaml:"poolField" json:"poolField"`
+}
+
+// LoadgenVUAction is one HTTP call template for the VU lane.
+type LoadgenVUAction struct {
+	Method  string `yaml:"method" json:"method"`
+	Path    string `yaml:"path" json:"path"`
+	Body    string `yaml:"body" json:"body,omitempty"`
+	IDField string `yaml:"idField" json:"idField,omitempty"`
 }
 
 type loadgenEndpointDef struct {
@@ -34,6 +55,24 @@ type loadgenDef struct {
 	Endpoints  []loadgenEndpointDef   `yaml:"endpoints" json:"endpoints"`
 	Params     []loadgenActorParamDef `yaml:"params" json:"params"`
 	Schedules  []loadgenScheduleDef   `yaml:"schedules" json:"schedules"`
+	VU         *loadgenVUSpecDef      `yaml:"vu" json:"vu"`
+}
+
+type loadgenVUSpecDef struct {
+	Identity loadgenVUIdentityDef          `yaml:"identity" json:"identity"`
+	Actions  map[string]loadgenVUActionDef `yaml:"actions" json:"actions"`
+}
+
+type loadgenVUIdentityDef struct {
+	PoolEndpoint string `yaml:"poolEndpoint" json:"poolEndpoint"`
+	PoolField    string `yaml:"poolField" json:"poolField"`
+}
+
+type loadgenVUActionDef struct {
+	Method  string `yaml:"method" json:"method"`
+	Path    string `yaml:"path" json:"path"`
+	Body    string `yaml:"body" json:"body"`
+	IDField string `yaml:"idField" json:"idField"`
 }
 
 // LoadgenEndpoints returns a deep copy of endpoint specs for templateID.
@@ -142,6 +181,9 @@ func loadgenSpecFromDef(def *loadgenDef) *LoadgenSpec {
 	for _, ep := range def.Endpoints {
 		spec.Endpoints = append(spec.Endpoints, LoadgenEndpointSpec(ep))
 	}
+	if def.VU != nil {
+		spec.VU = loadgenVUSpecFromDef(def.VU)
+	}
 	for _, p := range def.Params {
 		param := LoadgenActorParam{
 			Key:     p.Key,
@@ -158,4 +200,52 @@ func loadgenSpecFromDef(def *loadgenDef) *LoadgenSpec {
 		spec.Params = append(spec.Params, param)
 	}
 	return spec
+}
+
+func loadgenVUSpecFromDef(def *loadgenVUSpecDef) *LoadgenVUSpec {
+	if def == nil {
+		return nil
+	}
+	out := &LoadgenVUSpec{
+		Identity: LoadgenVUIdentity{
+			PoolEndpoint: def.Identity.PoolEndpoint,
+			PoolField:    def.Identity.PoolField,
+		},
+		Actions: make(map[string]LoadgenVUAction, len(def.Actions)),
+	}
+	for k, a := range def.Actions {
+		out.Actions[k] = LoadgenVUAction{
+			Method:  a.Method,
+			Path:    a.Path,
+			Body:    a.Body,
+			IDField: a.IDField,
+		}
+	}
+	return out
+}
+
+// LoadgenVU returns a deep copy of the template's VU lane config.
+func LoadgenVU(templateID string) (*LoadgenVUSpec, bool) {
+	t := GetTemplate(templateID)
+	if t == nil || t.Loadgen == nil || t.Loadgen.VU == nil {
+		return nil, false
+	}
+	return loadgenVUSpecFromDef(&loadgenVUSpecDef{
+		Identity: loadgenVUIdentityDef{
+			PoolEndpoint: t.Loadgen.VU.Identity.PoolEndpoint,
+			PoolField:    t.Loadgen.VU.Identity.PoolField,
+		},
+		Actions: func() map[string]loadgenVUActionDef {
+			m := make(map[string]loadgenVUActionDef, len(t.Loadgen.VU.Actions))
+			for k, a := range t.Loadgen.VU.Actions {
+				m[k] = loadgenVUActionDef{
+					Method:  a.Method,
+					Path:    a.Path,
+					Body:    a.Body,
+					IDField: a.IDField,
+				}
+			}
+			return m
+		}(),
+	}), true
 }

@@ -984,6 +984,8 @@ func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.emitVUGapWarningIfNeeded(namespace, profile, row)
+
 	if h.eventBus != nil {
 		h.eventBus.Emit(namespace, metrics.Event{
 			Timestamp:   time.Now(),
