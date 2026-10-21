@@ -48,6 +48,29 @@ func ParseReplicaApplyDelayMs(config map[string]any, readReplicas int) ([]int, e
 	return values, nil
 }
 
+// ValidateReplicaApplyDelay rejects delays the db node's replication settings cannot honour.
+// Deploy validation and the live replica-lag update share it.
+func ValidateReplicaApplyDelay(config map[string]any, delaysMs []int) error {
+	if !HasPositiveReplicaApplyDelay(delaysMs) {
+		return nil
+	}
+	mode, err := parseReplicationMode(config)
+	if err != nil {
+		return err
+	}
+	if !requiresSynchronousReplication(mode) {
+		return nil
+	}
+	level, err := syncCommitLevelFromConfig(config)
+	if err != nil {
+		return err
+	}
+	if level == syncCommitRemoteApply {
+		return fmt.Errorf("replicaApplyDelayMs cannot be set with syncCommitLevel remote_apply (commits would wait on the delayed standby)")
+	}
+	return nil
+}
+
 // ReplicaApplyDelayUniform reports whether every standby has the same delay.
 func ReplicaApplyDelayUniform(delays []int) bool {
 	if len(delays) <= 1 {

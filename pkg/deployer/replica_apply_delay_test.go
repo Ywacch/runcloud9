@@ -110,6 +110,59 @@ func TestBuildDBReplicaInitScript_applyDelayCase(t *testing.T) {
 	}
 }
 
+func TestValidateReplicaApplyDelay(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		config  map[string]any
+		delays  []int
+		wantErr bool
+	}{
+		{
+			name:    "semi-sync remote_apply with positive delay blocks",
+			config:  map[string]any{"replicationMode": "semi-sync", "syncCommitLevel": "remote_apply"},
+			delays:  []int{0, 1500},
+			wantErr: true,
+		},
+		{
+			name:    "sync remote_apply with positive delay blocks",
+			config:  map[string]any{"replicationMode": "sync", "syncCommitLevel": "remote_apply"},
+			delays:  []int{1500},
+			wantErr: true,
+		},
+		{
+			name:   "remote_apply with zero delay passes",
+			config: map[string]any{"replicationMode": "sync", "syncCommitLevel": "remote_apply"},
+			delays: []int{0, 0},
+		},
+		{
+			name:   "async ignores remote_apply",
+			config: map[string]any{"replicationMode": "async", "syncCommitLevel": "remote_apply"},
+			delays: []int{0, 1500},
+		},
+		{
+			name:   "sync remote_write passes",
+			config: map[string]any{"replicationMode": "sync", "syncCommitLevel": "remote_write"},
+			delays: []int{0, 1500},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateReplicaApplyDelay(tc.config, tc.delays)
+			if tc.wantErr && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestReplicaApplyDelayUniform(t *testing.T) {
 	t.Parallel()
 	if !ReplicaApplyDelayUniform([]int{100, 100}) {
