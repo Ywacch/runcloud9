@@ -79,6 +79,10 @@ func (h *Handler) handleUpdateReplicaLag(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := deployer.ValidateReplicaApplyDelay(cfg, delays); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	hosts := deployer.DBReplicaHostnamesFromConfig(dbNode.Config)
 	if len(hosts) != len(delays) {
 		writeError(w, http.StatusInternalServerError, "replica host count mismatch")

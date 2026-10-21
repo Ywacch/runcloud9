@@ -141,15 +141,8 @@ func validateDBReplicaApplyDelay(design DeploymentDesign, _ *templates.TemplateS
 		if err != nil {
 			return fmt.Errorf("database %q: %w", node.Name, err)
 		}
-		level, err := syncCommitLevelFromConfig(node.Config)
-		if err != nil {
+		if err := ValidateReplicaApplyDelay(node.Config, delays); err != nil {
 			return fmt.Errorf("database %q: %w", node.Name, err)
-		}
-		if level == syncCommitRemoteApply && HasPositiveReplicaApplyDelay(delays) {
-			return fmt.Errorf(
-				"database %q: replicaApplyDelayMs cannot be set with syncCommitLevel remote_apply (commits would wait on the delayed standby)",
-				node.Name,
-			)
 		}
 	}
 	return nil
