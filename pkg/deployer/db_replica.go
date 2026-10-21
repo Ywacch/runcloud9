@@ -32,8 +32,53 @@ const (
 	dbReplicaEphemeralSize  = "500Mi"
 	// --checkpoint=fast: after pg_restore the primary is dirty; default spread
 	// checkpoint left replica inits on "waiting for checkpoint" until the 5m deploy deadline.
-	dbReplicaBasebackupScript = `until pg_isready -h db -U syscrack; do sleep 1; done; SLOT=$(printf '%s' "$HOSTNAME" | tr '-' '_'); psql -h db -U syscrack -d syscrack -v ON_ERROR_STOP=1 -tAc "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name = '${SLOT}' AND NOT active"; psql -h db -U syscrack -d syscrack -v ON_ERROR_STOP=1 -tAc "SELECT pg_create_physical_replication_slot('${SLOT}') WHERE NOT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = '${SLOT}')"; pg_basebackup -h db -U syscrack -D $PGDATA -Fp -Xs -R -P --checkpoint=fast; echo "primary_conninfo = 'host=db port=5432 user=syscrack application_name=${HOSTNAME} sslmode=disable'" >> "$PGDATA/postgresql.auto.conf"; echo "primary_slot_name = '${SLOT}'" >> "$PGDATA/postgresql.auto.conf"`
+	dbReplicaBasebackupScriptCore = `until pg_isready -h db -U syscrack; do sleep 1; done; SLOT=$(printf '%s' "$HOSTNAME" | tr '-' '_'); psql -h db -U syscrack -d syscrack -v ON_ERROR_STOP=1 -tAc "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name = '${SLOT}' AND NOT active"; psql -h db -U syscrack -d syscrack -v ON_ERROR_STOP=1 -tAc "SELECT pg_create_physical_replication_slot('${SLOT}') WHERE NOT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = '${SLOT}')"; pg_basebackup -h db -U syscrack -D $PGDATA -Fp -Xs -R -P --checkpoint=fast; echo "primary_conninfo = 'host=db port=5432 user=syscrack application_name=${HOSTNAME} sslmode=disable'" >> "$PGDATA/postgresql.auto.conf"; echo "primary_slot_name = '${SLOT}'" >> "$PGDATA/postgresql.auto.conf"`
 )
+
+// DBReplicaHostnamesFromConfig returns standby pod hostnames in deploy order.
+func DBReplicaHostnamesFromConfig(config map[string]any) []string {
+	readReplicas := int(parseReadReplicaCount(config))
+	if readReplicas <= 0 {
+		return nil
+	}
+	total := 1 + readReplicas
+	sizes := instanceSizesFromConfig(config, total)
+	return dbReplicaHostnames(readReplicas, sizes[1:])
+}
+
+func buildDBReplicaInitScript(cfg DeployConfig) string {
+	readReplicas := int(dbReadReplicaCount(cfg))
+	if readReplicas <= 0 {
+		return dbReplicaBasebackupScriptCore
+	}
+	hosts := DBReplicaHostnamesFromConfig(cfg.Node.Config)
+	delays, err := ParseReplicaApplyDelayMs(cfg.Node.Config, readReplicas)
+	if err != nil || len(hosts) != len(delays) {
+		delays = zeroDelays(readReplicas)
+	}
+	return dbReplicaBasebackupScriptCore + replicaApplyDelayCaseScript(hosts, delays)
+}
+
+func replicaApplyDelayCaseScript(hosts []string, delaysMs []int) string {
+	if len(hosts) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("; case \"$HOSTNAME\" in")
+	for i, host := range hosts {
+		ms := 0
+		if i < len(delaysMs) {
+			ms = delaysMs[i]
+		}
+		b.WriteString("\n  ")
+		b.WriteString(host)
+		b.WriteString(")\n    echo \"recovery_min_apply_delay = '")
+		b.WriteString(strconv.Itoa(ms))
+		b.WriteString("ms'\" >> \"$PGDATA/postgresql.auto.conf\"\n    ;;")
+	}
+	b.WriteString("\nesac")
+	return b.String()
+}
 
 // postgresPrimaryCommand returns the postgres primary container command.
 // Synchronous replication GUCs are applied after standbys stream (see postgres_sync.go).
@@ -152,7 +197,7 @@ func dbReplicaPodTemplateSpec(
 		// hostname (primary-side replay_lag labels). primary_slot_name is a GUC, not a libpq
 		// option; stuffing it into primary_conninfo makes walreceiver fail with
 		// invalid connection option "primary_slot_name".
-		Command: []string{"sh", "-c", dbReplicaBasebackupScript},
+		Command: []string{"sh", "-c", buildDBReplicaInitScript(cfg)},
 		Env: []corev1.EnvVar{
 			{Name: "PGDATA", Value: "/var/lib/postgresql/data"},
 		},

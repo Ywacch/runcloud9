@@ -101,6 +101,12 @@ func projectDBSettings(settings map[string]any, cfg map[string]interface{}) {
 	if configKeyPresent(cfg, "readReplicas") {
 		settings["readReplicas"] = int(ParseReadReplicaCount(cfg))
 	}
+	if configKeyPresent(cfg, "replicaApplyDelayMs") {
+		rr := int(ParseReadReplicaCount(cfg))
+		if delays, err := ParseReplicaApplyDelayMs(cfg, rr); err == nil && len(delays) > 0 {
+			settings["replicaApplyDelayMs"] = delays
+		}
+	}
 }
 
 func projectCacheSettings(settings map[string]any, n DeploymentNode) {

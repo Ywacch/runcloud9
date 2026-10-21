@@ -32,6 +32,7 @@ func ValidateRuntimeContract(design DeploymentDesign, tmpl *templates.TemplateSp
 		validateDBReadReplicas,
 		validateDBReplicationConfig,
 		validateDBReadConsistency,
+		validateDBReplicaApplyDelay,
 		validateProxyQueries,
 		validateAppServerEnv,
 		validateWorkerEnv,
@@ -130,6 +131,30 @@ func validateDBReadConsistency(design DeploymentDesign, _ *templates.TemplateSpe
 	return nil
 }
 
+func validateDBReplicaApplyDelay(design DeploymentDesign, _ *templates.TemplateSpec) error {
+	for _, node := range design.Nodes {
+		if node.Type != "db" {
+			continue
+		}
+		readReplicas := int(parseReadReplicaCount(node.Config))
+		delays, err := ParseReplicaApplyDelayMs(node.Config, readReplicas)
+		if err != nil {
+			return fmt.Errorf("database %q: %w", node.Name, err)
+		}
+		level, err := syncCommitLevelFromConfig(node.Config)
+		if err != nil {
+			return fmt.Errorf("database %q: %w", node.Name, err)
+		}
+		if level == syncCommitRemoteApply && HasPositiveReplicaApplyDelay(delays) {
+			return fmt.Errorf(
+				"database %q: replicaApplyDelayMs cannot be set with syncCommitLevel remote_apply (commits would wait on the delayed standby)",
+				node.Name,
+			)
+		}
+	}
+	return nil
+}
+
 // RuntimeContractWarnings returns non-blocking notices for deploy-time bounds adjustments.
 func RuntimeContractWarnings(design DeploymentDesign) []TopologyWarning {
 	var warnings []TopologyWarning
@@ -170,6 +195,27 @@ func RuntimeContractWarnings(design DeploymentDesign) []TopologyWarning {
 			Code: WarningCodeReplicationSemiSyncEquivalent,
 			Message: fmt.Sprintf(
 				"Database %q replicationMode semi-sync with one read replica behaves like sync (FIRST 1); add a second replica to teach ANY 1",
+				node.Name,
+			),
+			NodeIDs: []string{node.ID},
+		})
+	}
+	for _, node := range design.Nodes {
+		if node.Type != "db" {
+			continue
+		}
+		readReplicas := int(parseReadReplicaCount(node.Config))
+		if readReplicas < 2 || !configKeyPresent(node.Config, "replicaApplyDelayMs") {
+			continue
+		}
+		delays, err := ParseReplicaApplyDelayMs(node.Config, readReplicas)
+		if err != nil || !ReplicaApplyDelayUniform(delays) {
+			continue
+		}
+		warnings = append(warnings, TopologyWarning{
+			Code: WarningCodeReplicaEqualApplyDelay,
+			Message: fmt.Sprintf(
+				"Database %q equal delay: stale reads yes, reply-before-parent rare",
 				node.Name,
 			),
 			NodeIDs: []string{node.ID},
