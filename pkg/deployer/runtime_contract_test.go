@@ -367,6 +367,24 @@ func TestValidateRuntimeContract_Table(t *testing.T) {
 				Connections: []DeploymentConn{{SourceID: "app1", TargetID: "db1"}},
 			},
 		},
+		{
+			name:       "remote_apply blocks positive replica apply delay",
+			templateID: "social-feed",
+			design: DeploymentDesign{
+				Template: "social-feed",
+				Nodes: []DeploymentNode{
+					{ID: "app1", Type: "app-server", Name: "App"},
+					{ID: "db1", Type: "db", Name: "PostgreSQL", Config: map[string]interface{}{
+						"readReplicas":        2,
+						"syncCommitLevel":     "remote_apply",
+						"replicationMode":     "semi-sync",
+						"replicaApplyDelayMs": []interface{}{0, 500},
+					}},
+				},
+				Connections: []DeploymentConn{{SourceID: "app1", TargetID: "db1"}},
+			},
+			wantErr: "replicaApplyDelayMs cannot be set with syncCommitLevel remote_apply",
+		},
 	}
 
 	for _, tc := range tests {
@@ -390,6 +408,32 @@ func TestValidateRuntimeContract_Table(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRuntimeContractWarnings_ReplicaEqualApplyDelay(t *testing.T) {
+	t.Parallel()
+
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "db1", Type: "db", Name: "PostgreSQL", Config: map[string]interface{}{
+				"readReplicas":        2,
+				"replicaApplyDelayMs": 1500,
+			}},
+		},
+	}
+	got := RuntimeContractWarnings(design)
+	var found bool
+	for _, w := range got {
+		if w.Code == WarningCodeReplicaEqualApplyDelay {
+			found = true
+			if !strings.Contains(w.Message, "equal delay") {
+				t.Fatalf("message: %q", w.Message)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected warning %q, got %+v", WarningCodeReplicaEqualApplyDelay, got)
 	}
 }
 

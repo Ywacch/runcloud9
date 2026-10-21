@@ -62,8 +62,9 @@ type Server struct {
 }
 
 type postRequest struct {
-	UserID  int    `json:"user_id"`
-	Content string `json:"content"`
+	UserID    int    `json:"user_id"`
+	Content   string `json:"content"`
+	ReplyToID int    `json:"reply_to_id"`
 }
 
 type followRequest struct {
@@ -178,6 +179,7 @@ func (s *Server) routes() *http.ServeMux {
 
 	if role == "" || role == "post" {
 		mux.Handle("/post", withRecovery(withMetrics("/post", http.HandlerFunc(s.handlePost))))
+		mux.Handle("/threads/", withRecovery(withMetrics("/threads", http.HandlerFunc(s.handleThread))))
 	}
 
 	mux.Handle("/users", withRecovery(http.HandlerFunc(s.handleUsers)))
@@ -225,7 +227,11 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	post, err := s.db.InsertPost(ctx, req.UserID, req.Content)
+	post, err := s.db.InsertPost(ctx, req.UserID, req.Content, req.ReplyToID)
+	if errors.Is(err, ErrNotFound) {
+		jsonError(w, http.StatusNotFound, "reply parent not found")
+		return
+	}
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to insert post")
 		return
@@ -277,6 +283,30 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 	}
 	postTotal.WithLabelValues("sync").Inc()
 	writeJSON(w, http.StatusOK, map[string]any{"post_id": post.ID, "mode": "sync"})
+}
+
+func (s *Server) handleThread(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	idRaw := strings.Trim(strings.TrimPrefix(r.URL.Path, "/threads/"), "/")
+	rootID, err := strconv.Atoi(idRaw)
+	if err != nil || rootID <= 0 {
+		jsonError(w, http.StatusBadRequest, "invalid thread root id")
+		return
+	}
+	thread, err := s.db.GetThread(r.Context(), rootID)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to fetch thread")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"rootId":   thread.RootID,
+		"replies":  thread.Replies,
+		"parents":  thread.Parents,
+		"servedBy": thread.ServedBy,
+	})
 }
 
 func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {

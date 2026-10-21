@@ -28,10 +28,23 @@ type User struct {
 }
 
 type Post struct {
-	ID        int       `json:"id"`
-	UserID    int       `json:"user_id"`
-	Content   string    `json:"content"`
-	CreatedAt time.Time `json:"created_at"`
+	ID           int       `json:"id"`
+	UserID       int       `json:"user_id"`
+	Content      string    `json:"content"`
+	CreatedAt    time.Time `json:"created_at"`
+	ReplyToID    *int      `json:"reply_to_id,omitempty"`
+	ThreadRootID *int      `json:"thread_root_id,omitempty"`
+}
+
+// Thread bundles replies and parent posts for a thread root read.
+type Thread struct {
+	RootID   int
+	Replies  []Post
+	Parents  []Post
+	ServedBy struct {
+		Replies string `json:"replies"`
+		Parents string `json:"parents"`
+	}
 }
 
 type FeedItem struct {
@@ -154,6 +167,13 @@ func (db *DB) InitSchema(ctx context.Context) error {
 		}
 		if _, err := db.pool.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS pg_stat_statements`); err != nil {
 			return fmt.Errorf("create extension pg_stat_statements: %w", err)
+		}
+		if _, err := db.pool.Exec(ctx, `
+			ALTER TABLE posts ADD COLUMN IF NOT EXISTS reply_to_id INT REFERENCES posts(id);
+			ALTER TABLE posts ADD COLUMN IF NOT EXISTS thread_root_id INT;
+			CREATE INDEX IF NOT EXISTS idx_posts_thread_root ON posts (thread_root_id);
+		`); err != nil {
+			return fmt.Errorf("migrate posts thread columns: %w", err)
 		}
 		return nil
 	})
@@ -317,19 +337,169 @@ func (db *DB) getUserLeader(ctx context.Context, id int) (User, error) {
 	return u, err
 }
 
-func (db *DB) InsertPost(ctx context.Context, userID int, content string) (Post, error) {
+func (db *DB) getPostLeader(ctx context.Context, id int) (Post, error) {
+	var p Post
+	var replyTo, threadRoot *int
+	err := db.pool.QueryRow(ctx, `
+		SELECT id, user_id, content, created_at, reply_to_id, thread_root_id
+		FROM posts WHERE id = $1
+	`, id).Scan(&p.ID, &p.UserID, &p.Content, &p.CreatedAt, &replyTo, &threadRoot)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Post{}, ErrNotFound
+	}
+	if err != nil {
+		return Post{}, err
+	}
+	p.ReplyToID = replyTo
+	p.ThreadRootID = threadRoot
+	return p, nil
+}
+
+type postRowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanPost(row postRowScanner) (Post, error) {
+	var p Post
+	var replyTo, threadRoot *int
+	if err := row.Scan(&p.ID, &p.UserID, &p.Content, &p.CreatedAt, &replyTo, &threadRoot); err != nil {
+		return Post{}, err
+	}
+	p.ReplyToID = replyTo
+	p.ThreadRootID = threadRoot
+	return p, nil
+}
+
+func (db *DB) InsertPost(ctx context.Context, userID int, content string, replyToID int) (Post, error) {
 	var p Post
 	err := postgres.Observe(ctx, "insert_post", "postgres", func() error {
-		err := db.pool.QueryRow(ctx,
-			`INSERT INTO posts (user_id, content) VALUES ($1, $2) RETURNING id, user_id, content, created_at`,
-			userID, content,
-		).Scan(&p.ID, &p.UserID, &p.Content, &p.CreatedAt)
+		if replyToID <= 0 {
+			err := db.pool.QueryRow(ctx,
+				`INSERT INTO posts (user_id, content) VALUES ($1, $2)
+				 RETURNING id, user_id, content, created_at, reply_to_id, thread_root_id`,
+				userID, content,
+			).Scan(&p.ID, &p.UserID, &p.Content, &p.CreatedAt, &p.ReplyToID, &p.ThreadRootID)
+			if err != nil {
+				return err
+			}
+			if _, err := db.pool.Exec(ctx, `UPDATE posts SET thread_root_id = id WHERE id = $1`, p.ID); err != nil {
+				return err
+			}
+			root := p.ID
+			p.ThreadRootID = &root
+			return db.recordWriteToken(ctx, trace.ClientID(ctx))
+		}
+
+		parent, err := db.getPostLeader(ctx, replyToID)
+		if err != nil {
+			return err
+		}
+		threadRoot := parent.ID
+		if parent.ThreadRootID != nil && *parent.ThreadRootID > 0 {
+			threadRoot = *parent.ThreadRootID
+		}
+		err = db.pool.QueryRow(ctx, `
+			INSERT INTO posts (user_id, content, reply_to_id, thread_root_id)
+			VALUES ($1, $2, $3, $4)
+			RETURNING id, user_id, content, created_at, reply_to_id, thread_root_id
+		`, userID, content, replyToID, threadRoot).Scan(
+			&p.ID, &p.UserID, &p.Content, &p.CreatedAt, &p.ReplyToID, &p.ThreadRootID,
+		)
 		if err != nil {
 			return err
 		}
 		return db.recordWriteToken(ctx, trace.ClientID(ctx))
 	})
 	return p, err
+}
+
+func (db *DB) GetThread(ctx context.Context, rootID int) (Thread, error) {
+	out := Thread{RootID: rootID}
+	var replies []Post
+
+	err := postgres.ObserveTarget(ctx, "get_thread_replies", func() (string, error) {
+		_, target, err := db.queryRows(ctx, func(ctx context.Context, q readrouter.Querier) error {
+			rows, err := q.Query(ctx, `
+				SELECT id, user_id, content, created_at, reply_to_id, thread_root_id
+				FROM posts
+				WHERE thread_root_id = $1 AND reply_to_id IS NOT NULL
+				ORDER BY created_at ASC
+			`, rootID)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			replies = replies[:0]
+			for rows.Next() {
+				p, err := scanPost(rows)
+				if err != nil {
+					return err
+				}
+				replies = append(replies, p)
+			}
+			return rows.Err()
+		})
+		out.ServedBy.Replies = target
+		return target, err
+	})
+	if err != nil {
+		return Thread{}, err
+	}
+	out.Replies = replies
+
+	parentIDs := make([]int, 0, len(replies))
+	seen := make(map[int]struct{}, len(replies))
+	for _, r := range replies {
+		if r.ReplyToID == nil {
+			continue
+		}
+		id := *r.ReplyToID
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		parentIDs = append(parentIDs, id)
+	}
+
+	var parents []Post
+	err = postgres.ObserveTarget(ctx, "get_thread_parents", func() (string, error) {
+		_, target, err := db.queryRows(ctx, func(ctx context.Context, q readrouter.Querier) error {
+			var rows pgx.Rows
+			var err error
+			if len(parentIDs) == 0 {
+				rows, err = q.Query(ctx, `
+					SELECT id, user_id, content, created_at, reply_to_id, thread_root_id
+					FROM posts WHERE id = $1
+				`, rootID)
+			} else {
+				rows, err = q.Query(ctx, `
+					SELECT id, user_id, content, created_at, reply_to_id, thread_root_id
+					FROM posts WHERE id = ANY($1::int[])
+					ORDER BY id ASC
+				`, parentIDs)
+			}
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			parents = parents[:0]
+			for rows.Next() {
+				p, err := scanPost(rows)
+				if err != nil {
+					return err
+				}
+				parents = append(parents, p)
+			}
+			return rows.Err()
+		})
+		out.ServedBy.Parents = target
+		return target, err
+	})
+	if err != nil {
+		return Thread{}, err
+	}
+	out.Parents = parents
+	return out, nil
 }
 
 func (db *DB) GetFeedPull(ctx context.Context, userID, limit int) ([]FeedItem, error) {

@@ -194,6 +194,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("OPTIONS /deployments/{id}/introspect/{component}/peek/{param}", routeAuth(auth, rl, http.HandlerFunc(h.handleIntrospect)))
 	mux.Handle("POST /deployments/{id}/loadgen", routeAuthExpensive(auth, rl, http.HandlerFunc(h.handleStartLoadGen)))
 	mux.Handle("PATCH /deployments/{id}/loadgen", routeAuth(auth, rl, http.HandlerFunc(h.handleUpdateLoadGen)))
+	mux.Handle("PATCH /deployments/{id}/replica-lag", routeAuth(auth, rl, http.HandlerFunc(h.handleUpdateReplicaLag)))
 	mux.Handle("DELETE /deployments/{id}/loadgen", routeAuth(auth, rl, http.HandlerFunc(h.handleStopLoadGen)))
 	mux.Handle("POST /deployments/{id}/chaos", routeAuthExpensive(auth, rl, http.HandlerFunc(h.handleChaosApply)))
 	mux.Handle("DELETE /deployments/{id}/chaos", routeAuth(auth, rl, http.HandlerFunc(h.handleChaosHeal)))
