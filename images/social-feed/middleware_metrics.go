@@ -11,6 +11,10 @@ import (
 
 func withMetrics(pathPattern string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-C9-Observer") == "1" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		r = trace.ContextFromRequest(r)
 		r = trace.BindJourney(r, pathPattern)
 		start := time.Now()

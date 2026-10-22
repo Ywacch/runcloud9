@@ -56,6 +56,18 @@ func TestValidateAndNormalizeProfile_VU(t *testing.T) {
 			t.Fatalf("err: %v", err)
 		}
 	})
+	t.Run("two thread observers", func(t *testing.T) {
+		_, err := ValidateAndNormalizeProfile(LoadProfile{
+			Template: "social-feed",
+			RPS:      10,
+			VU: &VUConfig{Behaviors: []vu.BehaviorConfig{
+				{Name: "thread_observer", Count: 2},
+			}},
+		})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
 	t.Run("vu without template", func(t *testing.T) {
 		_, err := ValidateAndNormalizeProfile(LoadProfile{
 			RPS: 10,

@@ -102,6 +102,8 @@ type LoadStats struct {
 	Stale bool `json:"stale,omitempty"`
 	// VU (virtual user) reports closed-loop script stats when that traffic is active.
 	VU *vu.Stats `json:"vu,omitempty"`
+	// DetectionMayBeIncomplete is true when Vegeta throughput lags target enough that observer counts may undercount.
+	DetectionMayBeIncomplete bool `json:"detectionMayBeIncomplete,omitempty"`
 }
 
 // DefaultProfile returns default RPS only. Template and distribution come from the handler or JSON.

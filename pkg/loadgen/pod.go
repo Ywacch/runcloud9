@@ -174,6 +174,7 @@ func (p *PodLoadGenerator) GetStats(namespace string) LoadStats {
 		stats.Distribution = map[string]int{}
 	}
 	stats.Stale = false
+	stats.DetectionMayBeIncomplete = DetectionMayBeIncomplete(stats)
 	p.mu.Lock()
 	if p.last == nil {
 		p.last = make(map[string]LoadStats)
