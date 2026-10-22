@@ -273,21 +273,21 @@ Pre-launch, we're at `v0.x.x`. Don't worry about breaking changes until v1.
 
 ### Immutable image rollout process
 
-Use immutable release tags for all deployable images (`url-shortener`, `caching-proxy`, `social-feed`, `ecommerce`, workers). Do not rely on re-pushing mutable tags such as `:v1` for production rollouts.
+Use immutable release tags for all deployable images (`url-shortener`, `caching-proxy`, `social-feed`, `ecommerce`, workers, `loadgen`). Do not rely on re-pushing mutable tags such as `:v1` for production rollouts.
 
 Production source of truth is `config/image-versions.json` loaded via `IMAGE_VERSIONS_FILE`. Tag resolution priority is:
 1. Manifest entry for image name
 2. `TEMPLATE_IMAGE_TAG`
 3. `v1` fallback
 
-1. Build and push a full image set with one release tag (for example `git-1a2b3c4`).
-2. Update `config/image-versions.json` for changed images and set `IMAGE_VERSIONS_FILE` in backend deployment.
-3. Optionally set `TEMPLATE_IMAGE_TAG` for local/dev fallback.
-4. Deploy a canary template.
-5. Run rollout verification scripts and require digest parity:
-   - `scripts/verify-rollout.sh`
-   - `scripts/verify-rollout.ps1`
-6. Proceed to full rollout only after verification passes.
+Pushes to `main` run `.github/workflows/deploy.yaml`. The job rebuilds a template image when `images/<name>/` changed, and rebuilds every in-repo template image when `pkg/`, `go.mod`, `go.sum`, or `.dockerignore` changed (each Dockerfile copies `pkg/`). It pushes `git-<shortsha>` to Artifact Registry, writes those tags into `config/image-versions.json`, builds `cloud9-api` with that file inside the image, deploys it, then commits the manifest with `[skip ci]`. `ticket-drop` is built from `runcloud9-templates` and is not updated here.
+
+Docker Desktop remains a fallback. Build and push the same `git-<shortsha>` tag, update `config/image-versions.json`, and merge so the next API image picks it up. Pull `main` first if CI has already committed a bump.
+
+After a deploy, check digest parity with:
+
+- `scripts/verify-rollout.sh`
+- `scripts/verify-rollout.ps1`
 
 ---
 

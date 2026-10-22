@@ -22,8 +22,19 @@ func TestCatalog_IDsUniqueAndNonEmpty(t *testing.T) {
 		}
 		seen[r.ID] = struct{}{}
 	}
-	if len(seen) != 20 {
-		t.Fatalf("expected 20 static rules, got %d", len(seen))
+	if len(seen) != 21 {
+		t.Fatalf("expected 21 static rules, got %d", len(seen))
+	}
+}
+
+func TestCatalog_ReplyBeforeParentFidelity(t *testing.T) {
+	t.Parallel()
+	r, ok := Lookup(IDReplyBeforeParent)
+	if !ok {
+		t.Fatal("missing reply_before_parent rule")
+	}
+	if r.Fidelity != FidelitySimulated {
+		t.Fatalf("fidelity: got %q want %q", r.Fidelity, FidelitySimulated)
 	}
 }
 
@@ -47,6 +58,7 @@ func TestCatalog_LookupKnownRule(t *testing.T) {
 		IDPartitionStaleReads,
 		IDPartitionWriteStall,
 		IDReplicaCannotCatchUp,
+		IDReplyBeforeParent,
 		IDFailoverWriteLoss,
 		IDPodRestart,
 		IDPodOOM,

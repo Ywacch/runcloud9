@@ -37,15 +37,19 @@ func TestHandleGetRules_ReturnsCatalogWithETag(t *testing.T) {
 	if resp.CatalogVersion != rules.CatalogVersion {
 		t.Fatalf("catalogVersion: want %q, got %q", rules.CatalogVersion, resp.CatalogVersion)
 	}
-	if len(resp.Rules) != 20 {
-		t.Fatalf("rules: want 20, got %d", len(resp.Rules))
+	if len(resp.Rules) != 21 {
+		t.Fatalf("rules: want 21, got %d", len(resp.Rules))
 	}
 	if resp.Rules[0].ID == "" || resp.Rules[0].Family == "" || resp.Rules[0].Summary == "" {
 		t.Fatalf("first rule missing fields: %+v", resp.Rules[0])
 	}
 	for _, rule := range resp.Rules {
-		if rule.Fidelity != rules.FidelityReal {
-			t.Fatalf("rule %s fidelity: want %q, got %q", rule.ID, rules.FidelityReal, rule.Fidelity)
+		want := rules.FidelityReal
+		if rule.ID == rules.IDReplyBeforeParent {
+			want = rules.FidelitySimulated
+		}
+		if rule.Fidelity != want {
+			t.Fatalf("rule %s fidelity: want %q, got %q", rule.ID, want, rule.Fidelity)
 		}
 	}
 

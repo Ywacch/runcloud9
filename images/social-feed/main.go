@@ -301,6 +301,11 @@ func (s *Server) handleThread(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "failed to fetch thread")
 		return
 	}
+	source := "user"
+	if r.Header.Get("X-C9-Observer") == "1" {
+		source = "observer"
+	}
+	recordThreadReadMetrics(source, thread.Replies, thread.Parents)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"rootId":   thread.RootID,
 		"replies":  thread.Replies,

@@ -28,4 +28,8 @@ type TopologyFlags struct {
 	SyncCommitLevel string
 	// SyncStandbyNames is ANY 1 (*) or FIRST N (*) when semi-sync/sync is configured.
 	SyncStandbyNames string
+	// DBReplicaApplyDelayMs is per-standby replay delay from the db node design (lab lag dial).
+	DBReplicaApplyDelayMs []int
+	// DBReadConsistency is the effective read routing policy from the db node design.
+	DBReadConsistency string
 }

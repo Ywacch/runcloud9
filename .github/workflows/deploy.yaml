@@ -4,11 +4,15 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: deploy-api
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
     env:
       PROJECT_ID: runcloud9-505411
@@ -22,6 +26,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Authenticate to Google Cloud (WIF)
         uses: google-github-actions/auth@v2
@@ -37,7 +43,34 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker $GAR_HOST --quiet
 
-      - name: Build and push image
+      - name: Select template images
+        id: templates
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          mapfile -t names < <(bash scripts/ci/changed-template-images.sh "$BEFORE" HEAD)
+          echo "images=${names[*]}" >> "$GITHUB_OUTPUT"
+          echo "count=${#names[@]}" >> "$GITHUB_OUTPUT"
+          if [[ ${#names[@]} -eq 0 ]]; then
+            echo "No template images to rebuild."
+          else
+            echo "Rebuild: ${names[*]}"
+          fi
+
+      - name: Build and push changed template images
+        if: steps.templates.outputs.count != '0'
+        run: |
+          short="git-$(git rev-parse --short=7 HEAD)"
+          registry="$GAR_HOST/$PROJECT_ID/$GAR_REPO"
+          for img in ${{ steps.templates.outputs.images }}; do
+            ref="$registry/$img:$short"
+            echo "=== $img => $short ==="
+            docker build -f "images/$img/Dockerfile" -t "$ref" .
+            docker push "$ref"
+          done
+          python3 scripts/ci/bump-image-versions.py config/image-versions.json "$short" ${{ steps.templates.outputs.images }}
+
+      - name: Build and push API image
         env:
           SHA: ${{ github.sha }}
         run: |
@@ -46,6 +79,8 @@ jobs:
           CID="$(docker create "$IMAGE:$SHA")"
           docker cp "$CID:/config/image-versions.json" /tmp/image-versions.json
           docker rm "$CID"
+          python3 -c 'import json,sys; a=json.load(open("config/image-versions.json")); b=json.load(open("/tmp/image-versions.json"));
+          if a != b: sys.exit("baked image-versions.json does not match the workspace")'
           docker push "$IMAGE:$SHA"
           docker push "$IMAGE:latest"
 
@@ -61,3 +96,16 @@ jobs:
             "$IMAGE_NAME"="$IMAGE:$SHA" \
             -n "$NAMESPACE"
           kubectl rollout status deployment/"$DEPLOYMENT_NAME" -n "$NAMESPACE" --timeout=180s
+
+      - name: Commit template image tags
+        if: steps.templates.outputs.count != '0'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add config/image-versions.json
+          if git diff --cached --quiet; then
+            echo "image-versions.json already matches this commit"
+            exit 0
+          fi
+          git commit -m "chore: bump template image tags [skip ci]"
+          git push origin HEAD:main

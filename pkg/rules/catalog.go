@@ -2,7 +2,7 @@
 package rules
 
 // CatalogVersion bumps when static rule metadata changes.
-const CatalogVersion = "3"
+const CatalogVersion = "4"
 
 // Fidelity labels how close a rule or scenario is to production behavior.
 const (
@@ -55,6 +55,7 @@ const (
 	IDPartitionStaleReads   = "partition_stale_reads"
 	IDPartitionWriteStall   = "partition_write_stall"
 	IDReplicaCannotCatchUp  = "replica_cannot_catch_up"
+	IDReplyBeforeParent     = "reply_before_parent"
 	IDFailoverWriteLoss     = "failover_write_loss"
 	IDPodRestart            = "pod_restart"
 	IDPodOOM                = "pod_oom"
@@ -145,6 +146,12 @@ var staticCatalog = []Rule{
 		ID: IDReplicaCannotCatchUp, Family: FamilyConsistency, Component: "db", Visibility: "student",
 		Summary:        "A replica could not catch up to the primary WAL stream",
 		CausedByConfig: []string{"readReplicas", "replicationMode", "instanceSize", "resourceProfile"},
+	},
+	{
+		ID: IDReplyBeforeParent, Family: FamilyConsistency, Component: "db", Visibility: "student",
+		Summary:        "A reply was served while the post it answers was missing. The two reads hit standbys at different replay positions (a monotonic-read violation across replicas).",
+		CausedByConfig: []string{"readReplicas", "readConsistency", "replicaApplyDelayMs"},
+		Fidelity:       FidelitySimulated,
 	},
 	{
 		ID: IDFailoverWriteLoss, Family: FamilyFailover, Component: "db", Visibility: "student",

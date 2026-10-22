@@ -72,4 +72,20 @@ var (
 		Name: "social_mq_publish_errors_total",
 		Help: "Failed MQ publishes",
 	})
+
+	socialThreadReadsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "social_thread_reads_total",
+			Help: "Thread root reads served (observer and user traffic)",
+		},
+		[]string{"source"},
+	)
+
+	socialThreadOrphanReadsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "social_thread_orphan_reads_total",
+			Help: "Thread reads whose response included a reply without its parent row",
+		},
+		[]string{"source"},
+	)
 )

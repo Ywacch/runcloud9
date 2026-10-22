@@ -295,6 +295,17 @@ var allMechanisms = []Mechanism{
 		Suggestion: "Use read-your-writes routing, leader-only reads, or wait for replication before serving reads.",
 	},
 	{
+		ID:           "reply_before_parent_staggered_replicas",
+		TriggerRules: []string{IDReplyBeforeParent},
+		Precondition: Precondition{Role: "db", Key: "readReplicas", AnyOf: []string{"2", "3", "4", "5"}},
+		CausalChain: []string{
+			"each thread read chooses a replica independently",
+			"standbys replay with staggered apply delays",
+			"the reply row is visible on the fresher standby while the parent row is still missing on the staler one",
+		},
+		Suggestion: "Pin each client to one replica (readConsistency=sticky), or read the thread from one standby in one query.",
+	},
+	{
 		ID:           "monotonic_violation_replica_route",
 		TriggerRules: []string{IDMonotonicViolation},
 		Precondition: Precondition{Role: "db", Key: "readConsistency", AnyOf: []string{"monotonic", "ryw+monotonic"}},
