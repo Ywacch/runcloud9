@@ -25,6 +25,10 @@ func DefaultRegistry() Registry {
 			New:      newReplier,
 			Requires: []string{actionCreateReply},
 		},
+		behaviorThreadObserver: BehaviorSpec{
+			New:      newThreadObserver,
+			Requires: []string{actionReadThread},
+		},
 	}
 }
 
@@ -59,6 +63,15 @@ func ValidateConfig(reg Registry, cfg Config, actions map[string]Action) error {
 	}
 	if total > MaxVUs {
 		return fmt.Errorf("vu: total vus %d exceeds max %d", total, MaxVUs)
+	}
+	observerVUs := 0
+	for _, b := range cfg.Behaviors {
+		if b.Name == behaviorThreadObserver {
+			observerVUs += b.Count
+		}
+	}
+	if observerVUs > 1 {
+		return fmt.Errorf("vu: at most one thread_observer vu allowed")
 	}
 	for name, a := range actions {
 		if err := a.Validate(); err != nil {

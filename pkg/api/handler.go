@@ -979,6 +979,8 @@ func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 		profile.BaseURL = fmt.Sprintf("http://lb.%s.svc.cluster.local:80", namespace)
 	}
 
+	profile = h.applyVUObserverMaxThreadAge(profile, row)
+
 	if err := h.loadgen.Start(r.Context(), namespace, profile); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

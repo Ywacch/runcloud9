@@ -12,7 +12,30 @@ const gapRingCap = 1024
 type Stats struct {
 	Behaviors  map[string]BehaviorStats `json:"behaviors"`
 	ReplyGapMs GapSummary               `json:"replyGapMs"`
+	Observer   ObserverStats            `json:"observer"`
 	Seed       int64                    `json:"seed"`
+}
+
+// ObserverStats counts thread_observer reads and reply-before-parent sightings.
+type ObserverStats struct {
+	ThreadReads int64                `json:"threadReads"`
+	WindowReads int64                `json:"windowReads"`
+	Violations  int64                `json:"violations"`
+	Examples    []ObservationExample `json:"examples,omitempty"`
+	Errors      int64                `json:"errors"`
+}
+
+// ObservationExample is one orphan reply sighting (newest first in stats).
+type ObservationExample struct {
+	At       time.Time `json:"at"`
+	RootID   int       `json:"rootId"`
+	ReplyID  int       `json:"replyId"`
+	ParentID int       `json:"parentId"`
+	ServedBy struct {
+		Replies string `json:"replies"`
+		Parents string `json:"parents"`
+	} `json:"servedBy"`
+	RequestID string `json:"requestId"`
 }
 
 // BehaviorStats counts one behavior's VUs, requests, and errors.
@@ -39,6 +62,7 @@ type Recorder struct {
 	ring      [gapRingCap]int64
 	ringHead  int
 	ringLen   int
+	observer  ObserverStats
 }
 
 // NewRecorder returns a recorder that reports seed.
@@ -73,6 +97,40 @@ func (r *Recorder) IncError(name string) {
 	r.behaviors[name] = b
 }
 
+// IncObserverRead counts one thread read; inWindow is true when the root was young enough.
+func (r *Recorder) IncObserverRead(inWindow bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.observer.ThreadReads++
+	if inWindow {
+		r.observer.WindowReads++
+	}
+}
+
+// IncObserverError counts a failed observer read.
+func (r *Recorder) IncObserverError() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.observer.Errors++
+}
+
+// IncObserverViolation counts a read that saw at least one orphan reply.
+func (r *Recorder) IncObserverViolation() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.observer.Violations++
+}
+
+// PrependObserverExample keeps the newest examples first (at most five).
+func (r *Recorder) PrependObserverExample(ex ObservationExample) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.observer.Examples = append([]ObservationExample{ex}, r.observer.Examples...)
+	if len(r.observer.Examples) > maxObservationExamples {
+		r.observer.Examples = r.observer.Examples[:maxObservationExamples]
+	}
+}
+
 // ObserveGap records one root-to-reply gap.
 func (r *Recorder) ObserveGap(d time.Duration) {
 	ms := d.Milliseconds()
@@ -99,7 +157,11 @@ func (r *Recorder) Snapshot() Stats {
 	out := Stats{
 		Behaviors:  make(map[string]BehaviorStats, len(r.behaviors)),
 		ReplyGapMs: r.gaps,
+		Observer:   r.observer,
 		Seed:       r.seed,
+	}
+	if len(r.observer.Examples) > 0 {
+		out.Observer.Examples = append([]ObservationExample(nil), r.observer.Examples...)
 	}
 	for k, v := range r.behaviors {
 		out.Behaviors[k] = v

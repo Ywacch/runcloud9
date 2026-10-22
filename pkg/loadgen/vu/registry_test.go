@@ -46,6 +46,16 @@ func TestValidateConfig(t *testing.T) {
 			t.Fatal("expected unknown field error")
 		}
 	})
+	t.Run("two observers", func(t *testing.T) {
+		err := ValidateConfig(reg, Config{Behaviors: []BehaviorConfig{
+			{Name: behaviorThreadObserver, Count: 2},
+		}}, map[string]Action{
+			actionReadThread: {Method: "GET", Path: "/threads/{{.RootID}}"},
+		})
+		if err == nil {
+			t.Fatal("expected cap error")
+		}
+	})
 	t.Run("bad placeholder", func(t *testing.T) {
 		bad := map[string]Action{
 			actionCreateRoot: {Method: "POST", Path: "/{{.Unknown}}", Body: ""},

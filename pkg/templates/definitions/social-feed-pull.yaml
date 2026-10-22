@@ -28,6 +28,9 @@ loadgen:
         path: /post
         body: '{"user_id":{{.UserID}},"content":"c9 reply","reply_to_id":{{.ParentID}}}'
         idField: post_id
+      read_thread:
+        method: GET
+        path: /threads/{{.RootID}}
   endpoints:
     - method: GET
       pathTemplate: /feed/{userId}

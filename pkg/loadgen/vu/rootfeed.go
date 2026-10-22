@@ -73,6 +73,17 @@ func (f *RootFeed) Recent(maxAge time.Duration, now time.Time) []RootPost {
 	return out
 }
 
+// Newest returns the most recently published root, if any.
+func (f *RootFeed) Newest() (RootPost, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.n == 0 {
+		return RootPost{}, false
+	}
+	idx := (f.head - 1 + rootFeedCap) % rootFeedCap
+	return f.ring[idx].post, true
+}
+
 // Len reports how many roots the feed holds.
 func (f *RootFeed) Len() int {
 	f.mu.Lock()
