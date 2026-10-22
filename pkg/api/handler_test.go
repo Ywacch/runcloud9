@@ -1525,6 +1525,62 @@ func TestHandleGetTemplateLoadgen_socialFeed(t *testing.T) {
 	}
 }
 
+func TestHandleGetTemplateLoadgen_Conversations(t *testing.T) {
+	t.Parallel()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	for _, id := range []string{"social-feed", "social-feed-pull"} {
+		req := httptest.NewRequest(http.MethodGet, "/templates/"+id+"/loadgen", nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status %d %s", id, rec.Code, rec.Body.String())
+		}
+		var body map[string]json.RawMessage
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+		raw, ok := body["conversations"]
+		if !ok {
+			t.Fatalf("%s: missing conversations", id)
+		}
+		var conv struct {
+			Behaviors []struct {
+				Name   string          `json:"name"`
+				Count  int             `json:"count"`
+				Params json.RawMessage `json:"params"`
+			} `json:"behaviors"`
+		}
+		if err := json.Unmarshal(raw, &conv); err != nil {
+			t.Fatalf("%s: conversations: %v", id, err)
+		}
+		if len(conv.Behaviors) != 3 {
+			t.Fatalf("%s: behaviors: %+v", id, conv.Behaviors)
+		}
+		for _, b := range conv.Behaviors {
+			if len(b.Params) > 0 {
+				t.Fatalf("%s: behavior %q should have no params", id, b.Name)
+			}
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/templates/url-shortener/loadgen", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("url-shortener: status %d", rec.Code)
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["conversations"]; ok {
+		t.Fatalf("url-shortener should omit conversations: %s", rec.Body.String())
+	}
+}
+
 func TestHandleGetTemplateLoadgen_unknown(t *testing.T) {
 	t.Parallel()
 	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
