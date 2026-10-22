@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/loadgen"
+	"github.com/ywacch/cloud9/pkg/phenomena"
 )
 
 // DeploymentMetrics is the payload sent to the frontend every 2s.
@@ -18,6 +19,7 @@ type DeploymentMetrics struct {
 	TemplateMetrics map[string]float64          `json:"templateMetrics,omitempty"`
 	Events          []Event                     `json:"events,omitempty"`
 	LoadGen         *loadgen.LoadStats          `json:"loadgen,omitempty"`
+	Phenomena       []phenomena.Entry           `json:"phenomena,omitempty"`
 	// SnapshotAgeMs is time since the cached Collect snapshot at emit time (0 when pending).
 	SnapshotAgeMs int64 `json:"snapshotAgeMs"`
 	// CollectPending is true before the session publisher has stored its first snapshot.

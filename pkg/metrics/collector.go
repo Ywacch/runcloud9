@@ -269,6 +269,9 @@ func (c *MetricsCollector) SessionSummary(namespace string, base map[string]any,
 	if ts := c.TraceSamplesFor(namespace); len(ts) > 0 {
 		summary["trace_samples"] = ts
 	}
+	if dm != nil && len(dm.Phenomena) > 0 {
+		summary["phenomena"] = dm.Phenomena
+	}
 	return appendSessionFreshness(summary, dm)
 }
 
@@ -1293,14 +1296,17 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 			cacheSample, replicaSamples := c.scrapeConsistencySamples(ctx, namespace)
 			c.consistency.NoteAppCacheStale(namespace, staleTotal, cacheSample, replicaSamples)
 		}
+		var threadTraffic appTrafficConsistency
 		if topo.HasDB {
 			c.noteActiveChaosPartition(ctx, namespace)
-			c.consistency.NoteAppTrafficConsistency(namespace, c.scrapeAppTrafficConsistency(ctx, nsSel))
+			threadTraffic = c.scrapeAppTrafficConsistency(ctx, nsSel)
+			c.consistency.NoteAppTrafficConsistency(namespace, threadTraffic)
 			if topologyRequiresPostgresSyncGUCs(topo) {
 				c.consistency.NotePostgresSyncActive(namespace, c.postgresSyncGUCsActive(ctx, ns, topo))
 			}
 		}
 		ev = append(ev, c.consistency.Eval(namespace, dm, topo, tmpl)...)
+		appendReplyBeforeParentPhenomenon(dm, template, topo, threadTraffic)
 	}
 	dm.Events = ev
 

@@ -252,6 +252,12 @@ func (c *MetricsCollector) scrapeAppTrafficConsistency(ctx context.Context, nsSe
 	}
 	out.ReplicaReads = int64(replicaCum + 0.5)
 
+	threadReads, readsPresent, _ := c.queryScalar(ctx, fmt.Sprintf(`sum(social_thread_reads_total{%s})`, nsSel))
+	threadOrphans, orphansPresent, _ := c.queryScalar(ctx, fmt.Sprintf(`sum(social_thread_orphan_reads_total{%s})`, nsSel))
+	out.ThreadReadsTotal = int64(threadReads + 0.5)
+	out.ThreadOrphanReadsTotal = int64(threadOrphans + 0.5)
+	out.ThreadCountersPresent = readsPresent || orphansPresent
+
 	rates := c.queryMultiResult(ctx, fmt.Sprintf(
 		`sum by (replica) (rate(db_read_total{%s}%s))`,
 		nsSel, promRateRange(),

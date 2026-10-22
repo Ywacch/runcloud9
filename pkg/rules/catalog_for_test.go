@@ -33,8 +33,9 @@ func TestCatalogFor_AddsTemplateInvariants(t *testing.T) {
 		}},
 	}
 	got := CatalogFor(tmpl)
-	if len(got) != 21 {
-		t.Fatalf("len(CatalogFor) = %d, want 21", len(got))
+	want := len(All()) + 1
+	if len(got) != want {
+		t.Fatalf("len(CatalogFor) = %d, want %d", len(got), want)
 	}
 	inv := got[len(got)-1]
 	if inv.ID != "oversell" {

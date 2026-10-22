@@ -14,6 +14,7 @@ const (
 	ruleRYWViolation       = rules.IDRYWViolation
 	ruleMonotonicViolation = rules.IDMonotonicViolation
 	ruleCacheDbStale       = rules.IDCacheDBStale
+	ruleReplyBeforeParent  = rules.IDReplyBeforeParent
 
 	guaranteeHeldByNone = "none"
 	guaranteeHeldByApp  = "app"
@@ -40,6 +41,10 @@ type appTrafficConsistency struct {
 	ReadRateByReplica map[string]float64
 	LeaderRedirects   float64
 	ReplicaStaleTotal float64
+
+	ThreadReadsTotal       int64
+	ThreadOrphanReadsTotal int64
+	ThreadCountersPresent  bool
 }
 
 // ConsistencyDetector turns observer probe snapshots into L1 invariant events and db consistency counters.
@@ -57,6 +62,9 @@ type ConsistencyDetector struct {
 	appTraffic  map[string]appTrafficConsistency
 	appRYWSeen  map[string]float64
 	appMonoSeen map[string]float64
+
+	appThreadOrphanSeen  map[string]float64
+	appThreadOrphanQuiet map[string]int
 
 	postgresSyncActive map[string]bool
 
@@ -81,6 +89,8 @@ func NewConsistencyDetector(reader consistencyProbeReader) *ConsistencyDetector 
 		appTraffic:                make(map[string]appTrafficConsistency),
 		appRYWSeen:                make(map[string]float64),
 		appMonoSeen:               make(map[string]float64),
+		appThreadOrphanSeen:       make(map[string]float64),
+		appThreadOrphanQuiet:      make(map[string]int),
 		postgresSyncActive:        make(map[string]bool),
 		activePartition:           make(map[string]PartitionContext),
 		partitionRYWSeen:          make(map[string]float64),
@@ -146,6 +156,7 @@ func (cd *ConsistencyDetector) Eval(namespace string, dm *DeploymentMetrics, top
 	}
 	out = append(out, cd.evalAppRYW(namespace, now)...)
 	out = append(out, cd.evalAppMonotonic(namespace, now)...)
+	out = append(out, cd.evalReplyBeforeParent(namespace, now, dm)...)
 	out = append(out, cd.evalPartitionCAP(namespace, now, dm, topo, nil)...)
 	out = append(out, cd.evalReplicaCannotCatchUp(namespace, now, topo)...)
 
@@ -179,6 +190,8 @@ func (cd *ConsistencyDetector) Cleanup(namespace string) {
 	delete(cd.appTraffic, namespace)
 	delete(cd.appRYWSeen, namespace)
 	delete(cd.appMonoSeen, namespace)
+	delete(cd.appThreadOrphanSeen, namespace)
+	delete(cd.appThreadOrphanQuiet, namespace)
 	delete(cd.postgresSyncActive, namespace)
 	delete(cd.activePartition, namespace)
 	delete(cd.partitionRYWSeen, namespace)
@@ -226,6 +239,72 @@ func (cd *ConsistencyDetector) evalAppRYW(namespace string, now time.Time) []Eve
 		cd.clear(namespace, ruleRYWViolation)
 	}
 	return nil
+}
+
+func (cd *ConsistencyDetector) evalReplyBeforeParent(namespace string, now time.Time, dm *DeploymentMetrics) []Event {
+	cd.mu.Lock()
+	total := float64(cd.appTraffic[namespace].ThreadOrphanReadsTotal)
+	lastSeen := cd.appThreadOrphanSeen[namespace]
+	cd.appThreadOrphanSeen[namespace] = total
+	cd.mu.Unlock()
+
+	if total > lastSeen {
+		cd.mu.Lock()
+		cd.appThreadOrphanQuiet[namespace] = 0
+		cd.mu.Unlock()
+		delta := total - lastSeen
+		if cd.fire(namespace, ruleReplyBeforeParent) {
+			cd.incrementViolation(namespace, ruleReplyBeforeParent)
+			return []Event{cd.replyBeforeParentEvent(namespace, now, delta, dm)}
+		}
+		return nil
+	}
+	if total == lastSeen {
+		cd.mu.Lock()
+		quiet := cd.appThreadOrphanQuiet[namespace] + 1
+		cd.appThreadOrphanQuiet[namespace] = quiet
+		cd.mu.Unlock()
+		if quiet >= 3 {
+			cd.clear(namespace, ruleReplyBeforeParent)
+		}
+	}
+	return nil
+}
+
+func (cd *ConsistencyDetector) replyBeforeParentEvent(namespace string, now time.Time, delta float64, dm *DeploymentMetrics) Event {
+	desc := "A reply was served while the post it answers was missing on another replica"
+	if delta >= 1 {
+		desc = fmt.Sprintf("App observed %.0f reply-before-parent thread read(s)", delta)
+	}
+	detail := map[string]string{
+		"delta":    fmt.Sprintf("%.0f", delta),
+		"fidelity": rules.FidelitySimulated,
+	}
+	if dm != nil && dm.LoadGen != nil && dm.LoadGen.VU != nil {
+		for _, ex := range dm.LoadGen.VU.Observer.Examples {
+			if ex.ServedBy.Replies != "" {
+				detail["repliesHost"] = ex.ServedBy.Replies
+			}
+			if ex.ServedBy.Parents != "" {
+				detail["parentsHost"] = ex.ServedBy.Parents
+			}
+			if ex.RequestID != "" {
+				detail["requestId"] = ex.RequestID
+			}
+			break
+		}
+	}
+	return Event{
+		Timestamp:   now,
+		Type:        "invariant",
+		Source:      "detector",
+		Component:   "db",
+		RuleID:      ruleReplyBeforeParent,
+		Visibility:  VisibilityStudent,
+		Title:       "Reply before parent",
+		Description: desc,
+		Detail:      detail,
+	}
 }
 
 func (cd *ConsistencyDetector) evalAppMonotonic(namespace string, now time.Time) []Event {
