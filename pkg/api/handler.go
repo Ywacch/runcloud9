@@ -21,6 +21,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/diagnostics"
 	"github.com/ywacch/cloud9/pkg/inference"
 	"github.com/ywacch/cloud9/pkg/loadgen"
+	"github.com/ywacch/cloud9/pkg/loadgen/vu"
 	"github.com/ywacch/cloud9/pkg/logs"
 	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/seeder"
@@ -359,6 +360,11 @@ func (h *Handler) handleGetTemplates(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(templates.Registry())
 }
 
+type templateLoadgenResponse struct {
+	templates.LoadgenConfigView
+	Conversations *loadgen.VUConfig `json:"conversations,omitempty"`
+}
+
 func (h *Handler) handleGetTemplateLoadgen(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	view, ok := templates.LoadgenConfig(id)
@@ -366,8 +372,18 @@ func (h *Handler) handleGetTemplateLoadgen(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusNotFound, fmt.Sprintf("template %q not found or has no loadgen config", id))
 		return
 	}
+	resp := templateLoadgenResponse{LoadgenConfigView: view}
+	if actions, ok := loadgen.VUActionsFromTemplate(id); ok {
+		names := make(map[string]struct{}, len(actions))
+		for k := range actions {
+			names[k] = struct{}{}
+		}
+		if cfg, has := vu.DefaultConversations(names); has {
+			resp.Conversations = &cfg
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(view)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (h *Handler) handleGetResourceProfiles(w http.ResponseWriter, r *http.Request) {
