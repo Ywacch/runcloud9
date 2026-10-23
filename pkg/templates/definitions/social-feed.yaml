@@ -18,6 +18,7 @@ simulatable: true
 deployable: true
 imageKey: social-feed
 loadgen:
+  identity: { param: userId }
   # Virtual users: closed-loop scripts (post a root, then reply) beside open-loop RPS.
   vu:
     identity: { poolEndpoint: /user-pool, poolField: userIds }

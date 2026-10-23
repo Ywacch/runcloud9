@@ -44,10 +44,14 @@ type segmentApplyRule struct {
 
 // TargetPlan is the resolved loadgen attack plan (static expansion or actor-driven).
 type TargetPlan struct {
-	Actor        *ActorModel
-	Static       []ResolvedTarget
-	Distribution map[string]int
-	ActiveUsers  int
+	Actor             *ActorModel
+	Static            []ResolvedTarget
+	Distribution      map[string]int
+	ActiveUsers       int
+	IdentityCount     int
+	IdentityAllowed   []string
+	ActorFlatPools    map[string][]string
+	ActorSegmentPools map[string][]string
 }
 
 // BuildTargeter returns a vegeta targeter for this plan.
@@ -261,8 +265,8 @@ func BuildTargeterFromPodActor(cfg PodActorConfig) vegeta.Targeter {
 		cfg.BaseURL,
 		cfg.Endpoints,
 		cfg.Distribution,
-		capIdentityPools(cfg.Pools, cfg.ActiveUsers),
-		capIdentityPools(cfg.SegmentPools, cfg.ActiveUsers),
+		cfg.Pools,
+		cfg.SegmentPools,
 		cfg.ParamDefs,
 		cfg.ParamValues,
 	)

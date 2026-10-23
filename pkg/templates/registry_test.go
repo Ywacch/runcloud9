@@ -604,6 +604,9 @@ func TestLoadgenConfig_socialFeed(t *testing.T) {
 	if !ok {
 		t.Fatal("expected social-feed loadgen config")
 	}
+	if view.Identity == nil || view.Identity.Param != "userId" {
+		t.Fatalf("identity: %+v", view.Identity)
+	}
 	ids := map[string]bool{}
 	for _, s := range view.Schedules {
 		ids[s.ID] = true

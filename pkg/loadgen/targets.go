@@ -35,22 +35,33 @@ func profileToTargetPlan(ctx context.Context, namespace string, profile LoadProf
 	distribution := EffectiveDistribution(specs)
 
 	paramDefs, hasActor := actorParamsFromTemplate(profile.Template)
+	idParam := identityParamForTemplate(profile.Template)
+	poolLimit := profile.ActiveUsers
 	if hasActor {
-		flatPools := capIdentityPools(fetchParamPools(ctx, baseURL, specs), profile.ActiveUsers)
-		segmentPools := capIdentityPools(actorSegmentPoolsFromTemplate(ctx, baseURL, profile.Template), profile.ActiveUsers)
+		flatPools := fetchParamPools(ctx, baseURL, specs, idParam, poolLimit)
+		segmentPools := actorSegmentPoolsFromTemplate(ctx, baseURL, profile.Template, idParam, poolLimit, specs)
+		identityCount, allowed := applyIdentityCap(idParam, specs, paramDefs, flatPools, segmentPools, profile.ActiveUsers)
 		model := newActorModel(baseURL, specs, profile.Distribution, flatPools, segmentPools, paramDefs, profile.ActorParams)
-		return TargetPlan{Actor: model, Distribution: distribution, ActiveUsers: profile.ActiveUsers}, nil
+		return TargetPlan{
+			Actor:             model,
+			Distribution:      distribution,
+			ActiveUsers:       profile.ActiveUsers,
+			IdentityCount:     identityCount,
+			IdentityAllowed:   allowed,
+			ActorFlatPools:    flatPools,
+			ActorSegmentPools: segmentPools,
+		}, nil
 	}
 
-	targets, err := expandStaticTargets(baseURL, specs, flatPoolsFromSpecs(ctx, baseURL, specs))
+	targets, err := expandStaticTargets(baseURL, specs, flatPoolsFromSpecs(ctx, baseURL, specs, idParam, poolLimit))
 	if err != nil {
 		return TargetPlan{}, err
 	}
 	return TargetPlan{Static: targets, Distribution: distribution, ActiveUsers: profile.ActiveUsers}, nil
 }
 
-func flatPoolsFromSpecs(ctx context.Context, baseURL string, specs []EndpointSpec) map[string][]string {
-	return fetchParamPools(ctx, baseURL, specs)
+func flatPoolsFromSpecs(ctx context.Context, baseURL string, specs []EndpointSpec, idParam string, poolLimit int) map[string][]string {
+	return fetchParamPools(ctx, baseURL, specs, idParam, poolLimit)
 }
 
 func expandStaticTargets(baseURL string, specs []EndpointSpec, pools map[string][]string) ([]ResolvedTarget, error) {

@@ -104,6 +104,10 @@ type LoadStats struct {
 	VU *vu.Stats `json:"vu,omitempty"`
 	// DetectionMayBeIncomplete is true when Vegeta throughput lags target enough that observer counts may undercount.
 	DetectionMayBeIncomplete bool `json:"detectionMayBeIncomplete,omitempty"`
+	// IdentityCount is how many distinct identity values the pressure lane can send.
+	IdentityCount int `json:"identityCount,omitempty"`
+	// IdentitiesSeen is how many distinct client ids the pressure lane has sent since start, up to 10000.
+	IdentitiesSeen int `json:"identitiesSeen,omitempty"`
 }
 
 // DefaultProfile returns default RPS only. Template and distribution come from the handler or JSON.

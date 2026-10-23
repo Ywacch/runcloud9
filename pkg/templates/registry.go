@@ -297,6 +297,9 @@ func defToSpec(def *templateDef) TemplateSpec {
 	}
 	if def.Loadgen != nil {
 		spec.Loadgen = loadgenSpecFromDef(def.Loadgen)
+		if err := validateLoadgenIdentity(spec.Loadgen); err != nil {
+			panic(fmt.Sprintf("templates: %s: %v", def.ID, err))
+		}
 		if def.Loadgen.DefaultRps > 0 {
 			spec.LoadgenDefaultRPS = def.Loadgen.DefaultRps
 		}

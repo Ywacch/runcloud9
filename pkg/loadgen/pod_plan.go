@@ -19,6 +19,7 @@ type PodStartBody struct {
 	VU              *PodVUConfig     `json:"vu,omitempty"`
 	Distribution    map[string]int   `json:"distribution,omitempty"`
 	ActiveUsers     int              `json:"activeUsers,omitempty"`
+	IdentityCount   int              `json:"identityCount,omitempty"`
 }
 
 // PodStartTarget is one pre-resolved static target for the loadgen pod.
@@ -43,7 +44,7 @@ func BuildPodStartBody(ctx context.Context, namespace string, profile LoadProfil
 		ScheduleID:      profile.ScheduleID,
 		Phases:          append([]Phase(nil), profile.Phases...),
 		Distribution:    plan.Distribution,
-		ActiveUsers:     profile.ActiveUsers,
+		IdentityCount:   plan.IdentityCount,
 	}
 
 	if plan.Actor != nil {
@@ -53,21 +54,24 @@ func BuildPodStartBody(ctx context.Context, namespace string, profile LoadProfil
 		}
 		paramDefs, _ := actorParamsFromTemplate(profile.Template)
 		baseURL := resolveLoadgenBaseURL(namespace, profile)
+		body.ActiveUsers = 0
 		body.Actor = &PodActorConfig{
 			BaseURL:      baseURL,
 			Endpoints:    specs,
 			Distribution: plan.Distribution,
-			Pools:        capIdentityPools(flatPoolsFromSpecs(ctx, baseURL, specs), profile.ActiveUsers),
-			SegmentPools: capIdentityPools(actorSegmentPoolsFromTemplate(ctx, baseURL, profile.Template), profile.ActiveUsers),
-			ActiveUsers:  profile.ActiveUsers,
+			Pools:        plan.ActorFlatPools,
+			SegmentPools: plan.ActorSegmentPools,
+			ActiveUsers:  0,
 			ParamDefs:    paramDefs,
 			ParamValues:  profile.ActorParams,
 		}
-		if err := fillPodVU(ctx, namespace, profile, &body); err != nil {
+		if err := fillPodVU(ctx, namespace, profile, &body, plan.IdentityAllowed); err != nil {
 			return PodStartBody{}, err
 		}
 		return body, nil
 	}
+
+	body.ActiveUsers = profile.ActiveUsers
 
 	body.Targets = make([]PodStartTarget, 0, len(plan.Static))
 	for _, t := range plan.Static {
@@ -79,13 +83,13 @@ func BuildPodStartBody(ctx context.Context, namespace string, profile LoadProfil
 			Key:    t.Key,
 		})
 	}
-	if err := fillPodVU(ctx, namespace, profile, &body); err != nil {
+	if err := fillPodVU(ctx, namespace, profile, &body, plan.IdentityAllowed); err != nil {
 		return PodStartBody{}, err
 	}
 	return body, nil
 }
 
-func fillPodVU(ctx context.Context, namespace string, profile LoadProfile, body *PodStartBody) error {
+func fillPodVU(ctx context.Context, namespace string, profile LoadProfile, body *PodStartBody, identityAllowed []string) error {
 	if profile.VU == nil {
 		return nil
 	}
@@ -94,8 +98,14 @@ func fillPodVU(ctx context.Context, namespace string, profile LoadProfile, body 
 		return fmt.Errorf("loadgen: template %q has no vu config", profile.Template)
 	}
 	baseURL := resolveLoadgenBaseURL(namespace, profile)
-	pool := fetchPool(ctx, baseURL, spec.Identity.PoolEndpoint, spec.Identity.PoolField)
-	pool = capIdentitySlice(pool, profile.ActiveUsers)
+	endpoint := spec.Identity.PoolEndpoint
+	if profile.ActiveUsers > 0 {
+		endpoint = withPoolLimit(endpoint, profile.ActiveUsers)
+	}
+	pool := fetchPool(ctx, baseURL, endpoint, spec.Identity.PoolField)
+	if profile.ActiveUsers > 0 {
+		pool = filterPoolToAllowed(pool, identityAllowed)
+	}
 	if len(pool) == 0 {
 		return fmt.Errorf("loadgen: vu identity pool is empty")
 	}
