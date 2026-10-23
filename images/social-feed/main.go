@@ -494,15 +494,27 @@ func (s *Server) handleUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, user)
 }
 
-func userPoolSQL(segment string) string {
+func userPoolSQL(segment string, limit int) string {
+	lim := strconv.Itoa(limit)
 	switch segment {
 	case "celebrity":
 		return `SELECT id FROM users WHERE id <= 10 ORDER BY id`
 	case "normal":
-		return `SELECT id FROM users WHERE id > 10 ORDER BY id LIMIT 50`
+		return `SELECT id FROM users WHERE id > 10 ORDER BY id LIMIT ` + lim
 	default:
-		return `SELECT id FROM users ORDER BY id LIMIT 50`
+		return `SELECT id FROM users ORDER BY id LIMIT ` + lim
 	}
+}
+
+func parseUserPoolLimit(raw string) int {
+	if raw == "" {
+		return 50
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 || n > 10000 {
+		return 50
+	}
+	return n
 }
 
 func (s *Server) handleUserPool(w http.ResponseWriter, r *http.Request) {
@@ -510,7 +522,8 @@ func (s *Server) handleUserPool(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	ids, err := s.db.QueryUserPool(r.Context(), userPoolSQL(r.URL.Query().Get("segment")))
+	limit := parseUserPoolLimit(r.URL.Query().Get("limit"))
+	ids, err := s.db.QueryUserPool(r.Context(), userPoolSQL(r.URL.Query().Get("segment"), limit))
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to fetch user ids")
 		return

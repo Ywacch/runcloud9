@@ -1,5 +1,7 @@
 package templates
 
+import "fmt"
+
 // LoadgenEndpointSpec describes one HTTP endpoint the load generator may target.
 type LoadgenEndpointSpec struct {
 	Method       string `yaml:"method" json:"method"`
@@ -11,6 +13,11 @@ type LoadgenEndpointSpec struct {
 	Weight       int    `yaml:"weight" json:"weight"`
 }
 
+// LoadgenIdentity names the endpoint param that carries the acting user.
+type LoadgenIdentity struct {
+	Param string `yaml:"param" json:"param"`
+}
+
 // LoadgenSpec is the template-authored load generator configuration.
 type LoadgenSpec struct {
 	DefaultRPS int                   `yaml:"defaultRps" json:"defaultRps,omitempty"`
@@ -18,6 +25,7 @@ type LoadgenSpec struct {
 	Params     []LoadgenActorParam   `yaml:"params" json:"params,omitempty"`
 	Schedules  []LoadgenSchedule     `yaml:"schedules" json:"schedules,omitempty"`
 	VU         *LoadgenVUSpec        `yaml:"vu" json:"vu,omitempty"`
+	Identity   *LoadgenIdentity      `yaml:"identity" json:"identity,omitempty"`
 }
 
 // LoadgenVUSpec declares identity pool and named HTTP actions for the VU lane.
@@ -56,6 +64,11 @@ type loadgenDef struct {
 	Params     []loadgenActorParamDef `yaml:"params" json:"params"`
 	Schedules  []loadgenScheduleDef   `yaml:"schedules" json:"schedules"`
 	VU         *loadgenVUSpecDef      `yaml:"vu" json:"vu"`
+	Identity   *loadgenIdentityDef    `yaml:"identity" json:"identity"`
+}
+
+type loadgenIdentityDef struct {
+	Param string `yaml:"param" json:"param"`
 }
 
 type loadgenVUSpecDef struct {
@@ -128,6 +141,7 @@ type LoadgenConfigView struct {
 	Endpoints  []LoadgenEndpointView   `json:"endpoints,omitempty"`
 	Params     []LoadgenActorParamView `json:"params,omitempty"`
 	Schedules  []LoadgenSchedule       `json:"schedules,omitempty"`
+	Identity   *LoadgenIdentity        `json:"identity,omitempty"`
 }
 
 // LoadgenConfig returns the projected loadgen UI config for templateID.
@@ -152,6 +166,9 @@ func LoadgenConfig(templateID string) (LoadgenConfigView, bool) {
 	schedules, ok := LoadgenSchedules(templateID)
 	if ok {
 		view.Schedules = schedules
+	}
+	if lg.Identity != nil && lg.Identity.Param != "" {
+		view.Identity = &LoadgenIdentity{Param: lg.Identity.Param}
 	}
 	for _, p := range lg.Params {
 		view.Params = append(view.Params, LoadgenActorParamView{
@@ -183,6 +200,9 @@ func loadgenSpecFromDef(def *loadgenDef) *LoadgenSpec {
 	}
 	if def.VU != nil {
 		spec.VU = loadgenVUSpecFromDef(def.VU)
+	}
+	if def.Identity != nil && def.Identity.Param != "" {
+		spec.Identity = &LoadgenIdentity{Param: def.Identity.Param}
 	}
 	for _, p := range def.Params {
 		param := LoadgenActorParam{
@@ -222,6 +242,30 @@ func loadgenVUSpecFromDef(def *loadgenVUSpecDef) *LoadgenVUSpec {
 		}
 	}
 	return out
+}
+
+// GetLoadgenIdentity returns the pressure-lane identity param for templateID.
+func GetLoadgenIdentity(templateID string) (*LoadgenIdentity, bool) {
+	t := GetTemplate(templateID)
+	if t == nil || t.Loadgen == nil || t.Loadgen.Identity == nil || t.Loadgen.Identity.Param == "" {
+		return nil, false
+	}
+	cp := *t.Loadgen.Identity
+	return &cp, true
+}
+
+// validateLoadgenIdentity ensures identity.param names a real endpoint param.
+func validateLoadgenIdentity(spec *LoadgenSpec) error {
+	if spec == nil || spec.Identity == nil || spec.Identity.Param == "" {
+		return nil
+	}
+	param := spec.Identity.Param
+	for _, ep := range spec.Endpoints {
+		if ep.ParamName == param {
+			return nil
+		}
+	}
+	return fmt.Errorf("loadgen.identity.param %q is not used by any endpoint paramName", param)
 }
 
 // LoadgenVU returns a deep copy of the template's VU lane config.

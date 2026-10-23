@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	vegeta "github.com/tsenart/vegeta/v12/lib"
 	"github.com/ywacch/cloud9/pkg/loadgen"
 	"github.com/ywacch/cloud9/pkg/loadgen/vu"
 )
@@ -30,6 +31,8 @@ type server struct {
 	allowedDistKeys map[string]struct{}
 
 	vuRunner *vu.Runner
+
+	idCounter *loadgen.ClientIDCounter
 
 	statsMu sync.RWMutex
 	stats   loadgen.LoadStats
@@ -128,14 +131,16 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	s.startedAt = &now
 
 	s.statsMu.Lock()
+	s.idCounter = loadgen.NewClientIDCounter(10000)
 	s.stats = loadgen.LoadStats{
-		Active:       true,
-		CurrentRPS:   float64(body.RPS),
-		TargetRPS:    float64(body.RPS),
-		ScheduleID:   body.ScheduleID,
-		StatusCodes:  map[string]int{},
-		Distribution: copyIntMap(body.Distribution),
-		StartedAt:    &now,
+		Active:        true,
+		CurrentRPS:    float64(body.RPS),
+		TargetRPS:     float64(body.RPS),
+		ScheduleID:    body.ScheduleID,
+		StatusCodes:   map[string]int{},
+		Distribution:  copyIntMap(body.Distribution),
+		StartedAt:     &now,
+		IdentityCount: body.IdentityCount,
 	}
 	s.recent = loadgen.LatencyRing{}
 	s.statsMu.Unlock()
@@ -236,6 +241,9 @@ func (s *server) handleStop(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	s.statsMu.RLock()
 	out := s.stats
+	if s.idCounter != nil {
+		out.IdentitiesSeen = s.idCounter.Count()
+	}
 	s.statsMu.RUnlock()
 	s.mu.Lock()
 	if s.vuRunner != nil {
@@ -270,15 +278,23 @@ func (s *server) runAttack(ctx context.Context, body loadgen.PodStartBody, contr
 		Distribution:    body.Distribution,
 	}
 
+	build := loadgen.PodTargeterBuilder(body)
+	idCounter := s.idCounter
 	loadgen.RunAttackLoop(loadgen.AttackLoopOpts{
-		Ctx:           ctx,
-		Profile:       profile,
-		BuildTargeter: loadgen.PodTargeterBuilder(body),
-		Stats:         &s.stats,
-		StatsMu:       &s.statsMu,
-		Recent:        &s.recent,
-		Control:       control,
-		AttackName:    "cloud9-loadgen-pod",
+		Ctx:     ctx,
+		Profile: profile,
+		BuildTargeter: func(ctx context.Context, base loadgen.LoadProfile, phase loadgen.Phase) (vegeta.Targeter, map[string]int, error) {
+			t, dist, err := build(ctx, base, phase)
+			if err != nil {
+				return t, dist, err
+			}
+			return loadgen.CountClientIDs(t, idCounter), dist, nil
+		},
+		Stats:      &s.stats,
+		StatsMu:    &s.statsMu,
+		Recent:     &s.recent,
+		Control:    control,
+		AttackName: "cloud9-loadgen-pod",
 	})
 }
 

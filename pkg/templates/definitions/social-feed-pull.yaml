@@ -14,6 +14,7 @@ deployable: true
 # Lower default loadgen rate: most traffic hits expensive fan-out-on-read feed queries at alpha resources.
 loadgen:
   defaultRps: 25
+  identity: { param: userId }
   # Virtual users: closed-loop scripts (post a root, then reply) beside open-loop RPS.
   vu:
     identity: { poolEndpoint: /user-pool, poolField: userIds }

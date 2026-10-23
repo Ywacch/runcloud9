@@ -119,13 +119,14 @@ func (lg *LocalLoadGenerator) Start(ctx context.Context, namespace string, profi
 		profile:   profile,
 		namespace: namespace,
 		stats: LoadStats{
-			Active:       true,
-			CurrentRPS:   float64(profile.RPS),
-			TargetRPS:    float64(profile.RPS),
-			ScheduleID:   profile.ScheduleID,
-			StartedAt:    ptrTime(now),
-			Distribution: copyDist(plan.Distribution),
-			StatusCodes:  make(map[string]int),
+			Active:        true,
+			CurrentRPS:    float64(profile.RPS),
+			TargetRPS:     float64(profile.RPS),
+			ScheduleID:    profile.ScheduleID,
+			StartedAt:     ptrTime(now),
+			Distribution:  copyDist(plan.Distribution),
+			StatusCodes:   make(map[string]int),
+			IdentityCount: plan.IdentityCount,
 		},
 	}
 	lg.active[namespace] = session
@@ -253,7 +254,7 @@ type poolPair struct {
 
 // fetchParamPools fetches parameter pools for all endpoints that need them.
 // Returns map[paramName][]string. Deduplicates HTTP GET by (PoolEndpoint, PoolField).
-func fetchParamPools(ctx context.Context, baseURL string, specs []EndpointSpec) map[string][]string {
+func fetchParamPools(ctx context.Context, baseURL string, specs []EndpointSpec, idParam string, poolLimit int) map[string][]string {
 	pools := make(map[string][]string)
 	byKey := make(map[poolPair][]string)
 	for _, s := range specs {
@@ -264,7 +265,16 @@ func fetchParamPools(ctx context.Context, baseURL string, specs []EndpointSpec) 
 		byKey[k] = append(byKey[k], s.ParamName)
 	}
 	for k, paramNames := range byKey {
-		values := fetchPool(ctx, baseURL, k.endpoint, k.field)
+		endpoint := k.endpoint
+		if poolLimit > 0 && idParam != "" {
+			for _, pn := range paramNames {
+				if pn == idParam {
+					endpoint = withPoolLimit(endpoint, poolLimit)
+					break
+				}
+			}
+		}
+		values := fetchPool(ctx, baseURL, endpoint, k.field)
 		if len(values) == 0 {
 			continue
 		}
