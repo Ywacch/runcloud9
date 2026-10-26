@@ -1,0 +1,88 @@
+name: Seed social feed
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: syscrack
+          POSTGRES_PASSWORD: syscrack
+          POSTGRES_DB: syscrack
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U syscrack -d syscrack"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Verify pg_dump client version
+        run: |
+          ver="$(docker run --rm postgres:15 pg_dump --version)"
+          echo "$ver"
+          echo "$ver" | grep -q 'pg_dump (PostgreSQL) 15'
+
+      - name: Apply seed SQL
+        env:
+          PGPASSWORD: syscrack
+        run: |
+          docker run --rm \
+            --add-host=host.docker.internal:host-gateway \
+            -e PGPASSWORD \
+            -v "${{ github.workspace }}/scripts:/scripts:ro" \
+            postgres:15 \
+            psql -h host.docker.internal -U syscrack -d syscrack -v ON_ERROR_STOP=1 \
+              -f /scripts/seed_social_feed.sql
+
+      - name: Check threaded seed
+        env:
+          PGPASSWORD: syscrack
+        run: |
+          docker run --rm \
+            --add-host=host.docker.internal:host-gateway \
+            -e PGPASSWORD \
+            -v "${{ github.workspace }}/scripts:/scripts:ro" \
+            postgres:15 \
+            psql -h host.docker.internal -U syscrack -d syscrack -v ON_ERROR_STOP=1 \
+              -f /scripts/seed/check_social_feed_threads.sql
+
+      - name: Dump database
+        env:
+          PGPASSWORD: syscrack
+        run: |
+          docker run --rm \
+            --add-host=host.docker.internal:host-gateway \
+            -e PGPASSWORD \
+            -v "${{ github.workspace }}:/work" \
+            postgres:15 \
+            pg_dump -Fc --no-owner --no-acl \
+              -h host.docker.internal -U syscrack -d syscrack \
+              -f /work/social-feed.dump
+          ls -lh social-feed.dump
+
+      - name: Upload seed dump
+        run: |
+          gcloud storage cp social-feed.dump \
+            gs://runcloud9-505411-seed-data/social-feed/social-feed.dump
