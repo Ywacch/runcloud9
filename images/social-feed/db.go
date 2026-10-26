@@ -287,6 +287,67 @@ func (db *DB) SeedIfEmpty(ctx context.Context) error {
 			return fmt.Errorf("seed posts: %w", err)
 		}
 
+		// Fallback threads only the first 200 posts; production uses scripts/seed_social_feed.sql.
+		if _, err := db.pool.Exec(ctx, `
+			UPDATE posts
+			SET thread_root_id = id
+			WHERE reply_to_id IS NULL AND thread_root_id IS NULL;
+
+			WITH level1 AS (
+				INSERT INTO posts (user_id, content, created_at, reply_to_id, thread_root_id)
+				SELECT
+					CASE
+						WHEN ((p.id * 17 + n) % 20) < 3 THEN 1 + ((p.id + n) % 10)
+						WHEN ((p.id * 17 + n) % 20) < 8 THEN 11 + ((p.id + n) % 40)
+						WHEN ((p.id * 17 + n) % 20) < 13 THEN 51 + ((p.id + n) % 450)
+						ELSE 501 + ((p.id + n) % 4500)
+					END,
+					'Reply ' || n || ' on ' || p.id,
+					p.created_at + ((30 + ((p.id * 13 + n * 7) % 21571)) * interval '1 second'),
+					p.id,
+					p.id
+				FROM posts p
+				JOIN generate_series(1, 8) AS n ON n <= 1 + (p.id % 8)
+				WHERE p.reply_to_id IS NULL
+				  AND p.id <= 200
+				  AND (p.id % 20) < 3
+				RETURNING id, thread_root_id, created_at
+			),
+			level2 AS (
+				INSERT INTO posts (user_id, content, created_at, reply_to_id, thread_root_id)
+				SELECT
+					CASE
+						WHEN ((l.id * 17) % 20) < 3 THEN 1 + (l.id % 10)
+						WHEN ((l.id * 17) % 20) < 8 THEN 11 + (l.id % 40)
+						WHEN ((l.id * 17) % 20) < 13 THEN 51 + (l.id % 450)
+						ELSE 501 + (l.id % 4500)
+					END,
+					'Reply 1 on ' || l.id,
+					l.created_at + ((30 + ((l.id * 13) % 21571)) * interval '1 second'),
+					l.id,
+					l.thread_root_id
+				FROM level1 l
+				WHERE (l.id % 3) = 0
+				RETURNING id, thread_root_id, created_at
+			)
+			INSERT INTO posts (user_id, content, created_at, reply_to_id, thread_root_id)
+			SELECT
+				CASE
+					WHEN ((l.id * 17) % 20) < 3 THEN 1 + (l.id % 10)
+					WHEN ((l.id * 17) % 20) < 8 THEN 11 + (l.id % 40)
+					WHEN ((l.id * 17) % 20) < 13 THEN 51 + (l.id % 450)
+					ELSE 501 + (l.id % 4500)
+				END,
+				'Reply 1 on ' || l.id,
+				l.created_at + ((30 + ((l.id * 13) % 21571)) * interval '1 second'),
+				l.id,
+				l.thread_root_id
+			FROM level2 l
+			WHERE (l.id % 5) = 0
+		`); err != nil {
+			return fmt.Errorf("seed replies: %w", err)
+		}
+
 		slog.Info("seeded social graph core data", "duration", time.Since(start).String())
 		return nil
 	})
