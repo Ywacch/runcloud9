@@ -59,6 +59,7 @@ type Handler struct {
 	chaosTTLTimers       map[string]*time.Timer
 	inferenceClient      inferenceService
 	inferenceTokenBudget *SessionTokenBudget
+	actAs                *actAsValidator
 }
 
 type deploymentStore interface {
@@ -126,6 +127,7 @@ func NewHandler(
 		inferenceSvc = inference.NewClient(inferenceURL)
 	}
 
+	poolFetcher := &deploymentUserPoolFetcher{store: store, clientset: clientset}
 	return &Handler{
 		deployers:            deployers,
 		store:                store,
@@ -136,6 +138,7 @@ func NewHandler(
 		clientset:            clientset,
 		loadgen:              lg,
 		eventBus:             eventBus,
+		actAs:                newActAsValidator(poolFetcher, time.Now, 5*time.Minute),
 		provisionCancel:      make(map[string]context.CancelFunc),
 		door:                 door,
 		roomBudget:           admission.ConfigFromEnv(),
@@ -1269,6 +1272,7 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 	if h.metricsCollector != nil {
 		h.metricsCollector.Cleanup(namespace)
 	}
+	h.ForgetActAsCache(namespace)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	d := h.deployers["db"]
