@@ -563,6 +563,46 @@ func (db *DB) GetThread(ctx context.Context, rootID int) (Thread, error) {
 	return out, nil
 }
 
+// ThreadPoolEntry is one active thread root in GET /thread-pool.
+type ThreadPoolEntry struct {
+	RootID     int `json:"rootId"`
+	ReplyCount int `json:"replyCount"`
+}
+
+// ListThreadPool returns thread roots with replies, ordered by newest activity.
+// It reads the primary pool so new threads are not hidden by replica lag.
+func (db *DB) ListThreadPool(ctx context.Context, limit int) ([]ThreadPoolEntry, error) {
+	if limit < 1 || limit > 50 {
+		limit = 50
+	}
+	rows, err := db.pool.Query(ctx, `
+		SELECT thread_root_id, COUNT(*)::int
+		FROM posts
+		WHERE reply_to_id IS NOT NULL
+		  AND thread_root_id IS NOT NULL
+		GROUP BY thread_root_id
+		ORDER BY MAX(created_at) DESC, thread_root_id DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list thread pool: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ThreadPoolEntry
+	for rows.Next() {
+		var e ThreadPoolEntry
+		if err := rows.Scan(&e.RootID, &e.ReplyCount); err != nil {
+			return nil, fmt.Errorf("list thread pool: %w", err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list thread pool: %w", err)
+	}
+	return out, nil
+}
+
 func (db *DB) GetFeedPull(ctx context.Context, userID, limit int) ([]FeedItem, error) {
 	var out []FeedItem
 	err := postgres.ObserveTarget(ctx, "get_feed_pull", func() (string, error) {

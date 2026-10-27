@@ -179,6 +179,7 @@ func (s *Server) routes() *http.ServeMux {
 
 	if role == "" || role == "post" {
 		mux.Handle("/post", withRecovery(withMetrics("/post", http.HandlerFunc(s.handlePost))))
+		mux.Handle("/thread-pool", withRecovery(http.HandlerFunc(s.handleThreadPool)))
 		mux.Handle("/threads/", withRecovery(withMetrics("/threads", http.HandlerFunc(s.handleThread))))
 	}
 
@@ -283,6 +284,19 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 	}
 	postTotal.WithLabelValues("sync").Inc()
 	writeJSON(w, http.StatusOK, map[string]any{"post_id": post.ID, "mode": "sync"})
+}
+
+func (s *Server) handleThreadPool(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	entries, err := s.db.ListThreadPool(r.Context(), 50)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to list threads")
+		return
+	}
+	writeThreadPool(w, entries)
 }
 
 func (s *Server) handleThread(w http.ResponseWriter, r *http.Request) {
