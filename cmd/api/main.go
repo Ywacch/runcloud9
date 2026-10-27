@@ -204,9 +204,13 @@ func main() {
 	}
 	var metricsCollector *metrics.MetricsCollector
 	var diagnosticsCollector *diagnostics.Collector
+	var forgetActAsCache func(string)
 
 	// teardownFn uses context.Background() so cleanup is never cut short by request cancel or timeout.
 	teardownFn := func(namespace string) {
+		if forgetActAsCache != nil {
+			forgetActAsCache(namespace)
+		}
 		// Stop load generator first — prevents requests to a dying namespace
 		_ = lg.Stop(context.Background(), namespace)
 		ctx := context.Background()
@@ -330,6 +334,7 @@ func main() {
 	}
 
 	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed, metricsCollector, diagnosticsCollector, clientset, lg, eventBus)
+	forgetActAsCache = handler.ForgetActAsCache
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 

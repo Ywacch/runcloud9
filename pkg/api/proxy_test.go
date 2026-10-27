@@ -1,12 +1,14 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/ywacch/cloud9/pkg/loadgen"
@@ -40,7 +42,7 @@ func TestProxyRESTHeaders_includesRequestID(t *testing.T) {
 	req.Header.Set("X-Request-ID", "persona-trace-1")
 	req.Header.Set(trace.HeaderClientID, "attacker")
 
-	h := proxyRESTHeaders(req, proxyRequestID(req), "owner-u1")
+	h := proxyRESTHeaders(req, proxyRequestID(req), "owner-u1", false)
 	if h["X-Request-ID"] != "persona-trace-1" {
 		t.Fatalf("X-Request-ID: got %q", h["X-Request-ID"])
 	}
@@ -76,6 +78,9 @@ func TestSetProxyCORS_exposesRequestID(t *testing.T) {
 	allow := rec.Header().Get("Access-Control-Allow-Headers")
 	if !containsHeaderToken(allow, "X-Request-ID") {
 		t.Fatalf("Access-Control-Allow-Headers: got %q", allow)
+	}
+	if !containsHeaderToken(allow, "X-C9-Act-As") {
+		t.Fatalf("Access-Control-Allow-Headers missing X-C9-Act-As: got %q", allow)
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://app.example" {
 		t.Fatalf("Allow-Origin: got %q", got)
@@ -181,6 +186,49 @@ func TestResolveProxyTarget_appServerViaLB(t *testing.T) {
 	}
 	if host != "cache" {
 		t.Fatalf("cache should not route via lb, got %q", host)
+	}
+}
+
+func TestProxy_ActAsSetsClientID(t *testing.T) {
+	t.Parallel()
+	fetch := &fakeUserPoolFetcher{ids: []string{"42"}}
+	v := newActAsValidator(fetch, time.Now, 5*time.Minute)
+	req := httptest.NewRequest(http.MethodGet, "/deployments/ns/proxy/app-server/threads/1", nil)
+	req.Header.Set(headerBrowserActAs, "42")
+	seed, actAs, err := resolvePlaygroundProxyIdentity(context.Background(), req, "ns", "owner-u1", "threads/1", v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seed != "42" || !actAs {
+		t.Fatalf("seed=%q actAs=%v", seed, actAs)
+	}
+	h := proxyRESTHeaders(req, "rid-1", seed, actAs)
+	if h[trace.HeaderClientID] != "42" {
+		t.Fatalf("X-C9-Client-ID: got %q want 42", h[trace.HeaderClientID])
+	}
+	if h[headerBrowserActAs] != actAsUpstreamValue {
+		t.Fatalf("upstream act-as marker: got %q want %q", h[headerBrowserActAs], actAsUpstreamValue)
+	}
+}
+
+func TestProxy_ActAsUnknownRejected(t *testing.T) {
+	t.Parallel()
+	v := newActAsValidator(&fakeUserPoolFetcher{ids: []string{"7"}}, time.Now, 5*time.Minute)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set(headerBrowserActAs, "99")
+	_, _, err := resolvePlaygroundProxyIdentity(context.Background(), req, "ns", "owner", "threads/1", v)
+	if !errors.Is(err, errUnknownActAs) {
+		t.Fatalf("want unknown act-as, got %v", err)
+	}
+}
+
+func TestProxy_BrowserClientIDIgnored(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest(http.MethodPost, "/shorten", nil)
+	req.Header.Set(trace.HeaderClientID, "attacker")
+	h := proxyRESTHeaders(req, "rid-1", "owner-u1", false)
+	if h[trace.HeaderClientID] != "owner-u1" {
+		t.Fatalf("browser X-C9-Client-ID must not be forwarded: got %q", h[trace.HeaderClientID])
 	}
 }
 

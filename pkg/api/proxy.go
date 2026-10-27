@@ -41,10 +41,13 @@ func proxyRequestID(r *http.Request) string {
 }
 
 // proxyRESTHeaders builds outbound headers for the K8s service proxy request.
-func proxyRESTHeaders(r *http.Request, requestID, seed string) map[string]string {
+func proxyRESTHeaders(r *http.Request, requestID, seed string, actAs bool) map[string]string {
 	h := map[string]string{
 		"X-Request-ID":   requestID,
 		"X-Trace-Sample": "1",
+	}
+	if actAs {
+		h[headerBrowserActAs] = actAsUpstreamValue
 	}
 	tmp := make(http.Header)
 	loadgen.ApplyClientIdentityHeaders(tmp, seed)
@@ -304,7 +307,15 @@ func (h *Handler) handleProxy(w http.ResponseWriter, r *http.Request) {
 	// Route via K8s API server service proxy so local-dev (outside cluster DNS) also works.
 	requestID := proxyRequestID(r)
 	proxyPath = strings.TrimPrefix(proxyPath, "/")
-	seed := playgroundClientSeed(requestID, row.UserID, proxyPath)
+	seed, actAs, idErr := resolvePlaygroundProxyIdentity(ctx, r, namespace, row.UserID, proxyPath, h.actAs)
+	if idErr != nil {
+		if errors.Is(idErr, errUnknownActAs) {
+			writeError(w, http.StatusBadRequest, "unknown act-as user")
+			return
+		}
+		writeError(w, http.StatusBadGateway, "act-as validation failed")
+		return
+	}
 	svcTarget := fmt.Sprintf("%s:%d", svcHost, svcPort)
 	restReq := h.clientset.CoreV1().RESTClient().
 		Verb(r.Method).
@@ -318,7 +329,7 @@ func (h *Handler) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if len(body) > 0 {
 		restReq = restReq.Body(bytes.NewReader(body))
 	}
-	for k, v := range proxyRESTHeaders(r, requestID, seed) {
+	for k, v := range proxyRESTHeaders(r, requestID, seed, actAs) {
 		restReq = restReq.SetHeader(k, v)
 	}
 	w.Header().Set("X-Request-ID", requestID)

@@ -33,7 +33,7 @@ func applyCORSAllowlist(w http.ResponseWriter, r *http.Request, allowed map[stri
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 	}
 	w.Header().Set("Access-Control-Allow-Methods", methods)
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID, X-C9-Act-As")
 	w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID, X-Cloud9-Proxied")
 }
 
