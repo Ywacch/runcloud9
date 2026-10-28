@@ -95,6 +95,7 @@ func highlightRuleID(row map[string]any) string {
 func (h *Handler) enrichReelCaptionsInSummary(
 	ctx context.Context,
 	namespace string,
+	userID string,
 	summary map[string]any,
 	design deployer.DesignConfig,
 	template string,
@@ -102,6 +103,9 @@ func (h *Handler) enrichReelCaptionsInSummary(
 	latest *metrics.DeploymentMetrics,
 ) {
 	if h == nil || h.inferenceClient == nil || h.inferenceTokenBudget == nil || summary == nil {
+		return
+	}
+	if !h.inferenceEnabledForUser(ctx, userID) {
 		return
 	}
 	raw, ok := summary["events_summary"]

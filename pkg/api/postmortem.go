@@ -159,6 +159,9 @@ func (h *Handler) runPostmortemAfterTeardown(namespace string) {
 	if row.Status != "terminated" {
 		return
 	}
+	if !h.inferenceEnabledForUser(ctx, row.UserID) {
+		return
+	}
 
 	design, _ := deployer.DesignFromMap(row.Design)
 	if design == nil {
