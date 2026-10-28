@@ -36,6 +36,10 @@ func (h *Handler) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "session ended")
 		return
 	}
+	if !h.inferenceEnabledForUser(r.Context(), row.UserID) {
+		writeError(w, http.StatusForbidden, "inference is limited to internal accounts")
+		return
+	}
 	if h.inferenceClient == nil {
 		writeError(w, http.StatusServiceUnavailable, "inference unavailable")
 		return

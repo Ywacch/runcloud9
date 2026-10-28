@@ -1231,8 +1231,12 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 			hist := h.metricsCollector.DownsampledSessionHistory(namespace)
 			summary := h.metricsCollector.SessionSummary(namespace, base, dm)
 			if len(hist) > 0 {
+				ownerID := ""
+				if rowErr == nil {
+					ownerID = row.UserID
+				}
 				enrichCtx, enrichCancel := context.WithTimeout(r.Context(), 2*time.Minute)
-				h.enrichReelCaptionsInSummary(enrichCtx, namespace, summary, dc, tpl, hist, dm)
+				h.enrichReelCaptionsInSummary(enrichCtx, namespace, ownerID, summary, dc, tpl, hist, dm)
 				enrichCancel()
 			}
 			summary["terminated_at"] = time.Now().Format(time.RFC3339)

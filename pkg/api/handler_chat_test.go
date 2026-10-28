@@ -69,6 +69,9 @@ func TestHandleChatStream_VerifiedReply(t *testing.T) {
 		},
 	})
 
+	st.users = map[string]store.UserRecord{
+		"dev-user": {IsInternal: true},
+	}
 	h := NewHandler(nil, st, nil, nil, collector, nil, nil, nil, nil)
 	h.inferenceClient = &stubInferenceService{
 		chatResp: &inference.ChatResponse{
@@ -162,5 +165,36 @@ func TestHandleChatStream_RejectsTerminatedSession(t *testing.T) {
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status: want 409, got %d", rec.Code)
+	}
+}
+
+func TestHandleChatStream_RejectsNonInternalUser(t *testing.T) {
+	t.Parallel()
+
+	ns := "ns-chat-free"
+	st := &fakeDeploymentStore{
+		byNS: map[string]store.DeploymentRow{
+			ns: {
+				Namespace: ns,
+				UserID:    "dev-user",
+				Status:    "running",
+			},
+		},
+		users: map[string]store.UserRecord{
+			"dev-user": {IsInternal: false},
+		},
+	}
+	h := NewHandler(nil, st, nil, nil, nil, nil, nil, nil, nil)
+	h.inferenceClient = &stubInferenceService{}
+
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/deployments/"+ns+"/chat", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status: want 403, got %d body %s", rec.Code, rec.Body.String())
 	}
 }
