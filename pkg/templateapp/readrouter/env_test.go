@@ -10,6 +10,7 @@ func TestPolicyFromEnv(t *testing.T) {
 	}{
 		{"", PolicyLeaderOnly},
 		{"replica", PolicyReplica},
+		{"sticky", PolicySticky},
 		{"RYW", PolicyRYW},
 		{"bogus", PolicyLeaderOnly},
 	}

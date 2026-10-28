@@ -286,7 +286,7 @@ var allMechanisms = []Mechanism{
 	{
 		ID:           "ryw_violation_replica_route",
 		TriggerRules: []string{IDRYWViolation},
-		Precondition: Precondition{Role: "db", Key: "readConsistency", AnyOf: []string{"replica", "ryw", "ryw+monotonic"}},
+		Precondition: Precondition{Role: "db", Key: "readConsistency", AnyOf: []string{"replica", "sticky", "ryw", "ryw+monotonic"}},
 		CausalChain: []string{
 			"reads are routed to replicas for scale",
 			"a write has not replayed to the replica yet",
@@ -308,7 +308,7 @@ var allMechanisms = []Mechanism{
 	{
 		ID:           "monotonic_violation_replica_route",
 		TriggerRules: []string{IDMonotonicViolation},
-		Precondition: Precondition{Role: "db", Key: "readConsistency", AnyOf: []string{"monotonic", "ryw+monotonic"}},
+		Precondition: Precondition{Role: "db", Key: "readConsistency", AnyOf: []string{"monotonic", "sticky", "ryw+monotonic"}},
 		CausalChain: []string{
 			"replica reads observe WAL positions out of order",
 			"a later read returns an earlier version than a prior read",

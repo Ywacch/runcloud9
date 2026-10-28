@@ -12,6 +12,7 @@ const (
 
 	readConsistencyLeaderOnly   = "leader-only"
 	readConsistencyReplica      = "replica"
+	readConsistencySticky       = "sticky"
 	readConsistencyRYW          = "ryw"
 	readConsistencyMonotonic    = "monotonic"
 	readConsistencyRYWMonotonic = "ryw+monotonic"
@@ -78,13 +79,13 @@ func parseReadConsistency(config map[string]any) string {
 }
 
 func readConsistencyEnumList() string {
-	return "leader-only, replica, ryw, monotonic, ryw+monotonic"
+	return "leader-only, replica, sticky, ryw, monotonic, ryw+monotonic"
 }
 
 func isValidReadConsistency(policy string) bool {
 	switch policy {
-	case readConsistencyLeaderOnly, readConsistencyReplica, readConsistencyRYW,
-		readConsistencyMonotonic, readConsistencyRYWMonotonic:
+	case readConsistencyLeaderOnly, readConsistencyReplica, readConsistencySticky,
+		readConsistencyRYW, readConsistencyMonotonic, readConsistencyRYWMonotonic:
 		return true
 	default:
 		return false

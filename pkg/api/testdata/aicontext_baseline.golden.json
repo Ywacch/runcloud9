@@ -636,6 +636,7 @@
             "key": "readConsistency",
             "anyOf": [
               "replica",
+              "sticky",
               "ryw",
               "ryw+monotonic"
             ]
