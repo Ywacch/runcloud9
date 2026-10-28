@@ -5,6 +5,7 @@ package readrouter
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"strconv"
 	"strings"
 	"sync"
@@ -69,6 +70,7 @@ type RoutingPolicy string
 const (
 	PolicyLeaderOnly   RoutingPolicy = "leader-only"
 	PolicyReplica      RoutingPolicy = "replica"
+	PolicySticky       RoutingPolicy = "sticky"
 	PolicyRYW          RoutingPolicy = "ryw"
 	PolicyMonotonic    RoutingPolicy = "monotonic"
 	PolicyRYWMonotonic RoutingPolicy = "ryw+monotonic"
@@ -191,7 +193,7 @@ func (r *ReadRouter) RouteRead(clientID string, pol RoutingPolicy) Route {
 	switch pol {
 	case PolicyLeaderOnly, PolicyBoundedStale, PolicyQuorum:
 		return RouteLeader
-	case PolicyReplica, PolicyMonotonic:
+	case PolicyReplica, PolicyMonotonic, PolicySticky:
 		return RouteReplica
 	case PolicyRYW, PolicyRYWMonotonic:
 		if r.needsLeaderForRYW(clientID) {
@@ -278,7 +280,7 @@ func (r *ReadRouter) RecordRead(clientID string, t ConsistencyToken) (rywViolati
 	}
 
 	switch r.policy {
-	case PolicyMonotonic, PolicyRYWMonotonic:
+	case PolicyMonotonic, PolicySticky, PolicyRYWMonotonic:
 		if st.lastRead != nil && !t.GTE(st.lastRead) {
 			monotonicViolation = true
 			monotonicViolationsTotal.Inc()
@@ -323,7 +325,7 @@ func (r *ReadRouter) recordReadAgainst(
 	}
 
 	switch r.policy {
-	case PolicyMonotonic, PolicyRYWMonotonic:
+	case PolicyMonotonic, PolicySticky, PolicyRYWMonotonic:
 		if st.lastRead != nil && !t.GTE(st.lastRead) {
 			monotonicViolation = true
 			monotonicViolationsTotal.Inc()
@@ -331,6 +333,29 @@ func (r *ReadRouter) recordReadAgainst(
 		}
 	}
 	return rywViolation, monotonicViolation
+}
+
+func stickyIndex(clientID string, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	if strings.TrimSpace(clientID) == "" {
+		return 0
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(clientID))
+	return int(h.Sum32() % uint32(n))
+}
+
+func (r *ReadRouter) replicaStart(clientID string) int {
+	n := len(r.readPools)
+	if n == 0 {
+		return 0
+	}
+	if r.policy == PolicySticky && strings.TrimSpace(clientID) != "" {
+		return stickyIndex(clientID, n)
+	}
+	return r.nextReplicaStart()
 }
 
 func (r *ReadRouter) getOrCreateLocked(clientID string) *clientState {
@@ -384,7 +409,7 @@ func (r *ReadRouter) ReadTarget(clientID string) (queryPool, string) {
 	}
 	route := r.RouteRead(clientID, r.policy)
 	if route == RouteReplica && len(r.readPools) > 0 {
-		idx := r.nextReplicaStart()
+		idx := r.replicaStart(clientID)
 		entry := r.readPools[idx]
 		incDBRead(entry.host)
 		return entry.pool, entry.host

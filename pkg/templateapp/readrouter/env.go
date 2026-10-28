@@ -7,6 +7,8 @@ func PolicyFromEnv(raw string) RoutingPolicy {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case string(PolicyReplica):
 		return PolicyReplica
+	case string(PolicySticky):
+		return PolicySticky
 	case string(PolicyRYW):
 		return PolicyRYW
 	case string(PolicyMonotonic):

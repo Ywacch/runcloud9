@@ -113,6 +113,7 @@ func TestReadRouter_RouteRead_policies(t *testing.T) {
 		{name: "leader-only", pol: PolicyLeaderOnly, want: RouteLeader},
 		{name: "replica", pol: PolicyReplica, want: RouteReplica},
 		{name: "monotonic", pol: PolicyMonotonic, want: RouteReplica},
+		{name: "sticky", pol: PolicySticky, want: RouteReplica},
 		{
 			name: "ryw without write",
 			pol:  PolicyRYW,

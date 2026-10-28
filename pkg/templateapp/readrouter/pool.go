@@ -82,7 +82,7 @@ func (r *ReadRouter) queryReplicaRoundRobin(
 	rywRedirect bool,
 ) (string, error) {
 	tokenExpr := r.engine.ReadTokenExpr()
-	start := r.nextReplicaStart()
+	start := r.replicaStart(clientID)
 	var lastErr error
 
 	for i := 0; i < len(r.readPools); i++ {
@@ -188,7 +188,7 @@ func (r *ReadRouter) queryRowsReplicaRoundRobin(
 	run func(ctx context.Context, q Querier) error,
 	rywRedirect bool,
 ) (string, error) {
-	start := r.nextReplicaStart()
+	start := r.replicaStart(clientID)
 	var lastErr error
 
 	for i := 0; i < len(r.readPools); i++ {

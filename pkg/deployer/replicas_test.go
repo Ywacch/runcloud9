@@ -330,6 +330,7 @@ func TestEffectiveReadConsistency(t *testing.T) {
 	}{
 		{name: "leader-only unchanged", cfg: map[string]any{"readConsistency": "leader-only"}, readReplicas: 1, want: "leader-only"},
 		{name: "replica with one standby", cfg: map[string]any{"readConsistency": "replica"}, readReplicas: 1, want: "replica"},
+		{name: "sticky with one standby", cfg: map[string]any{"readConsistency": "sticky"}, readReplicas: 1, want: "sticky"},
 		{name: "monotonic clamps with one standby", cfg: map[string]any{"readConsistency": "monotonic"}, readReplicas: 1, want: "ryw"},
 		{name: "ryw+monotonic clamps with one standby", cfg: map[string]any{"readConsistency": "ryw+monotonic"}, readReplicas: 1, want: "ryw"},
 		{name: "monotonic allowed with two standbys", cfg: map[string]any{"readConsistency": "monotonic"}, readReplicas: 2, want: "monotonic"},
