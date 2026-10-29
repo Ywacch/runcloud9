@@ -90,6 +90,17 @@ func TestBuildAIContext_BaselineRunOnly(t *testing.T) {
 	}
 }
 
+func TestBuildAIContext_RunRoleCandidate(t *testing.T) {
+	t.Parallel()
+
+	in := aiContextTestInput()
+	in.RunRole = RunRoleCandidate
+	ctx := BuildAIContext(in)
+	if len(ctx.Runs) != 1 || ctx.Runs[0].Role != RunRoleCandidate {
+		t.Fatalf("runs: %+v", ctx.Runs)
+	}
+}
+
 func aiContextTestInput() AIContextInput {
 	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 	t1 := t0.Add(time.Minute)

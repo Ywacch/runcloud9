@@ -44,6 +44,7 @@ type Run struct {
 // AIContextInput feeds BuildAIContext from session design and metrics evidence.
 type AIContextInput struct {
 	SessionID    string
+	RunRole      string // empty → baseline in BuildAIContext
 	DesignConfig deployer.DesignConfig
 	Design       *deployer.DeploymentDesign
 	Hist         []metrics.DeploymentMetrics
@@ -78,12 +79,19 @@ func BuildAIContext(in AIContextInput) AIContext {
 		facts = ledger.Facts()
 	}
 
+	runRole := RunRoleBaseline
+	if in.RunRole != "" {
+		runRole = in.RunRole
+	} else if final != nil && final.RunRole != "" {
+		runRole = final.RunRole
+	}
+
 	return AIContext{
 		SchemaVersion:  AIContextSchemaVersion,
 		CatalogVersion: rules.CatalogVersion,
 		SessionID:      in.SessionID,
 		Runs: []Run{{
-			Role:               RunRoleBaseline,
+			Role:               runRole,
 			DesignConfig:       in.DesignConfig,
 			Facts:              facts,
 			Descriptors:        metrics.BuildDescriptors(internals),
