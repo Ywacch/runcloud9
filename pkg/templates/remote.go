@@ -178,7 +178,11 @@ func FetchRemoteTemplates(client *supabase.Client) ([]TemplateSpec, error) {
 			log.Printf("templates: cloud_templates row %q: %v", rows[i].ID, err)
 			continue
 		}
-		out = append(out, defToSpec(def))
+		spec := defToSpec(def)
+		if b, err := json.Marshal(def); err == nil {
+			spec.SourceHash = SourceHashBytes(b)
+		}
+		out = append(out, spec)
 	}
 	return out, nil
 }

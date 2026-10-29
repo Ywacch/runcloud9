@@ -149,7 +149,7 @@ func (h *Handler) runBackgroundProvision(
 	if h.store != nil {
 		_ = h.store.UpdateStatus(context.Background(), namespace, "running")
 		_ = h.store.UpdateExpiresAt(context.Background(), namespace, runExpiresAt)
-		_ = h.store.UpdateMetricsSummary(context.Background(), namespace, map[string]any{
+		h.stampMetrics(context.Background(), namespace, map[string]any{
 			"seeded":     result.Seeded,
 			"running_at": time.Now().UTC().Format(time.RFC3339),
 		})

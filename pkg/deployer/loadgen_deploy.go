@@ -84,6 +84,11 @@ func DeployLoadgen(ctx context.Context, clientset kubernetes.Interface, namespac
 }
 
 func loadgenImage() string {
+	return LoadgenImage()
+}
+
+// LoadgenImage returns the loadgen pod image ref used by DeployLoadgen.
+func LoadgenImage() string {
 	registry := os.Getenv("TEMPLATE_IMAGE_REGISTRY")
 	if registry == "" {
 		registry = "us-central1-docker.pkg.dev/runcloud9/cloud9-images"
