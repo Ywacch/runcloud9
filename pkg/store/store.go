@@ -83,7 +83,9 @@ type CreateDeploymentParams struct {
 	AdmittedCPUm  int64 // cluster admission weight; 0 allowed
 	AdmittedMemMi int64
 	// Status defaults to "provisioning" when empty. Use "queued" for the deploy queue.
-	Status string
+	Status       string
+	ComparisonID string // empty for solo runs
+	RunRole      string // "", "baseline", "candidate"
 }
 
 // QueuedDeploymentRow is a FIFO queue entry with persisted admission weights.
@@ -117,6 +119,8 @@ type DeploymentRow struct {
 	MetricsSummary map[string]any `json:"metrics_summary"`
 	ExpiresAt      time.Time      `json:"expires_at"`
 	CreatedAt      time.Time      `json:"created_at"`
+	ComparisonID   *string        `json:"comparison_id"`
+	RunRole        *string        `json:"run_role"`
 }
 
 // NewDeploymentStore creates a store using the Supabase URL and service role key.
@@ -139,24 +143,13 @@ func (s *DeploymentStore) SupabaseClient() *supabase.Client {
 // CreateDeployment inserts a new deployment row and returns the new row ID.
 // Status defaults to "provisioning" when params.Status is empty.
 func (s *DeploymentStore) CreateDeployment(ctx context.Context, params CreateDeploymentParams) (string, error) {
-	userIDVal := any(params.UserID)
-	if params.UserID == "" {
-		userIDVal = nil
-	}
 	status := params.Status
 	if status == "" {
 		status = "provisioning"
 	}
-	row := map[string]any{
-		"namespace":       params.Namespace,
-		"template":        params.Template,
-		"archetype":       params.Archetype,
-		"status":          status,
-		"design":          params.Design,
-		"expires_at":      params.ExpiresAt.Format(time.RFC3339),
-		"user_id":         userIDVal,
-		"admitted_cpu_m":  params.AdmittedCPUm,
-		"admitted_mem_mi": params.AdmittedMemMi,
+	row, err := DeploymentInsertRow(params, status)
+	if err != nil {
+		return "", err
 	}
 	data, _, err := s.client.From("cloud_deployments").Insert([]map[string]any{row}, false, "", "representation", "exact").Execute()
 	if err != nil {
@@ -242,7 +235,7 @@ func (s *DeploymentStore) GetStaleDeployments(ctx context.Context) ([]Deployment
 // GetDeployment returns the single row matching the namespace.
 func (s *DeploymentStore) GetDeployment(ctx context.Context, namespace string) (DeploymentRow, error) {
 	data, _, err := s.client.From("cloud_deployments").
-		Select("id,user_id,namespace,template,archetype,status,design,metrics_summary,expires_at,created_at", "exact", false).
+		Select("id,user_id,namespace,template,archetype,status,design,metrics_summary,expires_at,created_at,comparison_id,run_role", "exact", false).
 		Eq("namespace", namespace).
 		Limit(1, "").
 		Execute()

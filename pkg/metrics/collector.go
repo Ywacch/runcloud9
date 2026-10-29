@@ -70,6 +70,8 @@ type MetricsCollector struct {
 	pgHold                  map[string]bool
 	publishersMu            sync.Mutex
 	publishers              map[string]*sessionPublisher
+	runInfoMu               sync.RWMutex
+	runInfo                 map[string]RunInfo
 	publisherCollectHook    func(ctx context.Context, namespace, template string, topo TopologyFlags) (*DeploymentMetrics, error) // tests only
 	replSQLMu               sync.Mutex
 	replSQLCache            map[string]replSQLCacheEntry // key = namespace
@@ -166,6 +168,7 @@ func (c *MetricsCollector) Cleanup(namespace string) {
 	if c.sessionAcc != nil {
 		c.sessionAcc.Cleanup(namespace)
 	}
+	c.clearRunInfo(namespace)
 	c.OpenPostgresSession(namespace)
 }
 
@@ -1323,6 +1326,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	}
 	rb.Add(*dm)
 	c.historyMu.Unlock()
+
+	c.copyRunInfoOnto(dm)
 
 	return dm, nil
 }

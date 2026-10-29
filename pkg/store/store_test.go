@@ -239,6 +239,65 @@ func TestCreateDeployment_IncludesAdmittedWeights(t *testing.T) {
 	}
 }
 
+func TestCreateDeployment_InvalidRunRole(t *testing.T) {
+	t.Parallel()
+
+	cmp := "550e8400-e29b-41d4-a716-446655440000"
+	base := CreateDeploymentParams{
+		Namespace: "ns-bad",
+		Template:  "url-shortener",
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	cases := []struct {
+		name   string
+		params CreateDeploymentParams
+		substr string
+	}{
+		{
+			name: "bad role",
+			params: func() CreateDeploymentParams {
+				p := base
+				p.ComparisonID = cmp
+				p.RunRole = "solo"
+				return p
+			}(),
+			substr: "invalid run role",
+		},
+		{
+			name: "role without id",
+			params: func() CreateDeploymentParams {
+				p := base
+				p.RunRole = RunRoleCandidate
+				return p
+			}(),
+			substr: "requires comparison_id",
+		},
+		{
+			name: "id without role",
+			params: func() CreateDeploymentParams {
+				p := base
+				p.ComparisonID = cmp
+				return p
+			}(),
+			substr: "requires run_role",
+		},
+	}
+	s, err := NewDeploymentStore("http://unused", "service-key")
+	if err != nil {
+		t.Fatalf("NewDeploymentStore: %v", err)
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := s.CreateDeployment(context.Background(), tc.params)
+			if err == nil || !strings.Contains(err.Error(), tc.substr) {
+				t.Fatalf("CreateDeployment err = %v, want substring %q", err, tc.substr)
+			}
+		})
+	}
+}
+
 func TestListActiveDeployments_IncludesQueued(t *testing.T) {
 	t.Parallel()
 

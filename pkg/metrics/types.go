@@ -15,6 +15,8 @@ type DeploymentMetrics struct {
 	// ComponentMetrics.Freshness for per-signal-group tiers).
 	Timestamp       time.Time                   `json:"timestamp"`
 	Namespace       string                      `json:"namespace"`
+	RunRole         string                      `json:"runRole,omitempty"`
+	ComparisonID    string                      `json:"comparisonId,omitempty"`
 	Components      map[string]ComponentMetrics `json:"components"`
 	TemplateMetrics map[string]float64          `json:"templateMetrics,omitempty"`
 	Events          []Event                     `json:"events,omitempty"`

@@ -179,7 +179,7 @@ func (h *Handler) runPostmortemAfterTeardown(namespace string) {
 		return
 	}
 	final := finalSnapshot(hist, nil)
-	aiCtx, err := aiContextFromSummary(namespace, row.Template, dc, design, row.MetricsSummary)
+	aiCtx, err := aiContextFromSummary(&row, dc, design)
 	if err != nil {
 		log.Printf("postmortem %s: ai context: %v", namespace, err)
 		return

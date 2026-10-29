@@ -11,6 +11,7 @@ import (
 	"github.com/getsentry/sentry-go"
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/diagnostics"
+	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/store"
 )
 
@@ -158,6 +159,19 @@ func (h *Handler) runBackgroundProvision(
 	}
 	if h.metricsCollector != nil {
 		topo := MetricsTopologyFromDeploymentDesign(&design, design.Template)
+		if h.store != nil {
+			row, err := h.store.GetDeployment(context.Background(), namespace)
+			if err == nil && row.RunRole != nil && *row.RunRole != "" {
+				cmpID := ""
+				if row.ComparisonID != nil {
+					cmpID = *row.ComparisonID
+				}
+				h.metricsCollector.SetRunInfo(namespace, metrics.RunInfo{
+					Role:         *row.RunRole,
+					ComparisonID: cmpID,
+				})
+			}
+		}
 		h.metricsCollector.EnsurePublisher(namespace, design.Template, topo)
 	}
 	h.provisionETA.Observe(time.Since(start))

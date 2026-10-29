@@ -35,6 +35,7 @@ func appendReplyBeforeParentPhenomenon(dm *DeploymentMetrics, template string, t
 		DelaysMs:                 topo.DBReplicaApplyDelayMs,
 		ReadConsistency:          topo.DBReadConsistency,
 		ReadReplicas:             topo.DBReadReplicas,
+		RunRole:                  dm.RunRole,
 		DetectionMayBeIncomplete: detectionIncomplete,
 	})
 	if entry != nil {
