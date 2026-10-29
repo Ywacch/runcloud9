@@ -1,7 +1,9 @@
 package templates
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -44,6 +46,7 @@ type TemplateSpec struct {
 	Variations      []TemplateVariation `json:"variations,omitempty"`
 	AppServerImage  string              `json:"-"`
 	WorkerImage     string              `json:"-"`
+	SourceHash      string              `json:"-"`
 	Simulatable     bool                `json:"simulatable"`
 	Deployable      bool                `json:"deployable"`
 	// SupportsWorker is true when the template ships a real worker image (workerImageKey set).
@@ -242,7 +245,9 @@ func loadEmbeddedTemplates() []TemplateSpec {
 		if err := yaml.Unmarshal(data, &def); err != nil {
 			panic(fmt.Sprintf("templates: yaml %s: %v", name, err))
 		}
-		out = append(out, defToSpec(&def))
+		spec := defToSpec(&def)
+		spec.SourceHash = SourceHashBytes(data)
+		out = append(out, spec)
 	}
 	// Stable public order (matches historical hardcoded slice; tests rely on it).
 	order := map[string]int{
@@ -266,6 +271,21 @@ func loadEmbeddedTemplates() []TemplateSpec {
 		}
 	})
 	return out
+}
+
+// SourceHashBytes fingerprints template source bytes as sha256:<hex>.
+func SourceHashBytes(data []byte) string {
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// TemplateSourceVersion returns the loaded template's source hash, or "" if unknown.
+func TemplateSourceVersion(templateID string) string {
+	t := GetTemplate(templateID)
+	if t == nil {
+		return ""
+	}
+	return t.SourceHash
 }
 
 func defToSpec(def *templateDef) TemplateSpec {

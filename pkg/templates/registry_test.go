@@ -131,6 +131,30 @@ func TestGetAppServerImage(t *testing.T) {
 	}
 }
 
+func TestSourceHashBytes(t *testing.T) {
+	t.Parallel()
+	a := SourceHashBytes([]byte("same-bytes"))
+	b := SourceHashBytes([]byte("same-bytes"))
+	if a != b || !strings.HasPrefix(a, "sha256:") {
+		t.Fatalf("hash = %q", a)
+	}
+	if SourceHashBytes([]byte("other")) == a {
+		t.Fatal("expected different hash")
+	}
+}
+
+func TestEmbeddedTemplateSourceHashStable(t *testing.T) {
+	t.Parallel()
+	tmpl := GetTemplate("url-shortener")
+	if tmpl == nil || tmpl.SourceHash == "" {
+		t.Fatal("expected url-shortener source hash")
+	}
+	again := GetTemplate("url-shortener")
+	if again.SourceHash != tmpl.SourceHash {
+		t.Fatalf("hash changed between lookups: %q vs %q", tmpl.SourceHash, again.SourceHash)
+	}
+}
+
 func TestGetWorkerImage(t *testing.T) {
 	t.Parallel()
 	w := GetWorkerImage("social-feed")

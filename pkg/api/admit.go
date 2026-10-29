@@ -162,6 +162,7 @@ func (h *Handler) admitAndCreate(
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", errCreateRow, err)
 	}
+	h.stampRunManifest(ctx, namespace, design)
 	if status == statusQueued {
 		now := time.Now()
 		h.stampMetrics(ctx, namespace, map[string]any{

@@ -60,6 +60,7 @@ type Handler struct {
 	inferenceClient      inferenceService
 	inferenceTokenBudget *SessionTokenBudget
 	actAs                *actAsValidator
+	manifestRNG          func() int64
 }
 
 type deploymentStore interface {
@@ -148,6 +149,7 @@ func NewHandler(
 		provisionETA:         newProvisionETA(etaSec),
 		inferenceClient:      inferenceSvc,
 		inferenceTokenBudget: NewSessionTokenBudget(),
+		manifestRNG:          randomManifestRNGSeed,
 	}
 }
 
@@ -1006,6 +1008,8 @@ func (h *Handler) handleStartLoadGen(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.emitVUGapWarningIfNeeded(namespace, profile, row)
+
+	h.stampRunManifestLoadProfile(r.Context(), namespace, profile)
 
 	if h.eventBus != nil {
 		h.eventBus.Emit(namespace, metrics.Event{
