@@ -205,6 +205,7 @@ func TestScenarioFidelity(t *testing.T) {
 	}{
 		{scenario: "pod_kill", want: rules.FidelityReal},
 		{scenario: "cache_flush", want: rules.FidelityReal},
+		{scenario: scenarioSplitAppStore, want: rules.FidelityCompressed},
 		{scenario: "not-a-scenario", want: rules.FidelityReal},
 	}
 	for _, tc := range tests {

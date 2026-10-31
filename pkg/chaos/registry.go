@@ -69,6 +69,7 @@ var scenarioRegistry = []scenarioRegistration{
 		scenario: scenarioSplitAppStore,
 		engine:   "postgresql",
 		targets:  []string{"db"},
+		fidelity: rules.FidelityCompressed,
 		new: func(client kubernetes.Interface) ChaosScenario {
 			return &PartitionScenario{Client: client, Scenario: scenarioSplitAppStore}
 		},
@@ -77,6 +78,7 @@ var scenarioRegistry = []scenarioRegistration{
 		scenario: scenarioSplitAppStore,
 		engine:   "redis",
 		targets:  []string{"cache"},
+		fidelity: rules.FidelityCompressed,
 		new: func(client kubernetes.Interface) ChaosScenario {
 			return &PartitionScenario{Client: client, Scenario: scenarioSplitAppStore}
 		},

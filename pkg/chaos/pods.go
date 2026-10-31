@@ -55,3 +55,31 @@ func deletePod(ctx context.Context, client kubernetes.Interface, namespace, podN
 	slog.Info("chaos pod kill", "namespace", namespace, "pod", podName)
 	return nil
 }
+
+// deleteRunningPodsForAppLabel deletes every running pod with app=<appLabel> so clients
+// reconnect after a partition NetworkPolicy is applied.
+func deleteRunningPodsForAppLabel(ctx context.Context, client kubernetes.Interface, namespace, appLabel string) error {
+	pods, err := client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector(appLabel),
+	})
+	if err != nil {
+		return fmt.Errorf("list pods app=%s: %w", appLabel, err)
+	}
+	var deleted int
+	for _, pod := range pods.Items {
+		if pod.DeletionTimestamp != nil {
+			continue
+		}
+		if pod.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		if err := deletePod(ctx, client, namespace, pod.Name); err != nil {
+			return err
+		}
+		deleted++
+	}
+	if deleted == 0 {
+		return fmt.Errorf("no running pod for component with app=%s", appLabel)
+	}
+	return nil
+}
