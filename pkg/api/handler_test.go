@@ -454,6 +454,43 @@ func TestHandleCreateDeployment_MultipleAppServersRejected(t *testing.T) {
 	}
 }
 
+func TestHandleCreateDeployment_UnboundTimelineJob(t *testing.T) {
+	t.Parallel()
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := deployer.DeploymentDesign{
+		Template:  "social-feed",
+		Archetype: "social-feed",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app-1", Type: "app-server", Name: "App", Config: map[string]interface{}{"replicas": 1}},
+			{ID: "worker-1", Type: "worker", Name: "Worker", Config: map[string]interface{}{"replicas": 1}},
+			{ID: "db-1", Type: "db", Name: "DB"},
+			{ID: "mq-1", Type: "mq", Name: "MQ"},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app-1", TargetID: "mq-1"},
+			{SourceID: "app-1", TargetID: "db-1"},
+			{SourceID: "worker-1", TargetID: "mq-1"},
+			{SourceID: "worker-1", TargetID: "db-1"},
+		},
+	}
+	raw, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "timeline job is not bound") {
+		t.Fatalf("body: want timeline binding error, got %s", rec.Body.String())
+	}
+}
+
 func TestHandleCreateDeployment_UnavailableRegistryTemplate(t *testing.T) {
 	t.Parallel()
 	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)

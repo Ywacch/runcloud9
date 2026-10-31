@@ -36,7 +36,7 @@ func ValidateRuntimeContract(design DeploymentDesign, tmpl *templates.TemplateSp
 		validateProxyQueries,
 		validateAppServerEnv,
 		validateWorkerEnv,
-		validateWorkerTimelineStore,
+		validateJobBindingsContract,
 	}
 	for _, check := range checks {
 		if err := check(design, tmpl); err != nil {
@@ -350,30 +350,4 @@ func appDatabaseMode(tmpl *templates.TemplateSpec) string {
 		return "always"
 	}
 	return tmpl.AppDatabaseMode
-}
-
-func validateWorkerTimelineStore(design DeploymentDesign, tmpl *templates.TemplateSpec) error {
-	if workerTimelineStore(tmpl) != "redis" {
-		return nil
-	}
-	for _, node := range design.Nodes {
-		if node.Type != "worker" {
-			continue
-		}
-		env := DeriveEnvVars(node, design)
-		if env["CACHE_HOST"] == "" {
-			return fmt.Errorf(
-				"worker %q needs a cache connection for this template's push timeline store. Add worker -> cache (CACHE_HOST)",
-				node.Name,
-			)
-		}
-	}
-	return nil
-}
-
-func workerTimelineStore(tmpl *templates.TemplateSpec) string {
-	if tmpl == nil || tmpl.WorkerTimelineStore == "" {
-		return "none"
-	}
-	return tmpl.WorkerTimelineStore
 }
