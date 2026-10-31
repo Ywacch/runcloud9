@@ -1,0 +1,29 @@
+- id: postgresql
+  label: PostgreSQL
+  family: relational
+  weight: light
+  minShape:
+    pods: 1
+    cpuMilli: 125
+    memoryMi: 256
+  exporter: postgres-exporter
+  nativeSignals: []
+- id: redis
+  label: Redis
+  family: kv
+  weight: light
+  minShape:
+    pods: 1
+    cpuMilli: 125
+    memoryMi: 256
+  exporter: redis-exporter
+  nativeSignals: []
+- id: rabbitmq
+  label: RabbitMQ
+  family: broker
+  weight: light
+  minShape:
+    pods: 1
+    cpuMilli: 200
+    memoryMi: 256
+  nativeSignals: []

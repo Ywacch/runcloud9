@@ -1,0 +1,12 @@
+- id: main_db
+  label: Main database
+- id: hot_cache
+  label: Hot cache
+- id: timeline
+  label: Timeline
+  ops:
+    - append
+    - range
+    - trim
+- id: work_queue
+  label: Work queue

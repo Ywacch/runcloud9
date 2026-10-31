@@ -1,9 +1,17 @@
 package engines
 
 import (
+	"embed"
 	"fmt"
+	"io/fs"
+	"path"
 	"sync"
+
+	"gopkg.in/yaml.v3"
 )
+
+//go:embed data/jobs.yaml data/engines.yaml data/pairs.yaml data/guarantees/*.yaml
+var embeddedData embed.FS
 
 var (
 	defaultOnce sync.Once
@@ -13,10 +21,11 @@ var (
 // Default returns the built-in catalog. Callers must not mutate it.
 func Default() *Catalog {
 	defaultOnce.Do(func() {
-		defaultCat = buildDefaultCatalog()
-		if err := validate(defaultCat); err != nil {
+		cat, err := load(embeddedData)
+		if err != nil {
 			panic("engines: invalid default catalog: " + err.Error())
 		}
+		defaultCat = cat
 	})
 	return defaultCat
 }
@@ -31,71 +40,68 @@ func (c *Catalog) Pair(job, engine string) (Pair, bool) {
 	return Pair{}, false
 }
 
-func buildDefaultCatalog() *Catalog {
-	return &Catalog{
-		Version: CatalogVersion,
-		Jobs: []Job{
-			{ID: "main_db", Label: "Main database"},
-			{ID: "hot_cache", Label: "Hot cache"},
-			{
-				ID:    "timeline",
-				Label: "Timeline",
-				Ops:   []string{"append", "range", "trim"},
-			},
-			{ID: "work_queue", Label: "Work queue"},
-		},
-		Engines: []Engine{
-			{ID: "postgresql", Label: "PostgreSQL", Family: "relational", Weight: "light"},
-			{ID: "redis", Label: "Redis", Family: "kv", Weight: "light"},
-			{ID: "rabbitmq", Label: "RabbitMQ", Family: "broker", Weight: "light"},
-		},
-		Pairs: []Pair{
-			{
-				Job: "main_db", Engine: "postgresql",
-				Fit: FitNatural, Build: BuildAvailable,
-				Reason: "Primary relational store for lab templates.", Fidelity: FidelityReal,
-			},
-			{
-				Job: "hot_cache", Engine: "redis",
-				Fit: FitNatural, Build: BuildAvailable,
-				Reason: "In-memory key cache with TTL.", Fidelity: FidelityReal,
-			},
-			{
-				Job: "timeline", Engine: "redis",
-				Fit: FitNatural, Build: BuildAvailable,
-				Reason: "Sorted sets and streams for ordered events.", Fidelity: FidelityReal,
-			},
-			{
-				Job: "timeline", Engine: "postgresql",
-				Fit: FitWorkable, Build: BuildNotBuilt,
-				Reason: "Append-only tables work but need a dedicated template.", Fidelity: FidelityReal,
-			},
-			{
-				Job: "work_queue", Engine: "rabbitmq",
-				Fit: FitNatural, Build: BuildAvailable,
-				Reason: "AMQP queues with ack semantics.", Fidelity: FidelityReal,
-			},
-			{
-				Job: "work_queue", Engine: "redis",
-				Fit: FitWorkable, Build: BuildNotBuilt,
-				Reason: "Lists and streams can queue work with different failure modes.", Fidelity: FidelityReal,
-			},
-		},
-		Guarantees: []GuaranteesCard{
-			{
-				Job: "timeline", Engine: "redis",
-				Entries: []GuaranteeEntry{
-					{
-						ID:       "timeline_survives_cache_restart",
-						Claim:    "Timelines survive a cache pod restart",
-						Chaos:    "pod_kill",
-						Status:   "unverified",
-						Fidelity: FidelityReal,
-					},
-				},
-			},
-		},
+func load(fsys fs.FS) (*Catalog, error) {
+	jobs, err := readYAML[[]Job](fsys, "data/jobs.yaml")
+	if err != nil {
+		return nil, err
 	}
+	engines, err := readYAML[[]Engine](fsys, "data/engines.yaml")
+	if err != nil {
+		return nil, err
+	}
+	pairs, err := readYAML[[]Pair](fsys, "data/pairs.yaml")
+	if err != nil {
+		return nil, err
+	}
+	guarantees, err := loadGuarantees(fsys)
+	if err != nil {
+		return nil, err
+	}
+
+	c := &Catalog{
+		Version:    CatalogVersion,
+		Jobs:       jobs,
+		Engines:    engines,
+		Pairs:      pairs,
+		Guarantees: guarantees,
+	}
+	if err := validate(c); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func readYAML[T any](fsys fs.FS, name string) (T, error) {
+	var out T
+	b, err := fs.ReadFile(fsys, name)
+	if err != nil {
+		return out, fmt.Errorf("engines: read %s: %w", name, err)
+	}
+	if err := yaml.Unmarshal(b, &out); err != nil {
+		return out, fmt.Errorf("engines: parse %s: %w", name, err)
+	}
+	return out, nil
+}
+
+func loadGuarantees(fsys fs.FS) ([]GuaranteesCard, error) {
+	dir := "data/guarantees"
+	entries, err := fs.ReadDir(fsys, dir)
+	if err != nil {
+		return nil, fmt.Errorf("engines: read guarantees dir: %w", err)
+	}
+	var out []GuaranteesCard
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := path.Join(dir, e.Name())
+		card, err := readYAML[GuaranteesCard](fsys, name)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, card)
+	}
+	return out, nil
 }
 
 func validate(c *Catalog) error {
@@ -128,7 +134,14 @@ func validate(c *Catalog) error {
 		engineIDs[e.ID] = struct{}{}
 	}
 
+	seenPairs := make(map[string]struct{}, len(c.Pairs))
 	for _, p := range c.Pairs {
+		key := p.Job + "\x00" + p.Engine
+		if _, dup := seenPairs[key]; dup {
+			return fmt.Errorf("engines: duplicate pair %s/%s", p.Job, p.Engine)
+		}
+		seenPairs[key] = struct{}{}
+
 		if _, ok := jobIDs[p.Job]; !ok {
 			return fmt.Errorf("engines: pair references unknown job %q", p.Job)
 		}

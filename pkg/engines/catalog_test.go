@@ -1,8 +1,20 @@
 package engines
 
 import (
+	"encoding/json"
 	"testing"
 )
+
+func TestDefaultCatalog_Loads(t *testing.T) {
+	t.Parallel()
+	c, err := load(embeddedData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Version != CatalogVersion {
+		t.Fatalf("version: got %q want %q", c.Version, CatalogVersion)
+	}
+}
 
 func TestDefaultCatalog_Valid(t *testing.T) {
 	t.Parallel()
@@ -23,6 +35,19 @@ func TestDefaultCatalog_PairLookup(t *testing.T) {
 	}
 	if _, ok := c.Pair("main_db", "redis"); ok {
 		t.Fatal("unexpected main_db/redis pair")
+	}
+}
+
+func TestDefaultCatalog_MinShape(t *testing.T) {
+	t.Parallel()
+	c := Default()
+	for _, e := range c.Engines {
+		if e.MinShape.Pods < 1 {
+			t.Fatalf("engine %s minShape.pods", e.ID)
+		}
+		if e.MinShape.CPUMilli <= 0 || e.MinShape.MemoryMi <= 0 {
+			t.Fatalf("engine %s minShape: %+v", e.ID, e.MinShape)
+		}
 	}
 }
 
@@ -73,12 +98,24 @@ func TestValidate_Rejects(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			c := buildDefaultCatalog()
+			c := cloneCatalog(t, Default())
 			tc.mut(c)
-			err := validate(c)
-			if err == nil {
+			if err := validate(c); err == nil {
 				t.Fatal("expected error")
 			}
 		})
 	}
+}
+
+func cloneCatalog(t *testing.T, c *Catalog) *Catalog {
+	t.Helper()
+	b, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out Catalog
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	return &out
 }
