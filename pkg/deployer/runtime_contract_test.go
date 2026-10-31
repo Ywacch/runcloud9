@@ -110,7 +110,7 @@ func TestValidateRuntimeContract_Table(t *testing.T) {
 					{SourceID: "w1", TargetID: "mq1"},
 				},
 			},
-			wantErr: "needs a cache connection",
+			wantErr: "timeline job is not bound",
 		},
 		{
 			name:       "social feed worker with cache passes runtime contract",
