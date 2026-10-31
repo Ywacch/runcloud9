@@ -17,8 +17,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
+	"github.com/ywacch/cloud9/pkg/templateapp/jobs/timeline"
 	"github.com/ywacch/cloud9/pkg/templateapp/postgres"
 	"github.com/ywacch/cloud9/pkg/templateapp/readrouter"
 	"github.com/ywacch/cloud9/pkg/templateapp/trace"
@@ -51,11 +53,12 @@ type Config struct {
 }
 
 type Server struct {
-	db    *DB
-	cache *Cache
-	proxy *ProxyClient
-	mq    *MQPublisher
-	cfg   Config
+	db       *DB
+	cache    *Cache
+	timeline timeline.Store
+	proxy    *ProxyClient
+	mq       *MQPublisher
+	cfg      Config
 
 	cacheHits   atomic.Int64
 	cacheMisses atomic.Int64
@@ -258,7 +261,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	followers, err := s.db.GetFollowers(ctx, post.UserID)
-	if err == nil && len(followers) > 0 && s.cache != nil {
+	if err == nil && len(followers) > 0 && s.timeline != nil {
 		payload, _ := json.Marshal(map[string]any{
 			"post_id":    post.ID,
 			"author_id":  post.UserID,
@@ -266,21 +269,30 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 			"content":    post.Content,
 			"created_at": post.CreatedAt,
 		})
-		pipe := s.cache.client.Pipeline()
-		for _, followerID := range followers {
-			appendTimelineWrite(ctx, pipe, followerID, payload, post.CreatedAt, s.cfg.CacheTTL)
+		userIDs := make([]int64, len(followers))
+		for i, followerID := range followers {
+			userIDs[i] = int64(followerID)
+		}
+		item := timeline.Item{
+			PostID:    int64(post.ID),
+			AuthorID:  int64(post.UserID),
+			Payload:   payload,
+			CreatedAt: post.CreatedAt,
 		}
 		followerCount := len(followers)
-		go func(p redis.Pipeliner, postID int, n int) {
+		go func(postID int, n int) {
 			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			_, _ = p.Exec(bgCtx)
+			if err := s.timeline.Append(bgCtx, userIDs, item); err != nil {
+				slog.Warn("sync fanout timeline append failed", "error", err, "post_id", postID)
+				return
+			}
 			slog.Info("sync fanout complete",
 				"post_id", postID,
 				"followers_updated", n,
 				"operation", "fanout_complete",
 			)
-		}(pipe, post.ID, followerCount)
+		}(post.ID, followerCount)
 	}
 	postTotal.WithLabelValues("sync").Inc()
 	writeJSON(w, http.StatusOK, map[string]any{"post_id": post.ID, "mode": "sync"})
@@ -349,7 +361,7 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 
 	var items []FeedItem
 	stats := &feedCacheStats{hits: &s.cacheHits, misses: &s.cacheMisses}
-	items, mode, err = fetchFeedItems(ctx, s.cache, s.cfg.FeedPageSize, userID, stats, s.db.GetFeedPull)
+	items, mode, err = fetchFeedItems(ctx, s.timeline, s.cfg.FeedPageSize, userID, stats, s.db.GetFeedPull)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to fetch feed")
 		return
@@ -703,6 +715,15 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 				slog.Warn("redis ping failed; continuing with cache disabled", "error", err)
 			} else {
 				s.cache = newCache(client, cfg.Stampede)
+				ts, err := timeline.OpenRedis(client, os.Getenv("TIMELINE_ENGINE"), timeline.RedisOptions{
+					MaxEntries: timeline.DefaultMaxEntries,
+					TTL:        cfg.CacheTTL,
+				}, prometheus.DefaultRegisterer)
+				if err != nil {
+					pool.Close()
+					return nil, fmt.Errorf("timeline store: %w", err)
+				}
+				s.timeline = ts
 				go runTimelineKeyReporter(ctx, s.cache.redisClient())
 				slog.Info("cache mode: redis", "host", cfg.CacheHost, "port", cfg.CachePort)
 			}

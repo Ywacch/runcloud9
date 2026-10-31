@@ -2,7 +2,6 @@ package timeline
 
 import (
 	"context"
-	"sort"
 	"sync"
 )
 
@@ -48,7 +47,7 @@ func (m *MemoryStore) Append(ctx context.Context, userIDs []int64, item Item) er
 		items := m.byUser[uid]
 		items = removePostID(items, item.PostID)
 		items = append(items, item)
-		sortTimeline(items)
+		sortItems(items)
 		if len(items) > m.maxEntries {
 			items = items[:m.maxEntries]
 		}
@@ -72,7 +71,7 @@ func (m *MemoryStore) Range(ctx context.Context, userID int64, limit int) ([]Ite
 	}
 	out := make([]Item, len(src))
 	copy(out, src)
-	sortTimeline(out)
+	sortItems(out)
 	if len(out) > limit {
 		out = out[:limit]
 	}
@@ -96,7 +95,7 @@ func (m *MemoryStore) Trim(ctx context.Context, userID int64, keep int) error {
 	if len(items) == 0 {
 		return nil
 	}
-	sortTimeline(items)
+	sortItems(items)
 	if len(items) > keep {
 		items = items[:keep]
 	}
@@ -115,15 +114,6 @@ func removePostID(items []Item, postID int64) []Item {
 		}
 	}
 	return out
-}
-
-func sortTimeline(items []Item) {
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
-			return items[i].PostID > items[j].PostID
-		}
-		return items[i].CreatedAt.After(items[j].CreatedAt)
-	})
 }
 
 func cloneItem(it Item) Item {
