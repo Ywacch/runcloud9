@@ -43,6 +43,19 @@ loadgen:
       max: 5.0
 workerImageKey: ecommerce-worker
 appDatabaseMode: always
+jobs:
+  - id: main_db
+    required: true
+    allowedEngines: [postgresql]
+    defaultNodeType: db
+  - id: hot_cache
+    required: false
+    allowedEngines: [redis]
+    defaultNodeType: cache
+  - id: work_queue
+    required: false
+    allowedEngines: [rabbitmq]
+    defaultNodeType: mq
 prometheusMetrics:
   # Metric key convention (neutral, OSS-facing):
   #   <group>.<op>_rate   — throughput (req/s)

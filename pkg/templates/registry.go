@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/supabase-community/supabase-go"
+	"github.com/ywacch/cloud9/pkg/engines"
 	"github.com/ywacch/cloud9/pkg/introspect"
 	"gopkg.in/yaml.v3"
 )
@@ -50,11 +51,12 @@ type TemplateSpec struct {
 	Simulatable     bool                `json:"simulatable"`
 	Deployable      bool                `json:"deployable"`
 	// SupportsWorker is true when the template ships a real worker image (workerImageKey set).
-	SupportsWorker      bool             `json:"supportsWorker"`
-	SeedConfig          *SeedConfig      `json:"-"`
-	ProxyQueries        []ProxyQueryRule `json:"-"`
-	AppDatabaseMode     string           `json:"-"`
-	WorkerTimelineStore string           `json:"-"`
+	SupportsWorker  bool             `json:"supportsWorker"`
+	SeedConfig      *SeedConfig      `json:"-"`
+	ProxyQueries    []ProxyQueryRule `json:"-"`
+	AppDatabaseMode string           `json:"-"`
+	// WorkerTimelineStore is deprecated; use Jobs with id timeline instead.
+	WorkerTimelineStore string `json:"-"`
 	// LoadgenDefaultRPS is the suggested default RPS when starting loadgen with no rps in the request (0 = use global 50).
 	LoadgenDefaultRPS int `json:"loadgenDefaultRps,omitempty"`
 	// Loadgen holds YAML-authored endpoint specs and optional default RPS.
@@ -67,6 +69,8 @@ type TemplateSpec struct {
 	PrometheusMetrics *PrometheusMetricsSpec `json:"-"`
 	// InvariantCheckers defines YAML-driven L1 checks against templateMetrics keys.
 	InvariantCheckers []InvariantRule `json:"-"`
+	// Jobs lists platform jobs this template can bind (validated against engines.Default()).
+	Jobs []JobRequirement `json:"jobs,omitempty"`
 }
 
 // PresetNode is a fully-configured node for canvas population.
@@ -151,9 +155,11 @@ type templateDef struct {
 		Container string `yaml:"container"`
 		PodLabel  string `yaml:"podLabel"`
 	} `yaml:"seed"`
-	ProxyQueries         []ProxyQueryRule       `yaml:"proxyQueries"`
-	AppDatabaseMode      string                 `yaml:"appDatabaseMode"`
+	ProxyQueries    []ProxyQueryRule `yaml:"proxyQueries"`
+	AppDatabaseMode string           `yaml:"appDatabaseMode"`
+	// WorkerTimelineStore is deprecated; declare a timeline job in jobs: instead.
 	WorkerTimelineStore  string                 `yaml:"workerTimelineStore"`
+	Jobs                 []JobRequirement       `yaml:"jobs"`
 	LoadgenDefaultRPS    int                    `yaml:"loadgenDefaultRps"`
 	Loadgen              *loadgenDef            `yaml:"loadgen"`
 	Storytelling         *StorytellingSpec      `yaml:"storytelling"`
@@ -374,6 +380,13 @@ func defToSpec(def *templateDef) TemplateSpec {
 	}
 	if len(def.Variations) > 0 {
 		spec.Variations = variationsFromYAML(def.Variations)
+	}
+	jobs, err := resolveJobRequirements(def, engines.Default())
+	if err != nil {
+		panic(fmt.Sprintf("templates: %s: %v", def.ID, err))
+	}
+	if len(jobs) > 0 {
+		spec.Jobs = jobs
 	}
 	return spec
 }
