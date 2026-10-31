@@ -93,7 +93,7 @@ func TestCloudTemplatesSelectIncludesStorytelling(t *testing.T) {
 
 func TestCloudTemplatesSelectIncludesPremiumConfigColumns(t *testing.T) {
 	t.Parallel()
-	for _, col := range []string{"loadgen", "prometheus_metrics", "invariant_checkers", "preset", "preset_lite", "introspection"} {
+	for _, col := range []string{"loadgen", "prometheus_metrics", "invariant_checkers", "preset", "preset_lite", "introspection", "jobs"} {
 		if !strings.Contains(cloudTemplatesSelect, col) {
 			t.Fatalf("select missing %s: %q", col, cloudTemplatesSelect)
 		}

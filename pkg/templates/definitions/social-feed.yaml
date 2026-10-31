@@ -102,6 +102,19 @@ loadgen:
 workerImageKey: fanout-worker
 appDatabaseMode: always
 workerTimelineStore: redis
+jobs:
+  - id: main_db
+    required: true
+    allowedEngines: [postgresql]
+    defaultNodeType: db
+  - id: timeline
+    required: true
+    allowedEngines: [redis]
+    defaultNodeType: cache
+  - id: work_queue
+    required: false
+    allowedEngines: [rabbitmq]
+    defaultNodeType: mq
 prometheusMetrics:
   # Metric key convention (neutral, OSS-facing):
   #   <group>.<op>_rate   — throughput (req/s)

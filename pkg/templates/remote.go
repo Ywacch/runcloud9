@@ -33,6 +33,7 @@ type cloudTemplateRow struct {
 	Preset            json.RawMessage `json:"preset"`
 	PresetLite        json.RawMessage `json:"preset_lite"`
 	Introspection     json.RawMessage `json:"introspection"`
+	Jobs              json.RawMessage `json:"jobs"`
 }
 
 type topologyJSONEntry struct {
@@ -140,19 +141,26 @@ func (row *cloudTemplateRow) toTemplateDef() (*templateDef, error) {
 		}
 		def.Introspection = intro
 	}
+	if len(row.Jobs) > 0 && string(row.Jobs) != "null" {
+		var jobs []JobRequirement
+		if err := json.Unmarshal(row.Jobs, &jobs); err != nil {
+			return nil, err
+		}
+		def.Jobs = jobs
+	}
 	return def, nil
 }
 
 // cloudTemplatesSelect is the PostgREST column list for premium template rows.
-const cloudTemplatesSelect = "id,name,description,components,bottleneck,available,premium,tags,simulatable,deployable,image_key,worker_image_key,topology,seed,storytelling,loadgen,prometheus_metrics,invariant_checkers,preset,preset_lite,introspection"
+const cloudTemplatesSelect = "id,name,description,components,bottleneck,available,premium,tags,simulatable,deployable,image_key,worker_image_key,topology,seed,storytelling,loadgen,prometheus_metrics,invariant_checkers,preset,preset_lite,introspection,jobs"
 
 // FetchRemoteTemplates loads premium rows from Supabase cloud_templates.
 // On failure (network, missing table, parse error) it logs and returns an empty slice — no error —
 // so self-hosted and local runs without premium data keep working.
 //
 // Requires cloud_templates.storytelling (jsonb, nullable) for edge/role/journey parity with
-// embedded YAML. Optional jsonb columns loadgen, prometheus_metrics, and invariant_checkers
-// supply premium template load/metrics/invariant config. If storytelling is missing, the select
+// embedded YAML. Optional jsonb columns loadgen, prometheus_metrics, invariant_checkers, and jobs
+// supply premium template load/metrics/invariant/job config. If storytelling is missing, the select
 // fails and premium rows are skipped.
 func FetchRemoteTemplates(client *supabase.Client) ([]TemplateSpec, error) {
 	if client == nil {
