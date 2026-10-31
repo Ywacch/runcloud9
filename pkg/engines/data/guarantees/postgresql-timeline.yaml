@@ -1,0 +1,14 @@
+job: timeline
+engine: postgresql
+entries:
+  - id: timeline_survives_db_restart
+    claim: Timelines survive a db pod restart
+    chaos: pod_kill
+    check: timeline_row_count_after_restart
+    status: unverified
+    fidelity: real
+  - id: timeline_trim_dead_tuples
+    claim: Trims create dead rows that autovacuum must clean
+    check: timeline_dead_tuples
+    status: unverified
+    fidelity: real
