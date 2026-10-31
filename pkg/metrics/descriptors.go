@@ -189,6 +189,14 @@ var signalDescriptorCatalog = map[string]signalMeta{
 		unit: "count", semantic: "counter", meaning: "session total HTTP or worker requests",
 		freshnessGroup: SignalThroughput,
 	},
+	"timelineDeadTuples": {
+		unit: "count", semantic: "gauge", meaning: "dead rows in timelines table awaiting vacuum",
+		freshnessGroup: SignalThroughput,
+	},
+	"timelineRelationBytes": {
+		unit: "bytes", semantic: "gauge", meaning: "on-disk size of the timelines fan-out table",
+		freshnessGroup: SignalThroughput,
+	},
 	"workerSaturation": {
 		unit: "percent", semantic: "ratio", meaning: "worker queue saturation ratio",
 		freshnessGroup: SignalThroughput,

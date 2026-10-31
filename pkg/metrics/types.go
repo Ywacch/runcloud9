@@ -26,6 +26,17 @@ type DeploymentMetrics struct {
 	SnapshotAgeMs int64 `json:"snapshotAgeMs"`
 	// CollectPending is true before the session publisher has stored its first snapshot.
 	CollectPending bool `json:"collectPending,omitempty"`
+	// Timeline carries shared timeline job op metrics (append/range latency, errors).
+	Timeline *TimelineOps `json:"timeline,omitempty"`
+}
+
+// TimelineOps summarizes instrumented timeline store operations for the inspector.
+type TimelineOps struct {
+	Engine      string   `json:"engine"`
+	AppendRate  *float64 `json:"appendRate,omitempty"`
+	AppendP99Ms *float64 `json:"appendP99Ms,omitempty"`
+	RangeP99Ms  *float64 `json:"rangeP99Ms,omitempty"`
+	ErrorRate   *float64 `json:"errorRate,omitempty"`
 }
 
 // Event annotates the metrics timeline (loadgen, thresholds, cascades, invariants, runtime).
@@ -194,6 +205,10 @@ type ComponentMetrics struct {
 	CacheWriteOperation string  `json:"cacheWriteOperation,omitempty"`
 	// TimelineKeyCount is the number of timeline:* keys (social-feed gauge social_timeline_keys).
 	TimelineKeyCount float64 `json:"timelineKeyCount,omitempty"`
+	// TimelineRelationBytes is pg_total_relation_size(timelines) from postgres-exporter custom query.
+	TimelineRelationBytes *float64 `json:"timelineRelationBytes,omitempty"`
+	// TimelineDeadTuples is n_dead_tup for timelines from pg_stat_user_tables.
+	TimelineDeadTuples *float64 `json:"timelineDeadTuples,omitempty"`
 	// FeedRequestRatePush / FeedRequestRatePull are social_feed_request_total rates by mode.
 	FeedRequestRatePush float64 `json:"feedRequestRatePush,omitempty"`
 	FeedRequestRatePull float64 `json:"feedRequestRatePull,omitempty"`
