@@ -64,21 +64,26 @@ func TestGetTierLimits(t *testing.T) {
 		wantAllowProxyCache bool
 		wantMaxInstanceSize string
 		wantMaxLoadgenRPS   int
+		wantAllowEngineSwap bool
+		wantAllowHeavy      bool
 	}{
 		{
 			tier: TierFree, wantConcurrent: 1, wantSessionCap: 9, wantMonthlySessions: 3, wantAllTemplates: false,
 			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
 			wantMaxInstanceSize: InstanceSizeMedium, wantMaxLoadgenRPS: LoadgenRPSCapFree,
+			wantAllowEngineSwap: false, wantAllowHeavy: false,
 		},
 		{
 			tier: TierEngineer, wantConcurrent: 1, wantSessionCap: 15, wantMonthlySessions: 20, wantAllTemplates: true,
 			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
 			wantMaxInstanceSize: InstanceSizeLarge, wantMaxLoadgenRPS: LoadgenRPSCapEngineer,
+			wantAllowEngineSwap: true, wantAllowHeavy: false,
 		},
 		{
 			tier: TierInternal, wantConcurrent: 40, wantSessionCap: 30, wantMonthlySessions: 0, wantAllTemplates: true,
 			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
 			wantMaxInstanceSize: InstanceSizeLarge, wantMaxLoadgenRPS: LoadgenRPSCapInternal,
+			wantAllowEngineSwap: true, wantAllowHeavy: true,
 		},
 	}
 	for _, tt := range tests {
@@ -115,6 +120,12 @@ func TestGetTierLimits(t *testing.T) {
 			}
 			if got.MaxLoadgenRPS != tt.wantMaxLoadgenRPS {
 				t.Fatalf("MaxLoadgenRPS = %d, want %d", got.MaxLoadgenRPS, tt.wantMaxLoadgenRPS)
+			}
+			if got.AllowEngineSwap != tt.wantAllowEngineSwap {
+				t.Fatalf("AllowEngineSwap = %v, want %v", got.AllowEngineSwap, tt.wantAllowEngineSwap)
+			}
+			if got.AllowHeavyEngines != tt.wantAllowHeavy {
+				t.Fatalf("AllowHeavyEngines = %v, want %v", got.AllowHeavyEngines, tt.wantAllowHeavy)
 			}
 			topo := got.TopologyLimits()
 			if topo.AllowProxyCache != tt.wantAllowProxyCache {

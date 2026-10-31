@@ -48,6 +48,8 @@ type TierLimits struct {
 	AllowProxyCache      bool
 	MaxInstanceSize      string // small/medium/large ceiling for canvas sizing knobs
 	MaxLoadgenRPS        int    // live loadgen requests-per-second ceiling
+	AllowEngineSwap      bool   // non-default job-engine pairs in the picker
+	AllowHeavyEngines    bool   // heavy-weight engines from the catalog
 }
 
 // StartOfUTCMonth returns 00:00:00 UTC on the first day of t's calendar month.
@@ -85,6 +87,8 @@ func GetTierLimits(tier string) TierLimits {
 			AllowProxyCache:      true,
 			MaxInstanceSize:      InstanceSizeLarge,
 			MaxLoadgenRPS:        LoadgenRPSCapInternal,
+			AllowEngineSwap:      true,
+			AllowHeavyEngines:    true,
 		}
 	case TierEngineer:
 		return TierLimits{
@@ -99,6 +103,8 @@ func GetTierLimits(tier string) TierLimits {
 			AllowProxyCache:      true,
 			MaxInstanceSize:      InstanceSizeLarge,
 			MaxLoadgenRPS:        LoadgenRPSCapEngineer,
+			AllowEngineSwap:      true,
+			AllowHeavyEngines:    false,
 		}
 	default:
 		return TierLimits{
@@ -113,6 +119,8 @@ func GetTierLimits(tier string) TierLimits {
 			AllowProxyCache:      true,
 			MaxInstanceSize:      InstanceSizeMedium,
 			MaxLoadgenRPS:        LoadgenRPSCapFree,
+			AllowEngineSwap:      false,
+			AllowHeavyEngines:    false,
 		}
 	}
 }

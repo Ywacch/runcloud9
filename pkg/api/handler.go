@@ -166,6 +166,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /deployments", routeAuth(auth, rl, http.HandlerFunc(h.handleListDeployments)))
 	mux.Handle("GET /deployments/history", routeAuth(auth, rl, http.HandlerFunc(h.handleListDeploymentHistory)))
 	mux.Handle("GET /me", routeAuth(auth, rl, http.HandlerFunc(h.handleGetCurrentUser)))
+	mux.Handle("GET /me/engine-gates", routeAuth(auth, rl, http.HandlerFunc(h.handleEngineGates)))
 	mux.Handle("GET /deployments/{id}", routeAuth(auth, rl, http.HandlerFunc(h.handleGetDeployment)))
 	mux.Handle("DELETE /deployments/{id}", routeAuth(auth, rl, http.HandlerFunc(h.handleDeleteDeployment)))
 	mux.Handle("GET /deployments/{id}/ai-context", routeAuth(auth, rl, http.HandlerFunc(h.handleAIContext)))
