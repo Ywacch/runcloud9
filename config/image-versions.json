@@ -1,10 +1,10 @@
 {
-    "url-shortener": "git-8b7705d",
-    "ecommerce": "git-8b7705d",
-    "social-feed": "git-8b7705d",
-    "ecommerce-worker": "git-8b7705d",
-    "fanout-worker": "git-8b7705d",
-    "caching-proxy": "git-8b7705d",
-    "loadgen": "git-8b7705d",
+    "url-shortener": "git-055138a",
+    "ecommerce": "git-055138a",
+    "social-feed": "git-055138a",
+    "ecommerce-worker": "git-055138a",
+    "fanout-worker": "git-055138a",
+    "caching-proxy": "git-055138a",
+    "loadgen": "git-055138a",
     "ticket-drop": "git-ad8de44"
 }
