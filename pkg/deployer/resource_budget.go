@@ -157,6 +157,22 @@ func QuotaResourceLimits(design DeploymentDesign, userTier string) ResourceBudge
 	return total
 }
 
+// WorkloadPodCount totals main workload pod copies (replicas included) for deployable nodes.
+func WorkloadPodCount(design DeploymentDesign) int64 {
+	var n int64
+	for _, node := range design.Nodes {
+		if !isDeployableNodeType(node.Type) {
+			continue
+		}
+		replicas := replicasForBudget(node)
+		if replicas < 1 {
+			replicas = 1
+		}
+		n += int64(replicas)
+	}
+	return n
+}
+
 // ValidateResourceBudget rejects designs whose canvas+loadgen totals exceed tier caps.
 func ValidateResourceBudget(design DeploymentDesign, userTier string) error {
 	requested := SumDesignResources(design, userTier)
