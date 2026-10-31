@@ -1,0 +1,36 @@
+- job: main_db
+  engine: postgresql
+  fit: natural
+  build: available
+  reason: Primary relational store for lab templates.
+  fidelity: real
+- job: hot_cache
+  engine: redis
+  fit: natural
+  build: available
+  reason: In-memory key cache with TTL.
+  fidelity: real
+- job: timeline
+  engine: redis
+  fit: natural
+  build: available
+  reason: Sorted sets and streams for ordered events.
+  fidelity: real
+- job: timeline
+  engine: postgresql
+  fit: workable
+  build: not_built
+  reason: Append-only tables work but need a dedicated template.
+  fidelity: real
+- job: work_queue
+  engine: rabbitmq
+  fit: natural
+  build: available
+  reason: AMQP queues with ack semantics.
+  fidelity: real
+- job: work_queue
+  engine: redis
+  fit: workable
+  build: not_built
+  reason: Lists and streams can queue work with different failure modes.
+  fidelity: real

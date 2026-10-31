@@ -1,0 +1,8 @@
+job: timeline
+engine: redis
+entries:
+  - id: timeline_survives_cache_restart
+    claim: Timelines survive a cache pod restart
+    chaos: pod_kill
+    status: unverified
+    fidelity: real

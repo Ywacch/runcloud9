@@ -38,6 +38,11 @@ func TestHandleMetaJobs_ETag(t *testing.T) {
 	if len(resp.Jobs) != 4 || len(resp.Engines) != 3 || len(resp.Pairs) != 6 {
 		t.Fatalf("counts: jobs=%d engines=%d pairs=%d", len(resp.Jobs), len(resp.Engines), len(resp.Pairs))
 	}
+	for _, e := range resp.Engines {
+		if e.MinShape.Pods < 1 {
+			t.Fatalf("engine %s missing minShape", e.ID)
+		}
+	}
 	for _, p := range resp.Pairs {
 		if p.Fidelity == "" {
 			t.Fatalf("pair %s/%s missing fidelity", p.Job, p.Engine)
