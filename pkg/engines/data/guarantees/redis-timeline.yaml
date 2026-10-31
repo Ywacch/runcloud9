@@ -1,8 +1,15 @@
 job: timeline
 engine: redis
 entries:
-  - id: timeline_survives_cache_restart
-    claim: Timelines survive a cache pod restart
+  - id: timeline_lost_on_cache_restart
+    claim: Timelines are lost on cache pod restart without AOF
     chaos: pod_kill
+    check: social_timeline_keys
+    status: unverified
+    fidelity: real
+  - id: timeline_evicted_under_memory_pressure
+    claim: Old entries are evicted under memory pressure
+    chaos: cache_flush
+    check: timeline_range_tail_missing
     status: unverified
     fidelity: real
