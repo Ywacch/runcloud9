@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"sync"
 	"time"
 
@@ -80,22 +78,4 @@ func (c *Cache) GetProtected(ctx context.Context, key string, fetchFn func() (st
 		return val, nil
 	}
 	return fetchFn()
-}
-
-// GetTimeline reads precomputed timeline entries from Redis sorted sets.
-func (c *Cache) GetTimeline(ctx context.Context, userID, limit int) ([]FeedItem, error) {
-	key := fmt.Sprintf("timeline:%d", userID)
-	results, err := c.client.ZRevRange(ctx, key, 0, int64(limit-1)).Result()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]FeedItem, 0, len(results))
-	for _, raw := range results {
-		var item FeedItem
-		if err := json.Unmarshal([]byte(raw), &item); err != nil {
-			continue
-		}
-		out = append(out, item)
-	}
-	return out, nil
 }

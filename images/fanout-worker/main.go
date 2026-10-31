@@ -21,6 +21,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/redis/go-redis/v9"
+	"github.com/ywacch/cloud9/pkg/templateapp/jobs/timeline"
 	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 	"github.com/ywacch/cloud9/pkg/templateapp/tracemq"
 )
@@ -125,7 +126,7 @@ func classifyFanoutError(err error) string {
 	}
 }
 
-func fanoutPost(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, msg fanoutMessage, timelineTTL time.Duration) error {
+func fanoutPost(ctx context.Context, pool *pgxpool.Pool, ts timeline.Store, msg fanoutMessage) error {
 	dbStart := time.Now()
 	var username string
 	if err := pool.QueryRow(ctx, `SELECT username FROM users WHERE id = $1`, msg.UserID).Scan(&username); err != nil {
@@ -163,18 +164,24 @@ func fanoutPost(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, msg 
 		"created_at": msg.CreatedAt,
 	})
 	redisStart := time.Now()
-	pipe := rdb.Pipeline()
-	for _, followerID := range followers {
-		appendTimelineWrite(ctx, pipe, followerID, payload, msg.CreatedAt, timelineTTL)
+	userIDs := make([]int64, len(followers))
+	for i, followerID := range followers {
+		userIDs[i] = int64(followerID)
 	}
-	if _, err := pipe.Exec(ctx); err != nil {
-		return fmt.Errorf("redis timeline pipeline: %w", err)
+	item := timeline.Item{
+		PostID:    int64(msg.PostID),
+		AuthorID:  int64(msg.UserID),
+		Payload:   payload,
+		CreatedAt: msg.CreatedAt,
+	}
+	if err := ts.Append(ctx, userIDs, item); err != nil {
+		return fmt.Errorf("redis timeline: %w", err)
 	}
 	trace.LogWorker(ctx, "redis_timeline_write", redisStart)
 	return nil
 }
 
-func processDelivery(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, d amqp.Delivery, timelineTTL time.Duration) uint64 {
+func processDelivery(ctx context.Context, pool *pgxpool.Pool, ts timeline.Store, d amqp.Delivery) uint64 {
 	start := time.Now()
 	defer func() {
 		workerProcessingDuration.Observe(time.Since(start).Seconds())
@@ -189,7 +196,7 @@ func processDelivery(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client,
 		return d.DeliveryTag
 	}
 
-	if err := fanoutPost(ctx, pool, rdb, msg, timelineTTL); err != nil {
+	if err := fanoutPost(ctx, pool, ts, msg); err != nil {
 		reason := classifyFanoutError(err)
 		workerErrorsTotal.WithLabelValues(reason).Inc()
 		slog.Error("fanout failed", "post_id", msg.PostID, "author_id", msg.UserID, "reason", reason, "error", err, "request_id", trace.RequestID(ctx))
@@ -346,6 +353,15 @@ func main() {
 	}
 	defer rdb.Close()
 
+	timelineStore, err := timeline.OpenRedis(rdb, os.Getenv("TIMELINE_ENGINE"), timeline.RedisOptions{
+		MaxEntries: timeline.DefaultMaxEntries,
+		TTL:        timelineTTL,
+	}, prometheus.DefaultRegisterer)
+	if err != nil {
+		slog.Error("timeline store init failed", "error", err)
+		os.Exit(1)
+	}
+
 	ch, err := conn.Channel()
 	if err != nil {
 		slog.Error("mq channel failed", "error", err)
@@ -409,7 +425,7 @@ func main() {
 					if !ok {
 						return
 					}
-					tag := processDelivery(ctx, pool, rdb, d, timelineTTL)
+					tag := processDelivery(ctx, pool, timelineStore, d)
 					select {
 					case ackCh <- tag:
 					case <-ctx.Done():

@@ -10,11 +10,16 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
+	"github.com/ywacch/cloud9/pkg/templateapp/jobs/timeline"
 )
 
 func testFeedCacheStats() (*feedCacheStats, *atomic.Int64, *atomic.Int64) {
 	var hits, misses atomic.Int64
 	return &feedCacheStats{hits: &hits, misses: &misses}, &hits, &misses
+}
+
+func testRedisTimelineStore(rdb *redis.Client) timeline.Store {
+	return timeline.NewRedis(rdb, timeline.RedisOptions{MaxEntries: timeline.DefaultMaxEntries})
 }
 
 func TestFetchFeedItems_noCachePull(t *testing.T) {
@@ -48,12 +53,12 @@ func TestFetchFeedItems_cacheEmptyReturnsEmptyPushRedis(t *testing.T) {
 
 	rdb := redis.NewClient(&redis.Options{Addr: srv.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	cache := newCache(rdb, false)
+	ts := testRedisTimelineStore(rdb)
 
 	ctx := context.Background()
 	stats, hits, misses := testFeedCacheStats()
 	pullHits := 0
-	items, mode, err := fetchFeedItems(ctx, cache, 20, 7, stats, func(c context.Context, userID, limit int) ([]FeedItem, error) {
+	items, mode, err := fetchFeedItems(ctx, ts, 20, 7, stats, func(c context.Context, userID, limit int) ([]FeedItem, error) {
 		pullHits++
 		return []FeedItem{{PostID: 99, AuthorID: 3, Username: "x", Content: "db", CreatedAt: time.Unix(2, 0).UTC()}}, nil
 	})
@@ -82,13 +87,13 @@ func TestFetchFeedItems_redisErrorPropagates(t *testing.T) {
 	}
 	rdb := redis.NewClient(&redis.Options{Addr: srv.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	cache := newCache(rdb, false)
+	ts := testRedisTimelineStore(rdb)
 	srv.Close()
 
 	ctx := context.Background()
 	pullHits := 0
 	stats, hits, misses := testFeedCacheStats()
-	_, mode, err := fetchFeedItems(ctx, cache, 10, 1, stats, func(c context.Context, userID, limit int) ([]FeedItem, error) {
+	_, mode, err := fetchFeedItems(ctx, ts, 10, 1, stats, func(c context.Context, userID, limit int) ([]FeedItem, error) {
 		pullHits++
 		return nil, nil
 	})
@@ -116,8 +121,7 @@ func TestFetchFeedItems_cacheHitPushRedis(t *testing.T) {
 
 	rdb := redis.NewClient(&redis.Options{Addr: srv.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	cache := newCache(rdb, false)
-
+	ts := testRedisTimelineStore(rdb)
 	wantItem := FeedItem{
 		PostID:    10,
 		AuthorID:  5,
@@ -141,7 +145,7 @@ func TestFetchFeedItems_cacheHitPushRedis(t *testing.T) {
 
 	stats, hits, misses := testFeedCacheStats()
 	pullHits := 0
-	items, mode, err := fetchFeedItems(ctx, cache, 20, userID, stats, func(c context.Context, uid, limit int) ([]FeedItem, error) {
+	items, mode, err := fetchFeedItems(ctx, ts, 20, userID, stats, func(c context.Context, uid, limit int) ([]FeedItem, error) {
 		pullHits++
 		return nil, nil
 	})
