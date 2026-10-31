@@ -212,6 +212,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /meta/topology-rules", routePublic(rl, http.HandlerFunc(h.handleGetTopologyRules)))
 	mux.Handle("GET /meta/rules", routePublic(rl, http.HandlerFunc(h.handleGetRules)))
 	mux.Handle("GET /meta/jobs", routePublic(rl, http.HandlerFunc(h.handleGetMetaJobs)))
+	mux.Handle("POST /designs/plan", routeAuth(auth, rl, http.HandlerFunc(h.handleDesignPlan)))
 	mux.Handle("GET /meta/inferred-mechanism-promotions", routePublic(rl, http.HandlerFunc(h.handleListInferredMechanismPromotions)))
 }
 
