@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/ywacch/cloud9/pkg/templateapp/jobs/timeline"
 	"github.com/ywacch/cloud9/pkg/templateapp/postgres"
 	"github.com/ywacch/cloud9/pkg/templateapp/readrouter"
 	"github.com/ywacch/cloud9/pkg/templateapp/trace"
@@ -174,6 +175,9 @@ func (db *DB) InitSchema(ctx context.Context) error {
 			CREATE INDEX IF NOT EXISTS idx_posts_thread_root ON posts (thread_root_id);
 		`); err != nil {
 			return fmt.Errorf("migrate posts thread columns: %w", err)
+		}
+		if err := timeline.InitPostgresSchema(ctx, db.pool); err != nil {
+			return err
 		}
 		return nil
 	})

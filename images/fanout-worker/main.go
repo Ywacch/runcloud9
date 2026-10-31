@@ -155,7 +155,7 @@ func fanoutPost(ctx context.Context, pool *pgxpool.Pool, ts timeline.Store, msg 
 	trace.LogWorker(ctx, "db_follower_lookup", dbStart)
 
 	workerFanoutSize.Observe(float64(len(followers)))
-	workerWriteTotal.WithLabelValues("redis").Add(float64(len(followers)))
+	workerWriteTotal.WithLabelValues(ts.Engine()).Add(float64(len(followers)))
 	payload, _ := json.Marshal(map[string]any{
 		"post_id":    msg.PostID,
 		"author_id":  msg.UserID,
@@ -223,9 +223,13 @@ func healthHandler(pool *pgxpool.Pool, conn *amqp.Connection, rdb *redis.Client)
 		if conn == nil || conn.IsClosed() {
 			mq = "error"
 		}
-		cache := "ok"
-		if rdb == nil || rdb.Ping(ctx).Err() != nil {
-			cache = "error"
+		cache := "disabled"
+		if rdb != nil {
+			if rdb.Ping(ctx).Err() != nil {
+				cache = "error"
+			} else {
+				cache = "ok"
+			}
 		}
 		status := http.StatusOK
 		if db != "ok" || mq != "ok" || cache != "ok" {
@@ -266,12 +270,9 @@ func main() {
 	slog.Info("fanout-worker startup begin")
 	mqHost := requiredEnv("MQ_HOST", "MQ_HOST required for worker")
 	mqPort := envOrDefault("MQ_PORT", "5672")
-	cacheHost := requiredEnv("CACHE_HOST", "CACHE_HOST required for worker")
-	cachePort := envOrDefault("CACHE_PORT", "6379")
-	// CACHE_TTL comes from the cache node's design config; 0 (or absent)
-	// leaves timelines persistent, matching the app-server's fan-out path.
+	timelineEngine := strings.ToLower(strings.TrimSpace(os.Getenv("TIMELINE_ENGINE")))
 	timelineTTL := time.Duration(parseCacheTTLSeconds(os.Getenv("CACHE_TTL"), 0)) * time.Second
-	slog.Info("startup config resolved", "mqHost", mqHost, "mqPort", mqPort, "timelineTTL", timelineTTL)
+	slog.Info("startup config resolved", "mqHost", mqHost, "mqPort", mqPort, "timelineEngine", timelineEngine, "timelineTTL", timelineTTL)
 
 	// DB connection with retry so worker doesn't crash-loop while dependencies boot.
 	var pool *pgxpool.Pool
@@ -327,39 +328,64 @@ func main() {
 	}
 	defer conn.Close()
 
-	rdb := redis.NewClient(&redis.Options{
-		Addr: fmt.Sprintf("%s:%s", cacheHost, cachePort),
-	})
-	for attempt := 1; ; attempt++ {
-		err := rdb.Ping(ctx).Err()
-		if err == nil {
-			slog.Info("redis connected", "attempt", attempt)
-			break
+	var rdb *redis.Client
+	var timelineStore timeline.Store
+	switch timelineEngine {
+	case "", "redis":
+		cacheHost := requiredEnv("CACHE_HOST", "CACHE_HOST required for redis timeline worker")
+		cachePort := envOrDefault("CACHE_PORT", "6379")
+		rdb = redis.NewClient(&redis.Options{
+			Addr: fmt.Sprintf("%s:%s", cacheHost, cachePort),
+		})
+		for attempt := 1; ; attempt++ {
+			err := rdb.Ping(ctx).Err()
+			if err == nil {
+				slog.Info("redis connected", "attempt", attempt)
+				break
+			}
+			if attempt >= 30 {
+				slog.Error("redis ping failed after retries", "error", err, "attempts", attempt)
+				os.Exit(1)
+			}
+			delay := time.Duration(attempt) * time.Second
+			if delay > 10*time.Second {
+				delay = 10 * time.Second
+			}
+			slog.Warn("redis ping failed, retrying", "error", err, "attempt", attempt, "retryIn", delay)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				os.Exit(0)
+			}
 		}
-		if attempt >= 30 {
-			slog.Error("redis ping failed after retries", "error", err, "attempts", attempt)
+		var err error
+		timelineStore, err = timeline.Open("", prometheus.DefaultRegisterer, rdb, timeline.RedisOptions{
+			MaxEntries: timeline.DefaultMaxEntries,
+			TTL:        timelineTTL,
+		}, nil, nil, timeline.PostgresOptions{})
+		if err != nil {
+			slog.Error("timeline store init failed", "error", err)
 			os.Exit(1)
 		}
-		delay := time.Duration(attempt) * time.Second
-		if delay > 10*time.Second {
-			delay = 10 * time.Second
+	case "postgresql", "postgres":
+		if err := timeline.InitPostgresSchema(ctx, pool); err != nil {
+			slog.Error("timeline postgres schema failed", "error", err)
+			os.Exit(1)
 		}
-		slog.Warn("redis ping failed, retrying", "error", err, "attempt", attempt, "retryIn", delay)
-		select {
-		case <-time.After(delay):
-		case <-ctx.Done():
-			os.Exit(0)
+		var err error
+		timelineStore, err = timeline.Open("postgresql", prometheus.DefaultRegisterer, nil, timeline.RedisOptions{}, pool, pool, timeline.PostgresOptions{
+			MaxEntries: timeline.DefaultMaxEntries,
+		})
+		if err != nil {
+			slog.Error("timeline store init failed", "error", err)
+			os.Exit(1)
 		}
-	}
-	defer rdb.Close()
-
-	timelineStore, err := timeline.OpenRedis(rdb, os.Getenv("TIMELINE_ENGINE"), timeline.RedisOptions{
-		MaxEntries: timeline.DefaultMaxEntries,
-		TTL:        timelineTTL,
-	}, prometheus.DefaultRegisterer)
-	if err != nil {
-		slog.Error("timeline store init failed", "error", err)
+	default:
+		slog.Error("unsupported TIMELINE_ENGINE", "value", timelineEngine)
 		os.Exit(1)
+	}
+	if rdb != nil {
+		defer rdb.Close()
 	}
 
 	ch, err := conn.Channel()
