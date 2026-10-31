@@ -807,6 +807,10 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	c.debugCompare("db", "rps", pgTxnRate+pgRollbackRate, dbQPS, "pg_stat_database_xact_commit+rollback", "app db_query_duration_count")
 	c.debugCompare("db", "cpu", dbCPURes.Usage, 0, dbCPURes.Source, "")
 
+	if templateHasTimelineJob(templates.GetTemplate(template)) {
+		c.collectPostgresTimelineTableStats(ctx, ns, &cmDB)
+	}
+
 	dm.Components["db"] = cmDB
 
 	// Cache tier: redis + cache-proxy (separate queries so exporter sidecars are not summed).
@@ -1254,6 +1258,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 
 	dm.TemplateMetrics = c.collectTemplateMetrics(ctx, nsSel, template)
 	c.augmentTemplateMetrics(dm, template)
+	dm.Timeline = c.collectTimelineOps(ctx, nsSel, template)
 
 	tmpl := templates.GetTemplate(template)
 	runtimeEvents := c.attachRuntimeHealth(ctx, namespace, dm)

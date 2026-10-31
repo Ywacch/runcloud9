@@ -27,6 +27,20 @@ func TestPostgresExporterQueriesEnabled(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "timeline on db postgresql",
+			cfg: DeployConfig{
+				Design: DeploymentDesign{
+					Template: "social-feed",
+					Nodes: []DeploymentNode{
+						{ID: "db-1", Type: "db", Config: map[string]any{"engine": "postgresql"}},
+					},
+					JobBindings: map[string]string{"timeline": "db-1"},
+				},
+				Node: DeploymentNode{Type: "db", ID: "db-1"},
+			},
+			want: true,
+		},
+		{
 			name: "readReplicas zero",
 			cfg: DeployConfig{
 				Node: DeploymentNode{
@@ -80,6 +94,10 @@ func TestPostgresExporterQueriesConfigMap_content(t *testing.T) {
 		"master: true",
 		"wal_lsn:",
 		"pg_current_wal_lsn()",
+		"c9_timeline:",
+		"relation_bytes",
+		"dead_tuples",
+		"relname = 'timelines'",
 	} {
 		if !strings.Contains(primaryYAML, want) {
 			t.Fatalf("primary queries yaml missing %q:\n%s", want, primaryYAML)

@@ -3,6 +3,8 @@ package deployer
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/ywacch/cloud9/pkg/templates"
 )
 
 const (
@@ -44,6 +46,23 @@ wal_lsn:
     - bytes:
         usage: GAUGE
         description: "Primary WAL insert LSN as bytes from 0/0"
+c9_timeline:
+  master: true
+  query: |
+    SELECT
+      pg_total_relation_size(c.oid)::float8 AS relation_bytes,
+      s.n_dead_tup::float8 AS dead_tuples
+    FROM pg_class c
+    JOIN pg_stat_user_tables s ON s.relid = c.oid
+    WHERE c.relname = 'timelines'
+      AND c.relkind = 'r'
+  metrics:
+    - relation_bytes:
+        usage: GAUGE
+        description: "Byte size of the timelines fan-out table"
+    - dead_tuples:
+        usage: GAUGE
+        description: "Dead row estimate for timelines (vacuum pressure)"
 `
 
 // postgresExporterReplicaQueriesYAML is mounted on replica postgres-exporter sidecars only.
@@ -62,7 +81,20 @@ func postgresExporterQueriesEnabled(cfg DeployConfig) bool {
 	if cfg.Node.Type != "db" {
 		return false
 	}
-	return dbReadReplicaCount(cfg) >= 1
+	if dbReadReplicaCount(cfg) >= 1 {
+		return true
+	}
+	return timelineJobOnNode(cfg, cfg.Node.ID, "postgresql")
+}
+
+func timelineJobOnNode(cfg DeployConfig, nodeID, engine string) bool {
+	tmpl := templates.GetTemplate(cfg.Design.Template)
+	for _, b := range ResolveJobBindings(cfg.Design, tmpl) {
+		if b.Job == "timeline" && b.NodeID == nodeID && b.Engine == engine {
+			return true
+		}
+	}
+	return false
 }
 
 func postgresExporterQueriesConfigMap(namespace string) *corev1.ConfigMap {

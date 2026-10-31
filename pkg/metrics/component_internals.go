@@ -139,6 +139,8 @@ func componentSignals(cm ComponentMetrics) map[string]any {
 	setFloat(m, "expirationsPerSec", cm.ExpirationsPerSec)
 	setFloat(m, "evictionsLast9m", cm.EvictionsLast9m)
 	setFloat(m, "expirationsLast9m", cm.ExpirationsLast9m)
+	setFloatPtr(m, "timelineRelationBytes", cm.TimelineRelationBytes)
+	setFloatPtr(m, "timelineDeadTuples", cm.TimelineDeadTuples)
 	setFloat(m, "activeConnections", cm.ActiveConnections)
 	setFloat(m, "queueDepth", cm.QueueDepth)
 	setFloat(m, "produceRate", cm.ProduceRate)
@@ -288,6 +290,12 @@ func podSignals(pod PodMetrics) map[string]any {
 func setFloat(m map[string]any, key string, v float64) {
 	if v != 0 {
 		m[key] = v
+	}
+}
+
+func setFloatPtr(m map[string]any, key string, v *float64) {
+	if v != nil {
+		m[key] = *v
 	}
 }
 
