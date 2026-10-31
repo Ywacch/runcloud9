@@ -6,12 +6,13 @@ import (
 )
 
 type DeploymentDesign struct {
-	Version        string           `json:"version"`
-	Template       string           `json:"template"`
-	Archetype      string           `json:"archetype"`
-	Nodes          []DeploymentNode `json:"nodes"`
-	Connections    []DeploymentConn `json:"connections"`
-	SessionMinutes *int             `json:"sessionMinutes,omitempty"`
+	Version        string            `json:"version"`
+	Template       string            `json:"template"`
+	Archetype      string            `json:"archetype"`
+	Nodes          []DeploymentNode  `json:"nodes"`
+	Connections    []DeploymentConn  `json:"connections"`
+	SessionMinutes *int              `json:"sessionMinutes,omitempty"`
+	JobBindings    map[string]string `json:"jobBindings,omitempty"` // job id -> node id
 }
 
 type DeploymentNode struct {
