@@ -19,8 +19,8 @@
 - job: timeline
   engine: postgresql
   fit: workable
-  build: not_built
-  reason: Append-only tables work but need a dedicated template.
+  build: available
+  reason: Append-only timelines table on the primary database.
   fidelity: real
 - job: work_queue
   engine: rabbitmq

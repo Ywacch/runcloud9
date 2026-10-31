@@ -109,7 +109,7 @@ jobs:
     defaultNodeType: db
   - id: timeline
     required: true
-    allowedEngines: [redis]
+    allowedEngines: [redis, postgresql]
     defaultNodeType: cache
   - id: work_queue
     required: false

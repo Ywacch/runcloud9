@@ -715,10 +715,10 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 				slog.Warn("redis ping failed; continuing with cache disabled", "error", err)
 			} else {
 				s.cache = newCache(client, cfg.Stampede)
-				ts, err := timeline.OpenRedis(client, os.Getenv("TIMELINE_ENGINE"), timeline.RedisOptions{
+				ts, err := timeline.Open(os.Getenv("TIMELINE_ENGINE"), prometheus.DefaultRegisterer, client, timeline.RedisOptions{
 					MaxEntries: timeline.DefaultMaxEntries,
 					TTL:        cfg.CacheTTL,
-				}, prometheus.DefaultRegisterer)
+				}, pool, nil, timeline.PostgresOptions{MaxEntries: timeline.DefaultMaxEntries})
 				if err != nil {
 					pool.Close()
 					return nil, fmt.Errorf("timeline store: %w", err)
@@ -727,6 +727,25 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 				go runTimelineKeyReporter(ctx, s.cache.redisClient())
 				slog.Info("cache mode: redis", "host", cfg.CacheHost, "port", cfg.CachePort)
 			}
+		}
+	}
+
+	if s.timeline == nil {
+		engine := strings.ToLower(strings.TrimSpace(os.Getenv("TIMELINE_ENGINE")))
+		if engine == "postgresql" || engine == "postgres" {
+			var reader timeline.PGReader = pool
+			if router != nil {
+				reader = newTimelineRouterReader(router)
+			}
+			ts, err := timeline.Open("postgresql", prometheus.DefaultRegisterer, nil, timeline.RedisOptions{}, pool, reader, timeline.PostgresOptions{
+				MaxEntries: timeline.DefaultMaxEntries,
+			})
+			if err != nil {
+				pool.Close()
+				return nil, err
+			}
+			s.timeline = ts
+			slog.Info("timeline engine: postgresql")
 		}
 	}
 
