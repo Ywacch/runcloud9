@@ -69,8 +69,14 @@ func (s *PartitionScenario) Apply(ctx context.Context, namespace string, design 
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("chaos: create partition policy: %w", err)
 	}
-	if err == nil {
+	created := err == nil
+	if created {
 		slog.Info("chaos partition applied", "namespace", namespace, "scenario", s.Scenario, "target", targetComponent)
+	}
+	if s.Scenario == scenarioSplitAppStore && created {
+		if err := deleteRunningPodsForAppLabel(ctx, s.Client, namespace, appServerAppLabel); err != nil {
+			return fmt.Errorf("chaos: split_app_store restart app-server pods: %w", err)
+		}
 	}
 	return nil
 }
@@ -113,7 +119,7 @@ func (s *PartitionScenario) Description(targetComponent string) string {
 	case scenarioSplitPrimaryReplica:
 		return fmt.Sprintf("Split %s primary from replicas", targetComponent)
 	case scenarioSplitAppStore:
-		return fmt.Sprintf("Split app from %s", targetComponent)
+		return splitAppStoreDescription(targetComponent)
 	default:
 		return fmt.Sprintf("Partition %s", targetComponent)
 	}
@@ -170,6 +176,17 @@ func buildSplitPrimaryReplicaInput(namespace, targetComponent string, design dep
 		Port:            postgresPartitionPort,
 		Exclude:         PartitionPeerExclusion{AppLabel: postgresReplicaAppLabel},
 	}, nil
+}
+
+func splitAppStoreDescription(targetComponent string) string {
+	switch targetComponent {
+	case "cache":
+		return "Block app-server from cache (workers still reach cache); restart app pods so pools reconnect"
+	case "db":
+		return "Block app-server from the db primary (workers and read replicas unaffected); restart app pods so pools reconnect"
+	default:
+		return fmt.Sprintf("Block app-server from %s", targetComponent)
+	}
 }
 
 func buildSplitAppStoreInput(namespace, targetComponent string, design deployer.DeploymentDesign, expiresAt time.Time) (PartitionPolicyInput, error) {

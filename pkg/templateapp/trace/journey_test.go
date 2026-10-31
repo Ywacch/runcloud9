@@ -28,7 +28,8 @@ func TestStore_DropsOldestAfterCap(t *testing.T) {
 }
 
 func TestFinishJourney_RecordsSpans(t *testing.T) {
-	t.Parallel()
+	prev := defaultStore
+	t.Cleanup(func() { defaultStore = prev })
 	s := NewStore()
 	defaultStore = s
 
@@ -51,8 +52,6 @@ func TestFinishJourney_RecordsSpans(t *testing.T) {
 	if len(samples[0].Spans) != 1 || samples[0].Spans[0].Component != "cache" {
 		t.Fatalf("spans: %+v", samples[0].Spans)
 	}
-
-	defaultStore = NewStore()
 }
 
 func TestSamplesHandler_JSON(t *testing.T) {
@@ -70,7 +69,10 @@ func TestSamplesHandler_JSON(t *testing.T) {
 }
 
 func TestBindJourney_skipsWithoutSampleHeader(t *testing.T) {
-	t.Parallel()
+	prev := defaultStore
+	t.Cleanup(func() { defaultStore = prev })
+	defaultStore = NewStore()
+
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Request-ID", "rid")
 	req = ContextFromRequest(req)

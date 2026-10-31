@@ -192,7 +192,15 @@ func TestPartitionScenario_unsupportedEngineError(t *testing.T) {
 
 func TestPartitionScenario_splitAppStore_cache(t *testing.T) {
 	ns := "cloud9-app-cache"
-	client := fake.NewClientset()
+	appPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "app-server-abc",
+			Namespace: ns,
+			Labels:    map[string]string{"app": appServerAppLabel},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	client := fake.NewClientset(appPod)
 	design := cacheDesign()
 	scenario := &PartitionScenario{Client: client, Scenario: scenarioSplitAppStore}
 
@@ -205,6 +213,50 @@ func TestPartitionScenario_splitAppStore_cache(t *testing.T) {
 	}
 	if policy.Spec.PodSelector.MatchLabels["app"] != "redis" {
 		t.Fatalf("dest app: %v", policy.Spec.PodSelector.MatchLabels)
+	}
+	_, err = client.CoreV1().Pods(ns).Get(context.Background(), appPod.Name, metav1.GetOptions{})
+	if err == nil {
+		t.Fatal("expected app-server pod deleted after split_app_store Apply")
+	}
+}
+
+func TestSplitAppStoreDescription(t *testing.T) {
+	t.Parallel()
+	s := &PartitionScenario{Scenario: scenarioSplitAppStore}
+	tests := []struct {
+		target string
+		want   string
+	}{
+		{
+			target: "cache",
+			want:   "Block app-server from cache (workers still reach cache); restart app pods so pools reconnect",
+		},
+		{
+			target: "db",
+			want:   "Block app-server from the db primary (workers and read replicas unaffected); restart app pods so pools reconnect",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.target, func(t *testing.T) {
+			t.Parallel()
+			if got := s.Description(tc.target); got != tc.want {
+				t.Fatalf("Description(%q) = %q want %q", tc.target, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildSplitAppStoreInput_policyPeers(t *testing.T) {
+	t.Parallel()
+	in, err := buildSplitAppStoreInput("ns", "cache", cacheDesign(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.DestAppLabel != "redis" {
+		t.Fatalf("dest: %q", in.DestAppLabel)
+	}
+	if in.Exclude.AppLabel != appServerAppLabel {
+		t.Fatalf("exclude app: %q", in.Exclude.AppLabel)
 	}
 }
 
