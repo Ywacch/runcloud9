@@ -1,0 +1,645 @@
+[
+  {
+    "case": "ecommerce/preset",
+    "nodeId": "app-1",
+    "env": {
+      "CACHE_HOST": "cache",
+      "CACHE_PORT": "6379",
+      "CACHE_STRATEGY": "cache-aside",
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "HOT_CACHE_ENGINE": "redis",
+      "HOT_CACHE_HOST": "cache",
+      "HOT_CACHE_PORT": "6379",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432",
+      "MQ_HOST": "mq",
+      "MQ_PORT": "5672",
+      "STAMPEDE_PROTECTION": "false",
+      "WORK_QUEUE_ENGINE": "rabbitmq",
+      "WORK_QUEUE_HOST": "mq",
+      "WORK_QUEUE_PORT": "5672"
+    }
+  },
+  {
+    "case": "ecommerce/preset",
+    "nodeId": "cache-1",
+    "env": {}
+  },
+  {
+    "case": "ecommerce/preset",
+    "nodeId": "db-1",
+    "env": {
+      "DB_ENGINE": "postgresql",
+      "DB_REPLICATION": "async",
+      "DB_SYNC_COMMIT_LEVEL": "on"
+    }
+  },
+  {
+    "case": "ecommerce/preset",
+    "nodeId": "mq-1",
+    "env": {}
+  },
+  {
+    "case": "ecommerce/preset",
+    "nodeId": "worker-1",
+    "env": {
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432",
+      "MQ_HOST": "mq",
+      "MQ_PORT": "5672",
+      "WORK_QUEUE_ENGINE": "rabbitmq",
+      "WORK_QUEUE_HOST": "mq",
+      "WORK_QUEUE_PORT": "5672"
+    }
+  },
+  {
+    "case": "ecommerce/presetLite",
+    "nodeId": "app-1",
+    "env": {
+      "CACHE_HOST": "cache",
+      "CACHE_PORT": "6379",
+      "CACHE_STRATEGY": "cache-aside",
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "HOT_CACHE_ENGINE": "redis",
+      "HOT_CACHE_HOST": "cache",
+      "HOT_CACHE_PORT": "6379",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432",
+      "STAMPEDE_PROTECTION": "false"
+    }
+  },
+  {
+    "case": "ecommerce/presetLite",
+    "nodeId": "cache-1",
+    "env": {}
+  },
+  {
+    "case": "ecommerce/presetLite",
+    "nodeId": "db-1",
+    "env": {
+      "DB_ENGINE": "postgresql",
+      "DB_REPLICATION": "async",
+      "DB_SYNC_COMMIT_LEVEL": "on"
+    }
+  },
+  {
+    "case": "ecommerce/variation/app-db",
+    "nodeId": "app-1",
+    "env": {
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432"
+    }
+  },
+  {
+    "case": "ecommerce/variation/app-db",
+    "nodeId": "db-1",
+    "env": {
+      "DB_ENGINE": "postgresql",
+      "DB_REPLICATION": "async",
+      "DB_SYNC_COMMIT_LEVEL": "on"
+    }
+  },
+  {
+    "case": "ecommerce/variation/app-db-cache",
+    "nodeId": "app-1",
+    "env": {
+      "CACHE_HOST": "cache",
+      "CACHE_PORT": "6379",
+      "CACHE_STRATEGY": "cache-aside",
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "HOT_CACHE_ENGINE": "redis",
+      "HOT_CACHE_HOST": "cache",
+      "HOT_CACHE_PORT": "6379",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432",
+      "STAMPEDE_PROTECTION": "false"
+    }
+  },
+  {
+    "case": "ecommerce/variation/app-db-cache",
+    "nodeId": "cache-1",
+    "env": {}
+  },
+  {
+    "case": "ecommerce/variation/app-db-cache",
+    "nodeId": "db-1",
+    "env": {
+      "DB_ENGINE": "postgresql",
+      "DB_REPLICATION": "async",
+      "DB_SYNC_COMMIT_LEVEL": "on"
+    }
+  },
+  {
+    "case": "ecommerce/variation/app-db-cache-mq-worker",
+    "nodeId": "app-1",
+    "env": {
+      "CACHE_HOST": "cache",
+      "CACHE_PORT": "6379",
+      "CACHE_STRATEGY": "cache-aside",
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "HOT_CACHE_ENGINE": "redis",
+      "HOT_CACHE_HOST": "cache",
+      "HOT_CACHE_PORT": "6379",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432",
+      "MQ_HOST": "mq",
+      "MQ_PORT": "5672",
+      "STAMPEDE_PROTECTION": "false",
+      "WORK_QUEUE_ENGINE": "rabbitmq",
+      "WORK_QUEUE_HOST": "mq",
+      "WORK_QUEUE_PORT": "5672"
+    }
+  },
+  {
+    "case": "ecommerce/variation/app-db-cache-mq-worker",
+    "nodeId": "cache-1",
+    "env": {}
+  },
+  {
+    "case": "ecommerce/variation/app-db-cache-mq-worker",
+    "nodeId": "db-1",
+    "env": {
+      "DB_ENGINE": "postgresql",
+      "DB_REPLICATION": "async",
+      "DB_SYNC_COMMIT_LEVEL": "on"
+    }
+  },
+  {
+    "case": "ecommerce/variation/app-db-cache-mq-worker",
+    "nodeId": "mq-1",
+    "env": {}
+  },
+  {
+    "case": "ecommerce/variation/app-db-cache-mq-worker",
+    "nodeId": "worker-1",
+    "env": {
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432",
+      "MQ_HOST": "mq",
+      "MQ_PORT": "5672",
+      "WORK_QUEUE_ENGINE": "rabbitmq",
+      "WORK_QUEUE_HOST": "mq",
+      "WORK_QUEUE_PORT": "5672"
+    }
+  },
+  {
+    "case": "social-feed-pull/preset",
+    "nodeId": "app-1",
+    "env": {
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432"
+    }
+  },
+  {
+    "case": "social-feed-pull/preset",
+    "nodeId": "db-1",
+    "env": {
+      "DB_ENGINE": "postgresql",
+      "DB_REPLICATION": "async",
+      "DB_SYNC_COMMIT_LEVEL": "on"
+    }
+  },
+  {
+    "case": "social-feed-pull/variation/app-db",
+    "nodeId": "app-1",
+    "env": {
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432"
+    }
+  },
+  {
+    "case": "social-feed-pull/variation/app-db",
+    "nodeId": "db-1",
+    "env": {
+      "DB_ENGINE": "postgresql",
+      "DB_REPLICATION": "async",
+      "DB_SYNC_COMMIT_LEVEL": "on"
+    }
+  },
+  {
+    "case": "social-feed/preset",
+    "nodeId": "app-1",
+    "env": {
+      "CACHE_HOST": "cache",
+      "CACHE_PORT": "6379",
+      "CACHE_STRATEGY": "timeline-store",
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432",
+      "MQ_HOST": "mq",
+      "MQ_PORT": "5672",
+      "STAMPEDE_PROTECTION": "false",
+      "TIMELINE_ENGINE": "redis",
+      "TIMELINE_HOST": "cache",
+      "TIMELINE_PORT": "6379",
+      "WORK_QUEUE_ENGINE": "rabbitmq",
+      "WORK_QUEUE_HOST": "mq",
+      "WORK_QUEUE_PORT": "5672"
+    }
+  },
+  {
+    "case": "social-feed/preset",
+    "nodeId": "cache-1",
+    "env": {}
+  },
+  {
+    "case": "social-feed/preset",
+    "nodeId": "db-1",
+    "env": {
+      "DB_ENGINE": "postgresql",
+      "DB_REPLICATION": "async",
+      "DB_SYNC_COMMIT_LEVEL": "on"
+    }
+  },
+  {
+    "case": "social-feed/preset",
+    "nodeId": "mq-1",
+    "env": {}
+  },
+  {
+    "case": "social-feed/preset",
+    "nodeId": "worker-1",
+    "env": {
+      "CACHE_HOST": "cache",
+      "CACHE_PORT": "6379",
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432",
+      "MQ_HOST": "mq",
+      "MQ_PORT": "5672",
+      "TIMELINE_ENGINE": "redis",
+      "TIMELINE_HOST": "cache",
+      "TIMELINE_PORT": "6379",
+      "WORKER_CONCURRENCY": "1",
+      "WORKER_PREFETCH": "10",
+      "WORK_QUEUE_ENGINE": "rabbitmq",
+      "WORK_QUEUE_HOST": "mq",
+      "WORK_QUEUE_PORT": "5672"
+    }
+  },
+  {
+    "case": "social-feed/presetLite",
+    "nodeId": "app-1",
+    "env": {
+      "CACHE_HOST": "cache",
+      "CACHE_PORT": "6379",
+      "CACHE_STRATEGY": "timeline-store",
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432",
+      "STAMPEDE_PROTECTION": "false",
+      "TIMELINE_ENGINE": "redis",
+      "TIMELINE_HOST": "cache",
+      "TIMELINE_PORT": "6379"
+    }
+  },
+  {
+    "case": "social-feed/presetLite",
+    "nodeId": "cache-1",
+    "env": {}
+  },
+  {
+    "case": "social-feed/presetLite",
+    "nodeId": "db-1",
+    "env": {
+      "DB_ENGINE": "postgresql",
+      "DB_REPLICATION": "async",
+      "DB_SYNC_COMMIT_LEVEL": "on"
+    }
+  },
+  {
+    "case": "social-feed/variation/timeline-async",
+    "nodeId": "app-1",
+    "env": {
+      "CACHE_HOST": "cache",
+      "CACHE_PORT": "6379",
+      "CACHE_STRATEGY": "timeline-store",
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432",
+      "MQ_HOST": "mq",
+      "MQ_PORT": "5672",
+      "STAMPEDE_PROTECTION": "false",
+      "TIMELINE_ENGINE": "redis",
+      "TIMELINE_HOST": "cache",
+      "TIMELINE_PORT": "6379",
+      "WORK_QUEUE_ENGINE": "rabbitmq",
+      "WORK_QUEUE_HOST": "mq",
+      "WORK_QUEUE_PORT": "5672"
+    }
+  },
+  {
+    "case": "social-feed/variation/timeline-async",
+    "nodeId": "cache-1",
+    "env": {}
+  },
+  {
+    "case": "social-feed/variation/timeline-async",
+    "nodeId": "db-1",
+    "env": {
+      "DB_ENGINE": "postgresql",
+      "DB_REPLICATION": "async",
+      "DB_SYNC_COMMIT_LEVEL": "on"
+    }
+  },
+  {
+    "case": "social-feed/variation/timeline-async",
+    "nodeId": "mq-1",
+    "env": {}
+  },
+  {
+    "case": "social-feed/variation/timeline-async",
+    "nodeId": "worker-1",
+    "env": {
+      "CACHE_HOST": "cache",
+      "CACHE_PORT": "6379",
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432",
+      "MQ_HOST": "mq",
+      "MQ_PORT": "5672",
+      "TIMELINE_ENGINE": "redis",
+      "TIMELINE_HOST": "cache",
+      "TIMELINE_PORT": "6379",
+      "WORKER_CONCURRENCY": "1",
+      "WORKER_PREFETCH": "10",
+      "WORK_QUEUE_ENGINE": "rabbitmq",
+      "WORK_QUEUE_HOST": "mq",
+      "WORK_QUEUE_PORT": "5672"
+    }
+  },
+  {
+    "case": "social-feed/variation/timeline-sync",
+    "nodeId": "app-1",
+    "env": {
+      "CACHE_HOST": "cache",
+      "CACHE_PORT": "6379",
+      "CACHE_STRATEGY": "timeline-store",
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432",
+      "STAMPEDE_PROTECTION": "false",
+      "TIMELINE_ENGINE": "redis",
+      "TIMELINE_HOST": "cache",
+      "TIMELINE_PORT": "6379"
+    }
+  },
+  {
+    "case": "social-feed/variation/timeline-sync",
+    "nodeId": "cache-1",
+    "env": {}
+  },
+  {
+    "case": "social-feed/variation/timeline-sync",
+    "nodeId": "db-1",
+    "env": {
+      "DB_ENGINE": "postgresql",
+      "DB_REPLICATION": "async",
+      "DB_SYNC_COMMIT_LEVEL": "on"
+    }
+  },
+  {
+    "case": "url-shortener/preset",
+    "nodeId": "app-1",
+    "env": {
+      "CACHE_HOST": "cache",
+      "CACHE_PORT": "6379",
+      "CACHE_STRATEGY": "cache-aside",
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "HOT_CACHE_ENGINE": "redis",
+      "HOT_CACHE_HOST": "cache",
+      "HOT_CACHE_PORT": "6379",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432",
+      "STAMPEDE_PROTECTION": "false"
+    }
+  },
+  {
+    "case": "url-shortener/preset",
+    "nodeId": "cache-1",
+    "env": {}
+  },
+  {
+    "case": "url-shortener/preset",
+    "nodeId": "db-1",
+    "env": {
+      "DB_ENGINE": "postgresql",
+      "DB_REPLICATION": "async",
+      "DB_SYNC_COMMIT_LEVEL": "on"
+    }
+  },
+  {
+    "case": "url-shortener/presetLite",
+    "nodeId": "app-1",
+    "env": {
+      "CACHE_HOST": "cache",
+      "CACHE_PORT": "6379",
+      "CACHE_STRATEGY": "cache-aside",
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "HOT_CACHE_ENGINE": "redis",
+      "HOT_CACHE_HOST": "cache",
+      "HOT_CACHE_PORT": "6379",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432",
+      "STAMPEDE_PROTECTION": "false"
+    }
+  },
+  {
+    "case": "url-shortener/presetLite",
+    "nodeId": "cache-1",
+    "env": {}
+  },
+  {
+    "case": "url-shortener/presetLite",
+    "nodeId": "db-1",
+    "env": {
+      "DB_ENGINE": "postgresql",
+      "DB_REPLICATION": "async",
+      "DB_SYNC_COMMIT_LEVEL": "on"
+    }
+  },
+  {
+    "case": "url-shortener/variation/app-db",
+    "nodeId": "app-1",
+    "env": {
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432"
+    }
+  },
+  {
+    "case": "url-shortener/variation/app-db",
+    "nodeId": "db-1",
+    "env": {
+      "DB_ENGINE": "postgresql",
+      "DB_REPLICATION": "async",
+      "DB_SYNC_COMMIT_LEVEL": "on"
+    }
+  },
+  {
+    "case": "url-shortener/variation/app-db-cache",
+    "nodeId": "app-1",
+    "env": {
+      "CACHE_HOST": "cache",
+      "CACHE_PORT": "6379",
+      "CACHE_STRATEGY": "cache-aside",
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "HOT_CACHE_ENGINE": "redis",
+      "HOT_CACHE_HOST": "cache",
+      "HOT_CACHE_PORT": "6379",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432",
+      "STAMPEDE_PROTECTION": "false"
+    }
+  },
+  {
+    "case": "url-shortener/variation/app-db-cache",
+    "nodeId": "cache-1",
+    "env": {}
+  },
+  {
+    "case": "url-shortener/variation/app-db-cache",
+    "nodeId": "db-1",
+    "env": {
+      "DB_ENGINE": "postgresql",
+      "DB_REPLICATION": "async",
+      "DB_SYNC_COMMIT_LEVEL": "on"
+    }
+  },
+  {
+    "case": "url-shortener/variation/app-db-cache-proxy",
+    "nodeId": "app-1",
+    "env": {
+      "CACHE_HOST": "cache",
+      "CACHE_MODE": "proxy",
+      "HOT_CACHE_ENGINE": "redis",
+      "HOT_CACHE_HOST": "cache",
+      "HOT_CACHE_PORT": "6379"
+    }
+  },
+  {
+    "case": "url-shortener/variation/app-db-cache-proxy",
+    "nodeId": "cache-1",
+    "env": {
+      "DB_HOST": "db",
+      "DB_NAME": "syscrack",
+      "DB_PASSWORD": "syscrack",
+      "DB_PORT": "5432",
+      "DB_USER": "syscrack",
+      "MAIN_DB_ENGINE": "postgresql",
+      "MAIN_DB_HOST": "db",
+      "MAIN_DB_PORT": "5432",
+      "STRATEGY": "write-through",
+      "WRITE_BEHIND_INTERVAL": "30"
+    }
+  },
+  {
+    "case": "url-shortener/variation/app-db-cache-proxy",
+    "nodeId": "db-1",
+    "env": {
+      "DB_ENGINE": "postgresql",
+      "DB_REPLICATION": "async",
+      "DB_SYNC_COMMIT_LEVEL": "on"
+    }
+  }
+]

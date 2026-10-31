@@ -595,6 +595,8 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 		}
 	}
 
+	mergeJobEnvIntoDerive(node, design, env)
+
 	return env
 }
 
