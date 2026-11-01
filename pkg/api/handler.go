@@ -1227,7 +1227,6 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 		if design == nil {
 			design = &deployer.DeploymentDesign{}
 		}
-		dc := deployer.DesignConfigFromDesign(design)
 		topo := MetricsTopologyFromDeploymentDesign(design, tpl)
 		dm, err := h.metricsCollector.Collect(r.Context(), namespace, tpl, topo)
 		if err == nil && dm != nil {
@@ -1237,15 +1236,7 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 			}
 			hist := h.metricsCollector.DownsampledSessionHistory(namespace)
 			summary := h.metricsCollector.SessionSummary(namespace, base, dm)
-			if len(hist) > 0 {
-				ownerID := ""
-				if rowErr == nil {
-					ownerID = row.UserID
-				}
-				enrichCtx, enrichCancel := context.WithTimeout(r.Context(), 2*time.Minute)
-				h.enrichReelCaptionsInSummary(enrichCtx, namespace, ownerID, summary, dc, tpl, hist, dm)
-				enrichCancel()
-			}
+			h.EnrichTeardownSummary(r.Context(), namespace, row, summary, hist, dm)
 			summary["terminated_at"] = time.Now().Format(time.RFC3339)
 			if rowErr == nil {
 				summary["actual_duration_seconds"] = int(time.Since(row.CreatedAt).Seconds())
@@ -1295,7 +1286,7 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 	if h.store != nil {
 		_ = h.store.UpdateStatus(context.Background(), namespace, "terminated")
 	}
-	h.schedulePostmortemAfterTeardown(namespace)
+	h.SchedulePostmortemAfterTeardown(namespace)
 	h.wakeDeployQueue()
 	w.WriteHeader(http.StatusNoContent)
 }

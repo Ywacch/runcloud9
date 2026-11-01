@@ -205,6 +205,8 @@ func main() {
 	var metricsCollector *metrics.MetricsCollector
 	var diagnosticsCollector *diagnostics.Collector
 	var forgetActAsCache func(string)
+	var enrichTeardownSummary func(context.Context, string, store.DeploymentRow, map[string]any, []metrics.DeploymentMetrics, *metrics.DeploymentMetrics)
+	var schedulePostmortem func(string)
 
 	// teardownFn uses context.Background() so cleanup is never cut short by request cancel or timeout.
 	teardownFn := func(namespace string) {
@@ -233,6 +235,10 @@ func main() {
 			dm, err := metricsCollector.Collect(ctx, namespace, tpl, topo)
 			if err == nil && dm != nil {
 				summary = metricsCollector.SessionSummary(namespace, summary, dm)
+				if rowErr == nil && enrichTeardownSummary != nil {
+					hist := metricsCollector.DownsampledSessionHistory(namespace)
+					enrichTeardownSummary(ctx, namespace, row, summary, hist, dm)
+				}
 				summary["terminated_at"] = time.Now().Format(time.RFC3339)
 				if rowErr == nil {
 					summary["actual_duration_seconds"] = int(time.Since(row.CreatedAt).Seconds())
@@ -302,6 +308,9 @@ func main() {
 		if err := deploymentStore.UpdateStatus(ctx, namespace, "terminated"); err != nil {
 			log.Printf("auto-teardown status update failed for %s: %v", namespace, err)
 		}
+		if schedulePostmortem != nil {
+			schedulePostmortem(namespace)
+		}
 		if metricsCollector != nil {
 			metricsCollector.Cleanup(namespace)
 		}
@@ -335,6 +344,8 @@ func main() {
 
 	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed, metricsCollector, diagnosticsCollector, clientset, lg, eventBus)
 	forgetActAsCache = handler.ForgetActAsCache
+	enrichTeardownSummary = handler.EnrichTeardownSummary
+	schedulePostmortem = handler.SchedulePostmortemAfterTeardown
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
