@@ -1,6 +1,9 @@
 package introspect
 
-import "path/filepath"
+import (
+	"path/filepath"
+	"strings"
+)
 
 // ComponentSpec defines what's browsable for a single component in a template.
 type ComponentSpec struct {
@@ -46,4 +49,27 @@ func PatternAllowed(pattern string, patterns []string) bool {
 		}
 	}
 	return false
+}
+
+// AppendQueueStreamKeys adds exact Redis stream keys for work queues that can
+// share the cache instance. The stream key is the queue name (same string the
+// RabbitMQ whitelist uses). patterns is not modified.
+func AppendQueueStreamKeys(patterns, queues []string) []string {
+	out := append([]string{}, patterns...)
+	seen := make(map[string]struct{}, len(out)+len(queues))
+	for _, p := range out {
+		seen[p] = struct{}{}
+	}
+	for _, q := range queues {
+		q = strings.TrimSpace(q)
+		if q == "" {
+			continue
+		}
+		if _, ok := seen[q]; ok {
+			continue
+		}
+		seen[q] = struct{}{}
+		out = append(out, q)
+	}
+	return out
 }

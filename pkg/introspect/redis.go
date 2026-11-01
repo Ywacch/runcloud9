@@ -164,12 +164,9 @@ func (d *RedisDriver) GetKeyValue(ctx context.Context, key string) (KeyValue, er
 	case "hash":
 		kv.Value, err = d.client.HGetAll(ctx, key).Result()
 	case "stream":
-		msgs, serr := d.client.XRange(ctx, key, "-", "+").Result()
-		err = serr
-		if len(msgs) > 20 {
-			msgs = msgs[len(msgs)-20:]
-		}
-		kv.Value = msgs
+		var entries []StreamEntry
+		entries, err = readStreamPreview(ctx, d.client, key)
+		kv.Value = entries
 	default:
 		kv.Value = nil
 	}
@@ -177,4 +174,32 @@ func (d *RedisDriver) GetKeyValue(ctx context.Context, key string) (KeyValue, er
 		return KeyValue{}, err
 	}
 	return kv, nil
+}
+
+// streamPreviewLimit is how many recent stream entries the cache browser returns.
+const streamPreviewLimit = 20
+
+// StreamEntry is one Redis stream record for the cache data browser.
+// Fields keeps the XADD map (work queues store the payload under "body").
+type StreamEntry struct {
+	ID     string            `json:"id"`
+	Fields map[string]string `json:"fields"`
+}
+
+// readStreamPreview returns the newest stream entries, oldest first.
+// XRevRangeN avoids loading the whole stream.
+func readStreamPreview(ctx context.Context, client *redis.Client, key string) ([]StreamEntry, error) {
+	msgs, err := client.XRevRangeN(ctx, key, "+", "-", streamPreviewLimit).Result()
+	if err != nil {
+		return nil, fmt.Errorf("redis xrange: %w", err)
+	}
+	entries := make([]StreamEntry, len(msgs))
+	for i, msg := range msgs {
+		fields := make(map[string]string, len(msg.Values))
+		for k, v := range msg.Values {
+			fields[k] = fmt.Sprint(v)
+		}
+		entries[len(msgs)-1-i] = StreamEntry{ID: msg.ID, Fields: fields}
+	}
+	return entries, nil
 }

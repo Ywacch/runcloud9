@@ -11,6 +11,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/ywacch/cloud9/pkg/introspect"
+	"github.com/ywacch/cloud9/pkg/templates"
 )
 
 func TestIntrospectRequiresAuth(t *testing.T) {
@@ -52,6 +53,28 @@ func TestIntrospectRejectsUnwhitelistedQueue(t *testing.T) {
 	err := validateIntrospectAction("peek", spec, "secret", httptest.NewRequest(http.MethodGet, "/", nil))
 	if err == nil {
 		t.Fatal("expected error for unwhitelisted queue")
+	}
+}
+
+func TestSocialFeedCacheAllowsWorkQueueStream(t *testing.T) {
+	t.Parallel()
+	tmpl := templates.GetTemplate("social-feed")
+	if tmpl == nil {
+		t.Fatal("social-feed template missing")
+	}
+	cache := tmpl.Introspection["cache"]
+	mq := tmpl.Introspection["mq"]
+	cache.KeyPatterns = introspect.AppendQueueStreamKeys(cache.KeyPatterns, mq.Queues)
+	keysReq := httptest.NewRequest(http.MethodGet, "/keys?pattern=fanout", nil)
+	if err := validateIntrospectAction("keys", cache, "", keysReq); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateIntrospectAction("key", cache, "fanout", httptest.NewRequest(http.MethodGet, "/key/fanout", nil)); err != nil {
+		t.Fatal(err)
+	}
+	timelineReq := httptest.NewRequest(http.MethodGet, "/keys?pattern=timeline:*", nil)
+	if err := validateIntrospectAction("keys", cache, "", timelineReq); err != nil {
+		t.Fatal(err)
 	}
 }
 

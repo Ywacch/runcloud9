@@ -14,33 +14,22 @@ var semanticComponentTypes = []string{
 // Platform message templates shared by ValidateTopology, AssessTopology, and
 // GET /meta/topology-rules. Placeholders: {count}, {name}.
 const (
-	msgSingletonAppServer =
-		"only one app-server node is supported (found {count}) — scale with replicas on a single app-server instead of placing multiple nodes"
-	msgSingletonWorker =
-		"only one worker node is supported (found {count}) — scale with replicas on a single worker instead of placing multiple nodes"
-	msgSingletonCache =
-		"only one cache node is supported (found {count}) — remove extra cache nodes; the platform provisions a single Redis service"
-	msgSingletonDB =
-		"only one db node is supported (found {count}) — remove extra database nodes; the platform provisions a single Postgres service"
-	msgSingletonMQ =
-		"only one mq node is supported (found {count}) — remove extra message queue nodes; the platform provisions a single queue service"
+	msgSingletonAppServer = "only one app-server node is supported (found {count}) — scale with replicas on a single app-server instead of placing multiple nodes"
+	msgSingletonWorker    = "only one worker node is supported (found {count}) — scale with replicas on a single worker instead of placing multiple nodes"
+	msgSingletonCache     = "only one cache node is supported (found {count}) — remove extra cache nodes; the platform provisions a single Redis service"
+	msgSingletonDB        = "only one db node is supported (found {count}) — remove extra database nodes; the platform provisions a single Postgres service"
+	msgSingletonMQ        = "only one mq node is supported (found {count}) — remove extra message queue nodes; the platform provisions a single queue service"
 
-	msgPresenceMissingAppServer =
-		"Add an App Server — live sessions need something to receive traffic"
-	msgPresenceCacheWithoutDB =
-		"A cache node is present but no database — clarify whether Redis is your primary store or add a database; " +
-			"for now this topology is rejected"
-	msgPresenceWorkerWithoutMQ =
-		"Workers consume from message queues — add a message queue to the design"
-	msgPresenceMQWithoutWorker =
-		"Message queue has no consumer — add a worker node"
+	msgPresenceMissingAppServer = "Add an App Server — live sessions need something to receive traffic"
+	msgPresenceCacheWithoutDB   = "A cache node is present but no database — clarify whether Redis is your primary store or add a database; " +
+		"for now this topology is rejected"
+	msgPresenceWorkerWithoutMQ = "Workers consume from message queues — add a message queue to the design"
+	msgPresenceMQWithoutWorker = "Message queue has no consumer — add a worker node"
 
-	msgWorkerMissingDB =
-		`worker "{name}" must connect to a db node (add worker -> db edge)`
-	msgWorkerMissingMQ =
-		`worker "{name}" must connect to an mq node (add worker -> mq edge)`
-	msgWorkerWrongMQDirection =
-		`invalid worker/mq edge direction for worker "{name}": found mq -> worker; use worker -> mq`
+	msgWorkerMissingDB         = `worker "{name}" must connect to a db node (add worker -> db edge)`
+	msgWorkerMissingMQ         = `worker "{name}" must connect to an mq node (add worker -> mq edge)`
+	msgWorkerMissingQueueCache = `worker "{name}" must connect to the cache that hosts the work queue (add worker -> cache edge)`
+	msgWorkerWrongMQDirection  = `invalid worker/mq edge direction for worker "{name}": found mq -> worker; use worker -> mq`
 )
 
 // platformSingleton is one create-blocking single-instance role.
@@ -89,11 +78,14 @@ type SingletonRule struct {
 // RequiredOutboundRule declares required directed deps from a node type.
 // Messages use {name} for the node display name.
 type RequiredOutboundRule struct {
-	NodeType                string   `json:"nodeType"`
-	Targets                 []string `json:"targets"`
-	MissingDBMessage        string   `json:"missingDbMessage"`
-	MissingMQMessage        string   `json:"missingMqMessage"`
-	WrongMQDirectionMessage string   `json:"wrongMqDirectionMessage"`
+	NodeType         string   `json:"nodeType"`
+	Targets          []string `json:"targets"`
+	MissingDBMessage string   `json:"missingDbMessage"`
+	MissingMQMessage string   `json:"missingMqMessage"`
+	// MissingQueueCacheMessage is used when work_queue is bound to a cache
+	// (Redis Streams) and the worker has no edge to that cache.
+	MissingQueueCacheMessage string `json:"missingQueueCacheMessage"`
+	WrongMQDirectionMessage  string `json:"wrongMqDirectionMessage"`
 }
 
 // TopologyRulesResponse is returned by GET /meta/topology-rules.
@@ -147,11 +139,12 @@ func NewTopologyRulesResponse() TopologyRulesResponse {
 		Singletons: singletons,
 		RequiredOutbound: []RequiredOutboundRule{
 			{
-				NodeType:                "worker",
-				Targets:                 []string{"db", "mq"},
-				MissingDBMessage:        msgWorkerMissingDB,
-				MissingMQMessage:        msgWorkerMissingMQ,
-				WrongMQDirectionMessage: msgWorkerWrongMQDirection,
+				NodeType:                 "worker",
+				Targets:                  []string{"db", "mq"},
+				MissingDBMessage:         msgWorkerMissingDB,
+				MissingMQMessage:         msgWorkerMissingMQ,
+				MissingQueueCacheMessage: msgWorkerMissingQueueCache,
+				WrongMQDirectionMessage:  msgWorkerWrongMQDirection,
 			},
 		},
 	}
@@ -197,6 +190,28 @@ func workerMissingDBMessage(name string) string {
 
 func workerMissingMQMessage(name string) string {
 	return formatTopologyMessage(msgWorkerMissingMQ, map[string]string{"name": name})
+}
+
+func workerMissingQueueCacheMessage(name string) string {
+	return formatTopologyMessage(msgWorkerMissingQueueCache, map[string]string{"name": name})
+}
+
+// workQueueCacheID is the cache node that hosts work_queue when the design
+// binds that job to a cache. Empty when the queue stays on an mq node or is unbound.
+func workQueueCacheID(design DeploymentDesign) string {
+	if design.JobBindings == nil {
+		return ""
+	}
+	id := strings.TrimSpace(design.JobBindings["work_queue"])
+	if id == "" {
+		return ""
+	}
+	for _, n := range design.Nodes {
+		if n.ID == id && n.Type == "cache" {
+			return id
+		}
+	}
+	return ""
 }
 
 func workerWrongMQDirectionMessage(name string) string {
