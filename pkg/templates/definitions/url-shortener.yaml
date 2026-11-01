@@ -30,6 +30,18 @@ loadgen:
       pathTemplate: /shorten
       bodyTemplate: '{"url":"https://example.com/page/{{.Rand}}"}'
       weight: 20
+  schedules:
+    - id: cpu_ramp
+      label: CPU ramp
+      phases:
+        - durationSeconds: 30
+          rpsMultiplier: 1
+          note: baseline
+        - durationSeconds: 45
+          rpsMultiplier: 4
+        - durationSeconds: 0
+          rpsMultiplier: 8
+          note: hold
 workerImageKey: ""
 appDatabaseMode: non-proxy
 jobs:

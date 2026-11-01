@@ -589,6 +589,48 @@ func TestLoadgenSchedulesFromYAML(t *testing.T) {
 	}
 }
 
+func TestLoadgenSchedule_cpuRamp(t *testing.T) {
+	t.Parallel()
+	for _, templateID := range []string{"url-shortener", "ecommerce", "social-feed", "social-feed-pull"} {
+		templateID := templateID
+		t.Run(templateID, func(t *testing.T) {
+			t.Parallel()
+			sched, ok := GetLoadgenSchedule(templateID, "cpu_ramp")
+			if !ok {
+				t.Fatal("cpu_ramp missing")
+			}
+			if sched.Label != "CPU ramp" {
+				t.Fatalf("label: %q", sched.Label)
+			}
+			if len(sched.Phases) != 3 {
+				t.Fatalf("phases: got %d", len(sched.Phases))
+			}
+			if sched.Phases[0].RpsMultiplier != 1 {
+				t.Fatalf("phase0 multiplier: %v", sched.Phases[0].RpsMultiplier)
+			}
+			if sched.Phases[2].RpsMultiplier != 8 || sched.Phases[2].DurationSeconds != 0 {
+				t.Fatalf("hold phase: %+v", sched.Phases[2])
+			}
+			view, ok := LoadgenConfig(templateID)
+			if !ok {
+				t.Fatal("LoadgenConfig")
+			}
+			ids := map[string]bool{}
+			for _, s := range view.Schedules {
+				ids[s.ID] = true
+			}
+			if templateID == "social-feed" || templateID == "social-feed-pull" {
+				if !ids["steady"] || !ids["world_cup_goal"] {
+					t.Fatalf("lost schedules: %+v", ids)
+				}
+			}
+			if !ids["cpu_ramp"] {
+				t.Fatalf("cpu_ramp not in config: %+v", ids)
+			}
+		})
+	}
+}
+
 func TestLoadgenActorParamsFromYAML_ecommerce(t *testing.T) {
 	t.Parallel()
 

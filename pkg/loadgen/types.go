@@ -108,6 +108,8 @@ type LoadStats struct {
 	IdentityCount int `json:"identityCount,omitempty"`
 	// IdentitiesSeen is how many distinct client ids the pressure lane has sent since start, up to 10000.
 	IdentitiesSeen int `json:"identitiesSeen,omitempty"`
+	// ScaleLagErrors counts new non-2xx loadgen responses during app-server scale-up lag (HPA desired > ready).
+	ScaleLagErrors uint64 `json:"scaleLagErrors,omitempty"`
 }
 
 // DefaultProfile returns default RPS only. Template and distribution come from the handler or JSON.
