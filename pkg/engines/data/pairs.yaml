@@ -31,6 +31,6 @@
 - job: work_queue
   engine: redis
   fit: workable
-  build: not_built
+  build: available
   reason: Lists and streams can queue work with different failure modes.
   fidelity: real

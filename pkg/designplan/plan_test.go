@@ -110,6 +110,57 @@ func TestBuild_consolidation_timelineToDB(t *testing.T) {
 	}
 }
 
+func TestBuild_consolidation_workQueueToRedis(t *testing.T) {
+	t.Parallel()
+	tmpl := templates.GetTemplate("social-feed")
+	if tmpl == nil || tmpl.Preset == nil {
+		t.Fatal("social-feed preset missing")
+	}
+
+	proposed := designFromPreset("social-feed", tmpl.Preset)
+	proposed.Nodes = filterNodes(proposed.Nodes, func(n deployer.DeploymentNode) bool {
+		return n.ID != "mq-1"
+	})
+	proposed.Connections = filterConns(proposed.Connections, func(c deployer.DeploymentConn) bool {
+		return c.TargetID != "mq-1" && c.SourceID != "mq-1"
+	})
+	proposed.JobBindings = map[string]string{"work_queue": "cache-1"}
+	for i := range proposed.Connections {
+		if proposed.Connections[i].SourceID == "app-1" && proposed.Connections[i].TargetID == "cache-1" {
+			proposed.Connections[i].Protocol = "tcp"
+		}
+	}
+
+	plan, err := Build(Input{
+		Proposed:  proposed,
+		Template:  tmpl,
+		Catalog:   engines.Default(),
+		QuotaTier: "explorer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Nodes.Removed) != 1 || plan.Nodes.Removed[0] != "mq-1" {
+		t.Fatalf("removed nodes: %+v", plan.Nodes.Removed)
+	}
+	var move *JobMove
+	for i := range plan.Jobs {
+		if plan.Jobs[i].Job == "work_queue" {
+			move = &plan.Jobs[i]
+			break
+		}
+	}
+	if move == nil {
+		t.Fatalf("jobs: %+v", plan.Jobs)
+	}
+	if move.From != "mq-1/rabbitmq" {
+		t.Fatalf("from: %q", move.From)
+	}
+	if move.To != "cache-1/redis" {
+		t.Fatalf("to: %q", move.To)
+	}
+}
+
 func TestBuild_resizeOnly(t *testing.T) {
 	t.Parallel()
 	tmpl := templates.GetTemplate("url-shortener")

@@ -4,55 +4,39 @@ import (
 	"context"
 	"fmt"
 
-	amqp "github.com/rabbitmq/amqp091-go"
-	"github.com/ywacch/cloud9/pkg/templateapp/tracemq"
+	"github.com/ywacch/cloud9/pkg/templateapp/jobs/queue"
 )
 
 type MQPublisher struct {
-	conn    *amqp.Connection
-	channel *amqp.Channel
-	queue   string
+	q   queue.Queue
+	rmq *queue.RabbitMQ
 }
 
 func NewMQPublisher(host, port, queueName string) (*MQPublisher, error) {
-	conn, err := amqp.Dial(fmt.Sprintf("amqp://cloud9:cloud9@%s:%s/", host, port))
+	rmq, err := queue.NewRabbitMQ(queue.RabbitMQOptions{
+		Host:      host,
+		Port:      port,
+		QueueName: queueName,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("mq dial: %w", err)
+		return nil, err
 	}
-	ch, err := conn.Channel()
-	if err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("mq channel: %w", err)
-	}
-	_, err = ch.QueueDeclare(queueName, true, false, false, false, nil)
-	if err != nil {
-		_ = ch.Close()
-		_ = conn.Close()
-		return nil, fmt.Errorf("mq queue declare: %w", err)
-	}
-	return &MQPublisher{conn: conn, channel: ch, queue: queueName}, nil
+	return &MQPublisher{q: rmq, rmq: rmq}, nil
 }
 
 func (mq *MQPublisher) Publish(ctx context.Context, body []byte) error {
-	return mq.channel.PublishWithContext(ctx, "", mq.queue, false, false, amqp.Publishing{
-		ContentType: "application/json",
-		Headers:     tracemq.Headers(ctx),
-		Body:        body,
-	})
+	return mq.q.Publish(ctx, body)
 }
 
 func (mq *MQPublisher) Close() {
-	if mq.channel != nil {
-		_ = mq.channel.Close()
-	}
-	if mq.conn != nil {
-		_ = mq.conn.Close()
+	if mq.rmq != nil {
+		_ = mq.rmq.Close()
 	}
 }
 
 func (mq *MQPublisher) Ping() error {
-	if mq.conn == nil || mq.conn.IsClosed() {
-		return fmt.Errorf("mq connection closed")
+	if mq.rmq == nil {
+		return fmt.Errorf("mq publisher closed")
 	}
-	return nil
+	return mq.rmq.Ping()
 }
