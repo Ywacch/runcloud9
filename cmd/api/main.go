@@ -207,6 +207,7 @@ func main() {
 	var forgetActAsCache func(string)
 	var enrichTeardownSummary func(context.Context, string, store.DeploymentRow, map[string]any, []metrics.DeploymentMetrics, *metrics.DeploymentMetrics)
 	var schedulePostmortem func(string)
+	var stopLBEndpointsWatch func(string)
 
 	// teardownFn uses context.Background() so cleanup is never cut short by request cancel or timeout.
 	teardownFn := func(namespace string) {
@@ -311,6 +312,9 @@ func main() {
 		if schedulePostmortem != nil {
 			schedulePostmortem(namespace)
 		}
+		if stopLBEndpointsWatch != nil {
+			stopLBEndpointsWatch(namespace)
+		}
 		if metricsCollector != nil {
 			metricsCollector.Cleanup(namespace)
 		}
@@ -346,6 +350,7 @@ func main() {
 	forgetActAsCache = handler.ForgetActAsCache
 	enrichTeardownSummary = handler.EnrichTeardownSummary
 	schedulePostmortem = handler.SchedulePostmortemAfterTeardown
+	stopLBEndpointsWatch = handler.StopLBEndpointsWatch
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
