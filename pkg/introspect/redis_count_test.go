@@ -36,6 +36,42 @@ func TestCountStudentKeys(t *testing.T) {
 	}
 }
 
+func TestScanKeysExactStreamKey(t *testing.T) {
+	t.Parallel()
+
+	srv, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("miniredis.Run: %v", err)
+	}
+	t.Cleanup(srv.Close)
+
+	client := redis.NewClient(&redis.Options{Addr: srv.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+
+	ctx := context.Background()
+	for i := 0; i < 200; i++ {
+		srv.Set(fmt.Sprintf("timeline:%d", i), "x")
+	}
+	if err := client.XAdd(ctx, &redis.XAddArgs{
+		Stream: "fanout",
+		Values: map[string]interface{}{"body": "job"},
+	}).Err(); err != nil {
+		t.Fatalf("XAdd: %v", err)
+	}
+
+	driver := &RedisDriver{client: client}
+	keys, next, err := driver.ScanKeys(ctx, "fanout", 0, 50)
+	if err != nil {
+		t.Fatalf("ScanKeys: %v", err)
+	}
+	if next != 0 {
+		t.Fatalf("cursor %d, want 0 for exact key", next)
+	}
+	if len(keys) != 1 || keys[0].Key != "fanout" || keys[0].Type != "stream" {
+		t.Fatalf("keys = %+v, want single fanout stream", keys)
+	}
+}
+
 func TestGetKeyValueStreamPreview(t *testing.T) {
 	t.Parallel()
 
