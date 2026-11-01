@@ -141,6 +141,7 @@ func projectLBSettings(settings map[string]any, cfg map[string]interface{}) {
 
 func projectAppServerSettings(settings map[string]any, cfg map[string]interface{}) {
 	projectCommonSettings(settings, cfg)
+	projectAutoscaleSettings(settings, cfg)
 	if configKeyPresent(cfg, "stampedeProtection") {
 		settings["stampedeProtection"] = configString(cfg, "stampedeProtection", "")
 	}
@@ -154,6 +155,7 @@ func projectAppServerSettings(settings map[string]any, cfg map[string]interface{
 
 func projectWorkerSettings(settings map[string]any, cfg map[string]interface{}) {
 	projectCommonSettings(settings, cfg)
+	projectAutoscaleSettings(settings, cfg)
 	if prefetch, ok := positiveIntConfig(cfg, "workerPrefetch"); ok {
 		if n, err := strconv.Atoi(prefetch); err == nil {
 			settings["workerPrefetch"] = n
@@ -163,6 +165,25 @@ func projectWorkerSettings(settings map[string]any, cfg map[string]interface{}) 
 		if n, err := strconv.Atoi(concurrency); err == nil {
 			settings["workerConcurrency"] = n
 		}
+	}
+}
+
+func projectAutoscaleSettings(settings map[string]any, cfg map[string]interface{}) {
+	if cfg == nil {
+		return
+	}
+	anyCfg := make(map[string]any, len(cfg))
+	for k, v := range cfg {
+		anyCfg[k] = v
+	}
+	ac, err := parseAutoscaleConfig(anyCfg)
+	if err != nil || ac == nil {
+		return
+	}
+	settings["autoscale"] = map[string]any{
+		"min":              ac.Min,
+		"max":              ac.Max,
+		"targetCPUPercent": ac.TargetCPUPercent,
 	}
 }
 

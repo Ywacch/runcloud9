@@ -28,7 +28,9 @@ func ValidateRuntimeContract(design DeploymentDesign, tmpl *templates.TemplateSp
 		validateLBBackends,
 		validateLBAlgorithm,
 		validateAppServerReplicas,
+		validateAppServerAutoscale,
 		validateWorkerReplicas,
+		validateWorkerAutoscale,
 		validateDBReadReplicas,
 		validateDBReplicationConfig,
 		validateDBReadConsistency,
@@ -53,6 +55,38 @@ func validateAppServerReplicas(design DeploymentDesign, _ *templates.TemplateSpe
 		}
 		if _, err := replicaCountFromConfig(node.Config, 1, minAppServerReplicas, maxAppServerReplicas); err != nil {
 			return fmt.Errorf("app server %q: %w", node.Name, err)
+		}
+	}
+	return nil
+}
+
+func validateAppServerAutoscale(design DeploymentDesign, _ *templates.TemplateSpec) error {
+	for _, node := range design.Nodes {
+		if node.Type != "app-server" {
+			continue
+		}
+		ac, err := parseAutoscaleConfig(node.Config)
+		if err != nil {
+			return fmt.Errorf("app server %q: %w", node.Name, err)
+		}
+		if err := validateAutoscaleUniformSizes(node, ac); err != nil {
+			return fmt.Errorf("app server %q: %w", node.Name, err)
+		}
+	}
+	return nil
+}
+
+func validateWorkerAutoscale(design DeploymentDesign, _ *templates.TemplateSpec) error {
+	for _, node := range design.Nodes {
+		if node.Type != "worker" {
+			continue
+		}
+		ac, err := parseAutoscaleConfig(node.Config)
+		if err != nil {
+			return fmt.Errorf("worker %q: %w", node.Name, err)
+		}
+		if err := validateAutoscaleUniformSizes(node, ac); err != nil {
+			return fmt.Errorf("worker %q: %w", node.Name, err)
 		}
 	}
 	return nil

@@ -215,12 +215,18 @@ func sidecarOverheadForNode(node DeploymentNode) bool {
 func replicasForBudget(node DeploymentNode) int32 {
 	switch node.Type {
 	case "app-server":
+		if ac, err := parseAutoscaleConfig(node.Config); err == nil && ac != nil {
+			return ac.Max
+		}
 		n, err := replicaCountFromConfig(node.Config, 1, minAppServerReplicas, maxAppServerReplicas)
 		if err != nil {
 			return 1
 		}
 		return n
 	case "worker":
+		if ac, err := parseAutoscaleConfig(node.Config); err == nil && ac != nil {
+			return ac.Max
+		}
 		n, err := replicaCountFromConfig(node.Config, 1, minWorkerReplicas, maxWorkerReplicas)
 		if err != nil {
 			return 1

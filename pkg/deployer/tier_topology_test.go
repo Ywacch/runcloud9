@@ -107,6 +107,20 @@ func TestValidateTierTopology(t *testing.T) {
 				return d
 			}(),
 		},
+		{
+			name:   "autoscale max blocked on legacy explorer",
+			limits: legacyExplorer,
+			design: func() DeploymentDesign {
+				d := urlShortenerLiteDesign()
+				d.Nodes[0].Config["autoscale"] = map[string]interface{}{
+					"min":              1,
+					"max":              3,
+					"targetCPUPercent": 70,
+				}
+				return d
+			}(),
+			wantErr: "replicas 3 exceed your plan limit",
+		},
 	}
 	for _, tt := range tests {
 		tt := tt
