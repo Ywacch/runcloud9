@@ -17,10 +17,30 @@ import (
 
 const (
 	lbConfigMapName              = "lb-config"
-	lbConfigReloadAnnotation     = "cloud9.io/lb-config-reload"
+	lbNginxConfDir               = "/etc/nginx/cloud9"
+	lbNginxConfPath              = "/etc/nginx/cloud9/nginx.conf"
 	lbUpstreamFallbackAnnotation = "cloud9.io/lb-upstream-fallback"
 	lbReconcileRetryWait         = 60 * time.Second
 )
+
+// lbNginxReloadScript starts nginx on the ConfigMap file and reloads when that
+// file changes. A directory mount (not a subPath) receives ConfigMap updates.
+// Rolling the Deployment to pick up a subPath file marks the pod unready, which
+// the canvas paints as a red rim.
+const lbNginxReloadScript = `CONF=` + lbNginxConfPath + `
+nginx -c "$CONF" -g 'daemon off;' &
+pid=$!
+sum=$(md5sum "$CONF" 2>/dev/null | awk '{print $1}')
+while kill -0 "$pid" 2>/dev/null; do
+  sleep 2
+  next=$(md5sum "$CONF" 2>/dev/null | awk '{print $1}')
+  if [ -n "$next" ] && [ "$next" != "$sum" ]; then
+    sum=$next
+    nginx -s reload || true
+  fi
+done
+wait "$pid"
+`
 
 // LBSpec describes the demo nginx load balancer (explicit deploy path, not componentRegistry).
 type LBSpec struct {
@@ -48,15 +68,15 @@ func DefaultLBSpec() LBSpec {
 	}
 }
 
-// lbNginxContainer builds the demo LB nginx container. Command/Args skip
-// nginx:alpine docker-entrypoint.d scripts that call apk at start and can hang
-// when outbound network to Alpine package repos is slow or blocked.
+// lbNginxContainer builds the demo LB nginx container. The command calls nginx
+// directly so nginx:alpine does not run docker-entrypoint.d scripts that call apk.
+// The ConfigMap is a directory mount. A loop reloads nginx when the file changes
+// so an upstream edit does not roll the pod.
 func lbNginxContainer(spec LBSpec) corev1.Container {
 	return corev1.Container{
 		Name:      "nginx",
 		Image:     spec.Image,
-		Command:   []string{"nginx"},
-		Args:      []string{"-g", "daemon off;"},
+		Command:   []string{"/bin/sh", "-c", lbNginxReloadScript},
 		Ports:     []corev1.ContainerPort{{ContainerPort: spec.Port}},
 		Resources: spec.Resources,
 		ReadinessProbe: &corev1.Probe{
@@ -68,7 +88,7 @@ func lbNginxContainer(spec LBSpec) corev1.Container {
 			FailureThreshold:    3,
 		},
 		VolumeMounts: []corev1.VolumeMount{{
-			Name: "config", MountPath: "/etc/nginx/nginx.conf", SubPath: "nginx.conf",
+			Name: "config", MountPath: lbNginxConfDir, ReadOnly: true,
 		}},
 	}
 }
@@ -153,7 +173,7 @@ func ReconcileLBUpstream(ctx context.Context, clientset kubernetes.Interface, na
 	if _, err := clientset.CoreV1().ConfigMaps(namespace).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("update lb configmap: %w", err)
 	}
-	return k.reloadLBDeployment(ctx, namespace)
+	return nil
 }
 
 type lbConfigInput struct {
@@ -270,25 +290,6 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 	}
 
 	return k.waitForReady(ctx, cfg, "lb", replicas, waitProgressOpts{})
-}
-
-func (k *K8sDeployer) reloadLBDeployment(ctx context.Context, namespace string) error {
-	dep, err := k.clientset.AppsV1().Deployments(namespace).Get(ctx, "lb", metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("get lb deployment: %w", err)
-	}
-	if dep.Spec.Template.Annotations == nil {
-		dep.Spec.Template.Annotations = map[string]string{}
-	}
-	dep.Spec.Template.Annotations[lbConfigReloadAnnotation] = time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := k.clientset.AppsV1().Deployments(namespace).Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("update lb deployment: %w", err)
-	}
-	replicas := int32(1)
-	if dep.Spec.Replicas != nil {
-		replicas = *dep.Spec.Replicas
-	}
-	return k.waitForReady(ctx, DeployConfig{Namespace: namespace}, "lb", replicas, waitProgressOpts{})
 }
 
 // nginxConfig builds a minimal nginx.conf with an upstream and reverse proxy to app backends.

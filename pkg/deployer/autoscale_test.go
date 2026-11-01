@@ -166,7 +166,18 @@ func TestEnsureCPUHorizontalPodAutoscaler(t *testing.T) {
 	if hpa.Spec.Behavior == nil || hpa.Spec.Behavior.ScaleDown == nil || hpa.Spec.Behavior.ScaleDown.StabilizationWindowSeconds == nil {
 		t.Fatal("expected scale-down stabilization window")
 	}
-	if got := *hpa.Spec.Behavior.ScaleDown.StabilizationWindowSeconds; got != hpaScaleDownStabilizationSeconds {
+	down := hpa.Spec.Behavior.ScaleDown
+	if got := *down.StabilizationWindowSeconds; got != hpaScaleDownStabilizationSeconds {
 		t.Fatalf("scaleDown stabilization: got %d want %d", got, hpaScaleDownStabilizationSeconds)
+	}
+	if len(down.Policies) != 1 || down.Policies[0].Type != autoscalingv2.PercentScalingPolicy || down.Policies[0].Value != 100 {
+		t.Fatalf("scaleDown policy: got %+v", down.Policies)
+	}
+	up := hpa.Spec.Behavior.ScaleUp
+	if up == nil || up.StabilizationWindowSeconds == nil || *up.StabilizationWindowSeconds != 0 {
+		t.Fatal("expected immediate scale-up")
+	}
+	if up.SelectPolicy == nil || *up.SelectPolicy != autoscalingv2.MaxChangePolicySelect {
+		t.Fatalf("scaleUp select: got %v", up.SelectPolicy)
 	}
 }

@@ -121,9 +121,14 @@ func effectiveAppServerReplicasForTier(node DeploymentNode) (int32, error) {
 }
 
 // hpaScaleDownStabilizationSeconds is how long a lower replica recommendation
-// must persist before the HPA removes pods. The Kubernetes default is 300s,
-// which outlasts a lab session. 15s is long enough to ignore one noisy sample.
-const hpaScaleDownStabilizationSeconds int32 = 15
+// must persist before the HPA removes pods. The Kubernetes default is 300s.
+// Zero uses the latest sample. A longer window keeps the higher count from
+// an earlier sample, so idle CPU removes one pod and then waits again.
+// The replica formula can still stop partway: 3 pods at 27% of a 70% target
+// recommend 2. A 5% sample at 3 pods recommends 1.
+const hpaScaleDownStabilizationSeconds int32 = 0
+
+const hpaScalePeriodSeconds int32 = 15
 
 func cpuUtilizationHPA(namespace, deploymentName string, ac AutoscaleConfig) *autoscalingv2.HorizontalPodAutoscaler {
 	target := ac.TargetCPUPercent
@@ -141,8 +146,19 @@ func cpuUtilizationHPA(namespace, deploymentName string, ac AutoscaleConfig) *au
 			MinReplicas: ptr(ac.Min),
 			MaxReplicas: ac.Max,
 			Behavior: &autoscalingv2.HorizontalPodAutoscalerBehavior{
+				ScaleUp: &autoscalingv2.HPAScalingRules{
+					StabilizationWindowSeconds: ptr(0),
+					SelectPolicy:               ptrPolicy(autoscalingv2.MaxChangePolicySelect),
+					Policies: []autoscalingv2.HPAScalingPolicy{
+						{Type: autoscalingv2.PodsScalingPolicy, Value: 4, PeriodSeconds: hpaScalePeriodSeconds},
+						{Type: autoscalingv2.PercentScalingPolicy, Value: 100, PeriodSeconds: hpaScalePeriodSeconds},
+					},
+				},
 				ScaleDown: &autoscalingv2.HPAScalingRules{
 					StabilizationWindowSeconds: ptr(hpaScaleDownStabilizationSeconds),
+					Policies: []autoscalingv2.HPAScalingPolicy{
+						{Type: autoscalingv2.PercentScalingPolicy, Value: 100, PeriodSeconds: hpaScalePeriodSeconds},
+					},
 				},
 			},
 			Metrics: []autoscalingv2.MetricSpec{
@@ -159,6 +175,10 @@ func cpuUtilizationHPA(namespace, deploymentName string, ac AutoscaleConfig) *au
 			},
 		},
 	}
+}
+
+func ptrPolicy(v autoscalingv2.ScalingPolicySelect) *autoscalingv2.ScalingPolicySelect {
+	return &v
 }
 
 func ensureCPUHorizontalPodAutoscaler(ctx context.Context, clientset kubernetes.Interface, namespace, deploymentName string, ac AutoscaleConfig) error {

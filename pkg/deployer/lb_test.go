@@ -15,11 +15,14 @@ import (
 func TestLbNginxContainer_skipsDockerEntrypoint(t *testing.T) {
 	t.Parallel()
 	c := lbNginxContainer(DefaultLBSpec())
-	if len(c.Command) != 1 || c.Command[0] != "nginx" {
-		t.Fatalf("Command = %v want [nginx]", c.Command)
+	if len(c.Command) != 3 || c.Command[0] != "/bin/sh" || c.Command[1] != "-c" {
+		t.Fatalf("Command = %v want sh -c", c.Command)
 	}
-	if len(c.Args) != 2 || c.Args[0] != "-g" || c.Args[1] != "daemon off;" {
-		t.Fatalf("Args = %v want [-g daemon off;]", c.Args)
+	if !strings.Contains(c.Command[2], "nginx -c") || strings.Contains(c.Command[2], "docker-entrypoint") {
+		t.Fatalf("script = %q", c.Command[2])
+	}
+	if len(c.VolumeMounts) != 1 || c.VolumeMounts[0].SubPath != "" || c.VolumeMounts[0].MountPath != lbNginxConfDir {
+		t.Fatalf("mount = %+v", c.VolumeMounts)
 	}
 	if c.Image != imageNginx {
 		t.Fatalf("Image = %q want %q", c.Image, imageNginx)
@@ -426,5 +429,12 @@ func TestReconcileLBUpstream_updatesConfigMap(t *testing.T) {
 	}
 	if cm.Annotations[lbUpstreamFallbackAnnotation] != "false" {
 		t.Fatalf("fallback annotation = %q want false", cm.Annotations[lbUpstreamFallbackAnnotation])
+	}
+	dep, err := client.AppsV1().Deployments(ns).Get(context.Background(), "lb", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	if dep.Spec.Template.Annotations != nil {
+		t.Fatalf("lb pod template changed: %+v", dep.Spec.Template.Annotations)
 	}
 }
