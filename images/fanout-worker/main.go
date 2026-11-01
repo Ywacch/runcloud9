@@ -126,36 +126,23 @@ func classifyFanoutError(err error) string {
 	}
 }
 
-func fanoutPost(ctx context.Context, pool *pgxpool.Pool, ts timeline.Store, msg fanoutMessage) error {
+func fanoutPost(ctx context.Context, followers FollowerStore, ts timeline.Store, msg fanoutMessage) error {
 	dbStart := time.Now()
-	var username string
-	if err := pool.QueryRow(ctx, `SELECT username FROM users WHERE id = $1`, msg.UserID).Scan(&username); err != nil {
-		return fmt.Errorf("db user lookup: %w", err)
+	username, err := followers.GetAuthor(ctx, msg.UserID)
+	if err != nil {
+		return err
 	}
 	trace.LogWorker(ctx, "db_user_lookup", dbStart)
 
 	dbStart = time.Now()
-	rows, err := pool.Query(ctx, `SELECT follower_id FROM follows WHERE following_id = $1`, msg.UserID)
+	followerIDs, err := followers.GetFollowers(ctx, msg.UserID)
 	if err != nil {
-		return fmt.Errorf("db follower lookup: %w", err)
-	}
-	defer rows.Close()
-
-	var followers []int
-	for rows.Next() {
-		var followerID int
-		if err := rows.Scan(&followerID); err != nil {
-			return fmt.Errorf("db follower scan: %w", err)
-		}
-		followers = append(followers, followerID)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("db follower rows: %w", err)
+		return err
 	}
 	trace.LogWorker(ctx, "db_follower_lookup", dbStart)
 
-	workerFanoutSize.Observe(float64(len(followers)))
-	workerWriteTotal.WithLabelValues(ts.Engine()).Add(float64(len(followers)))
+	workerFanoutSize.Observe(float64(len(followerIDs)))
+	workerWriteTotal.WithLabelValues(ts.Engine()).Add(float64(len(followerIDs)))
 	payload, _ := json.Marshal(map[string]any{
 		"post_id":    msg.PostID,
 		"author_id":  msg.UserID,
@@ -164,8 +151,8 @@ func fanoutPost(ctx context.Context, pool *pgxpool.Pool, ts timeline.Store, msg 
 		"created_at": msg.CreatedAt,
 	})
 	redisStart := time.Now()
-	userIDs := make([]int64, len(followers))
-	for i, followerID := range followers {
+	userIDs := make([]int64, len(followerIDs))
+	for i, followerID := range followerIDs {
 		userIDs[i] = int64(followerID)
 	}
 	item := timeline.Item{
@@ -181,7 +168,7 @@ func fanoutPost(ctx context.Context, pool *pgxpool.Pool, ts timeline.Store, msg 
 	return nil
 }
 
-func processDelivery(ctx context.Context, pool *pgxpool.Pool, ts timeline.Store, d amqp.Delivery) uint64 {
+func processDelivery(ctx context.Context, followers FollowerStore, ts timeline.Store, d amqp.Delivery) uint64 {
 	start := time.Now()
 	defer func() {
 		workerProcessingDuration.Observe(time.Since(start).Seconds())
@@ -196,7 +183,7 @@ func processDelivery(ctx context.Context, pool *pgxpool.Pool, ts timeline.Store,
 		return d.DeliveryTag
 	}
 
-	if err := fanoutPost(ctx, pool, ts, msg); err != nil {
+	if err := fanoutPost(ctx, followers, ts, msg); err != nil {
 		reason := classifyFanoutError(err)
 		workerErrorsTotal.WithLabelValues(reason).Inc()
 		slog.Error("fanout failed", "post_id", msg.PostID, "author_id", msg.UserID, "reason", reason, "error", err, "request_id", trace.RequestID(ctx))
@@ -300,6 +287,7 @@ func main() {
 		}
 	}
 	defer pool.Close()
+	followers := newPGFollowerStore(pool)
 
 	// AMQP connection with retry for RabbitMQ startup lag.
 	var conn *amqp.Connection
@@ -451,7 +439,7 @@ func main() {
 					if !ok {
 						return
 					}
-					tag := processDelivery(ctx, pool, timelineStore, d)
+					tag := processDelivery(ctx, followers, timelineStore, d)
 					select {
 					case ackCh <- tag:
 					case <-ctx.Done():

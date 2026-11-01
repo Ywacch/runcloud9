@@ -53,7 +53,8 @@ type Config struct {
 }
 
 type Server struct {
-	db       *DB
+	store    SocialStore
+	pg       *DB
 	cache    *Cache
 	timeline timeline.Store
 	proxy    *ProxyClient
@@ -221,7 +222,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	user, err := s.db.GetUser(ctx, req.UserID)
+	user, err := s.store.GetUser(ctx, req.UserID)
 	if errors.Is(err, ErrNotFound) {
 		jsonError(w, http.StatusNotFound, "user not found")
 		return
@@ -231,7 +232,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	post, err := s.db.InsertPost(ctx, req.UserID, req.Content, req.ReplyToID)
+	post, err := s.store.InsertPost(ctx, req.UserID, req.Content, req.ReplyToID)
 	if errors.Is(err, ErrNotFound) {
 		jsonError(w, http.StatusNotFound, "reply parent not found")
 		return
@@ -260,7 +261,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	followers, err := s.db.GetFollowers(ctx, post.UserID)
+	followers, err := s.store.GetFollowers(ctx, post.UserID)
 	if err == nil && len(followers) > 0 && s.timeline != nil {
 		payload, _ := json.Marshal(map[string]any{
 			"post_id":    post.ID,
@@ -303,7 +304,7 @@ func (s *Server) handleThreadPool(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	entries, err := s.db.ListThreadPool(r.Context(), 50)
+	entries, err := s.store.ListThreadPool(r.Context(), 50)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to list threads")
 		return
@@ -322,7 +323,7 @@ func (s *Server) handleThread(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid thread root id")
 		return
 	}
-	thread, err := s.db.GetThread(r.Context(), rootID)
+	thread, err := s.store.GetThread(r.Context(), rootID)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to fetch thread")
 		return
@@ -361,7 +362,7 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 
 	var items []FeedItem
 	stats := &feedCacheStats{hits: &s.cacheHits, misses: &s.cacheMisses}
-	items, mode, err = fetchFeedItems(ctx, s.timeline, s.cfg.FeedPageSize, userID, stats, s.db.GetFeedPull)
+	items, mode, err = fetchFeedItems(ctx, s.timeline, s.cfg.FeedPageSize, userID, stats, s.store.GetFeedPull)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to fetch feed")
 		return
@@ -385,14 +386,14 @@ func decodeFollowRequest(w http.ResponseWriter, r *http.Request) (followRequest,
 }
 
 func (s *Server) validateFollowUsers(ctx context.Context, w http.ResponseWriter, followerID, followingID int) bool {
-	if _, err := s.db.GetUser(ctx, followerID); errors.Is(err, ErrNotFound) {
+	if _, err := s.store.GetUser(ctx, followerID); errors.Is(err, ErrNotFound) {
 		jsonError(w, http.StatusNotFound, "follower not found")
 		return false
 	} else if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to validate follower")
 		return false
 	}
-	if _, err := s.db.GetUser(ctx, followingID); errors.Is(err, ErrNotFound) {
+	if _, err := s.store.GetUser(ctx, followingID); errors.Is(err, ErrNotFound) {
 		jsonError(w, http.StatusNotFound, "following user not found")
 		return false
 	} else if err != nil {
@@ -415,7 +416,7 @@ func (s *Server) handleFollow(w http.ResponseWriter, r *http.Request) {
 	if !s.validateFollowUsers(ctx, w, req.FollowerID, req.FollowingID) {
 		return
 	}
-	if err := s.db.Follow(ctx, req.FollowerID, req.FollowingID); err != nil {
+	if err := s.store.Follow(ctx, req.FollowerID, req.FollowingID); err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to follow")
 		return
 	}
@@ -435,7 +436,7 @@ func (s *Server) handleUnfollow(w http.ResponseWriter, r *http.Request) {
 	if !s.validateFollowUsers(ctx, w, req.FollowerID, req.FollowingID) {
 		return
 	}
-	if err := s.db.Unfollow(ctx, req.FollowerID, req.FollowingID); err != nil {
+	if err := s.store.Unfollow(ctx, req.FollowerID, req.FollowingID); err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to unfollow")
 		return
 	}
@@ -454,7 +455,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			err   error
 		)
 		if query != "" {
-			users, err = s.db.SearchUsersByUsername(r.Context(), query, 20)
+			users, err = s.store.SearchUsersByUsername(r.Context(), query, 20)
 			if err != nil {
 				jsonError(w, http.StatusInternalServerError, "failed to search users")
 				return
@@ -462,7 +463,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{"users": users, "query": query})
 			return
 		}
-		users, err = s.db.ListUsers(r.Context(), 20)
+		users, err = s.store.ListUsers(r.Context(), 20)
 		if err != nil {
 			jsonError(w, http.StatusInternalServerError, "failed to list users")
 			return
@@ -479,7 +480,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadRequest, "username is required")
 			return
 		}
-		user, err := s.db.CreateUser(r.Context(), username)
+		user, err := s.store.CreateUser(r.Context(), username)
 		if errors.Is(err, ErrUsernameTaken) {
 			jsonError(w, http.StatusConflict, "username already exists")
 			return
@@ -508,7 +509,7 @@ func (s *Server) handleUser(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
-	user, err := s.db.GetUser(r.Context(), id)
+	user, err := s.store.GetUser(r.Context(), id)
 	if errors.Is(err, ErrNotFound) {
 		jsonError(w, http.StatusNotFound, "user not found")
 		return
@@ -549,7 +550,7 @@ func (s *Server) handleUserPool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := parseUserPoolLimit(r.URL.Query().Get("limit"))
-	ids, err := s.db.QueryUserPool(r.Context(), userPoolSQL(r.URL.Query().Get("segment"), limit))
+	ids, err := s.store.QueryUserPool(r.Context(), userPoolSQL(r.URL.Query().Get("segment"), limit))
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to fetch user ids")
 		return
@@ -563,7 +564,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	if err := s.db.Ping(ctx); err != nil {
+	if err := s.store.Ping(ctx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "db": "unreachable"})
 		return
 	}
@@ -695,12 +696,13 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 		)
 	}
 
-	s := &Server{db: newDB(pool, readPools, router), cfg: cfg}
-	if err := s.db.InitSchema(ctx); err != nil {
+	pg := newDB(pool, readPools, router)
+	s := &Server{store: pg, pg: pg, cfg: cfg}
+	if err := s.store.InitSchema(ctx); err != nil {
 		pool.Close()
 		return nil, err
 	}
-	if err := s.db.SeedIfEmpty(ctx); err != nil {
+	if err := s.store.SeedIfEmpty(ctx); err != nil {
 		pool.Close()
 		return nil, err
 	}
@@ -780,8 +782,8 @@ func main() {
 		slog.Error("newServer failed", "error", err)
 		os.Exit(1)
 	}
-	defer s.db.pool.Close()
-	defer s.db.Close()
+	defer s.pg.pool.Close()
+	defer s.pg.Close()
 	if s.mq != nil {
 		defer s.mq.Close()
 	}
