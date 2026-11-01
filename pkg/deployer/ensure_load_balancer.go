@@ -3,7 +3,8 @@ package deployer
 const autoLoadBalancerNodeID = "auto-load-balancer"
 
 // EnsureLoadBalancerForReplicas injects a load balancer node and lb -> app-server
-// edges when any app-server has replicas > 1 and the design has no lb node.
+// edges when any app-server can run more than one pod and the design has no lb node.
+// That includes a fixed replica count above 1 and CPU autoscale whose max is above 1.
 // Call after NormalizeDesign so node types and config keys are canonical.
 func EnsureLoadBalancerForReplicas(d *DeploymentDesign) {
 	if d == nil {
@@ -51,11 +52,22 @@ func appServerIDsNeedingLoadBalancer(d DeploymentDesign) []string {
 		if n.Type != "app-server" {
 			continue
 		}
-		if parseReplicaCount(n.Config, 1) > 1 {
+		if appServerNeedsLoadBalancer(n.Config) {
 			ids = append(ids, n.ID)
 		}
 	}
 	return ids
+}
+
+func appServerNeedsLoadBalancer(config map[string]any) bool {
+	if parseReplicaCount(config, 1) > 1 {
+		return true
+	}
+	ac, err := parseAutoscaleConfig(config)
+	if err != nil || ac == nil {
+		return false
+	}
+	return ac.Max > 1
 }
 
 func hasConnection(d DeploymentDesign, sourceID, targetID string) bool {
