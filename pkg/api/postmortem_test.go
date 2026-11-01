@@ -1,102 +1,133 @@
 package api
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/inference"
-	"github.com/ywacch/cloud9/pkg/metrics"
-	"github.com/ywacch/cloud9/pkg/rules"
+	"github.com/ywacch/cloud9/pkg/store"
 )
 
-func TestFilterVerifiedPostmortemClaims_DropsRejected(t *testing.T) {
-	t.Parallel()
+type postmortemStub struct {
+	stubInferenceService
+	resp *inference.PostmortemResponse
+}
 
-	dc := deployer.DesignConfig{
-		Roles: map[string][]deployer.InstanceConfig{
-			"db": {{
-				ID: "db1",
-				Settings: map[string]any{
-					"replicationMode": "async",
+func (s *postmortemStub) Postmortem(context.Context, any) (*inference.PostmortemResponse, error) {
+	s.postmortemCalls.Add(1)
+	return s.resp, nil
+}
+
+func TestRunPostmortemAfterTeardown_StampsPendingThenResult(t *testing.T) {
+	ns := "ns-pm-pending-ok"
+	st := &fakeDeploymentStore{
+		byNS: map[string]store.DeploymentRow{
+			ns: {
+				Namespace: ns,
+				UserID:    "dev-user",
+				Template:  "url-shortener",
+				Status:    "terminated",
+				Design: map[string]any{
+					"template": "url-shortener",
+					"nodes": []any{
+						map[string]any{
+							"id":   "db1",
+							"type": "db",
+							"config": map[string]any{
+								"readConsistency": "replica",
+							},
+						},
+					},
 				},
-			}},
-		},
-	}
-	input := postmortemLedgerInput(dc)
-	ledger := metrics.BuildLedger(input)
-	fired := metrics.FiredRuleIDs(input.Hist, nil)
-
-	wire := []inference.WireClaim{
-		{
-			Scope:     "component",
-			Aspect:    "what",
-			Text:      "CPU hit 99 percent.",
-			FactRefs:  []string{"fact:metric:db.cpuUsage.last"},
-			Grounding: "inferred",
-		},
-		{
-			Scope:     "component",
-			Aspect:    "what",
-			Text:      "Database CPU rose.",
-			FactRefs:  []string{"fact:metric:db.cpuUsage.last"},
-			Grounding: "inferred",
-		},
-	}
-
-	got := FilterVerifiedPostmortemClaims(wire, ledger, dc, fired)
-	if len(got) != 1 {
-		t.Fatalf("claims: %+v", got)
-	}
-	if got[0].Text != "Database CPU rose." {
-		t.Fatalf("claim: %+v", got[0])
-	}
-}
-
-func TestFilterVerifiedPostmortemClaims_PreservesRequestID(t *testing.T) {
-	t.Parallel()
-
-	dc := deployer.DesignConfig{
-		Roles: map[string][]deployer.InstanceConfig{
-			"db": {{ID: "db1", Settings: map[string]any{"replicationMode": "async"}}},
-		},
-	}
-	input := postmortemLedgerInput(dc)
-	ledger := metrics.BuildLedger(input)
-	fired := metrics.FiredRuleIDs(input.Hist, nil)
-
-	wire := []inference.WireClaim{{
-		Scope:     "component",
-		Aspect:    "what",
-		Text:      "Database CPU rose.",
-		FactRefs:  []string{"fact:metric:db.cpuUsage.last"},
-		Grounding: "inferred",
-		RequestID: "req-trace-1",
-	}}
-
-	got := FilterVerifiedPostmortemClaims(wire, ledger, dc, fired)
-	if len(got) != 1 || got[0].RequestID != "req-trace-1" {
-		t.Fatalf("claim: %+v", got)
-	}
-}
-
-func postmortemLedgerInput(dc deployer.DesignConfig) metrics.LedgerInput {
-	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
-	t1 := t0.Add(time.Minute)
-	hist := []metrics.DeploymentMetrics{
-		{Timestamp: t0, Events: []metrics.Event{{Timestamp: t0, Type: "threshold", RuleID: rules.IDCacheHitLow}}},
-		{
-			Timestamp: t1,
-			Components: map[string]metrics.ComponentMetrics{
-				"db": {
-					Component: "db",
-					CPUUsage:  0.6,
-					CPULimit:  1,
-					CPUSource: metrics.ResourceSourceMetricsAPI,
+				MetricsSummary: map[string]any{
+					"sentinel": "keep-me",
+					"session_history": []any{
+						map[string]any{
+							"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+							"components": map[string]any{
+								"db": map[string]any{
+									"component": "db",
+									"cpuUsage":  0.4,
+									"cpuLimit":  1.0,
+								},
+							},
+						},
+					},
 				},
 			},
-			Events: []metrics.Event{{Timestamp: t1, Type: "cascade", RuleID: rules.IDCascadeCacheDB}},
+		},
+		users: map[string]store.UserRecord{
+			"dev-user": {IsInternal: true},
 		},
 	}
-	return metrics.LedgerInput{DesignConfig: dc, Hist: hist, Final: &hist[1]}
+	stub := &postmortemStub{
+		resp: &inference.PostmortemResponse{
+			Status:  PostmortemStatusOK,
+			Summary: "Steady cache pressure after warmup.",
+		},
+	}
+	h := NewHandler(nil, st, nil, nil, nil, nil, nil, nil, nil)
+	h.inferenceClient = stub
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		h.runPostmortemAfterTeardown(ns)
+	}()
+	wg.Wait()
+
+	row, err := st.GetDeployment(context.Background(), ns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.MetricsSummary["sentinel"] != "keep-me" {
+		t.Fatalf("sentinel lost: %+v", row.MetricsSummary)
+	}
+	raw, ok := row.MetricsSummary["ai_postmortem"].(map[string]any)
+	if !ok {
+		t.Fatalf("ai_postmortem missing: %+v", row.MetricsSummary)
+	}
+	if raw["status"] != PostmortemStatusOK {
+		t.Fatalf("status: got %v want %q", raw["status"], PostmortemStatusOK)
+	}
+	if stub.postmortemCalls.Load() != 1 {
+		t.Fatalf("postmortem calls: got %d want 1", stub.postmortemCalls.Load())
+	}
+}
+
+func TestRunPostmortemAfterTeardown_NonInternalNoStamp(t *testing.T) {
+	ns := "ns-pm-no-stamp"
+	st := &fakeDeploymentStore{
+		byNS: map[string]store.DeploymentRow{
+			ns: {
+				Namespace:      ns,
+				UserID:         "free-user",
+				Status:         "terminated",
+				MetricsSummary: map[string]any{},
+			},
+		},
+		users: map[string]store.UserRecord{
+			"free-user": {},
+		},
+	}
+	stub := &postmortemStub{
+		resp: &inference.PostmortemResponse{Status: PostmortemStatusOK, Summary: "x"},
+	}
+	h := NewHandler(nil, st, nil, nil, nil, nil, nil, nil, nil)
+	h.inferenceClient = stub
+	h.runPostmortemAfterTeardown(ns)
+
+	row, err := st.GetDeployment(context.Background(), ns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := row.MetricsSummary["ai_postmortem"]; ok {
+		t.Fatalf("unexpected ai_postmortem for non-internal: %+v", row.MetricsSummary)
+	}
+	if stub.postmortemCalls.Load() != 0 {
+		t.Fatalf("postmortem calls: got %d want 0", stub.postmortemCalls.Load())
+	}
 }
