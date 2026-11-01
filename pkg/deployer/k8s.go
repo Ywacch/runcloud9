@@ -106,7 +106,10 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 	resources := ResolveNodeResources(cfg.Node.Type, cfg.Node.Config)
 
 	// replicas can be tuned per node type (app-server / worker bounds in ValidateRuntimeContract).
-	replicas := parseReplicaCount(cfg.Node.Config, 1)
+	replicas, err := deployReplicaCount(cfg.Node.Config, 1)
+	if err != nil {
+		return err
+	}
 
 	switch cfg.Node.Type {
 	case "db":
@@ -596,6 +599,17 @@ func (k *K8sDeployer) deployAppServer(ctx context.Context, cfg DeployConfig, _ c
 		}
 	}
 
+	if ac, err := parseAutoscaleConfig(cfg.Node.Config); err != nil {
+		return err
+	} else if ac != nil {
+		if len(groups) != 1 {
+			return fmt.Errorf("autoscale requires uniform instance size across replicas")
+		}
+		if err := ensureCPUHorizontalPodAutoscaler(ctx, k.clientset, cfg.Namespace, "app-server", *ac); err != nil {
+			return err
+		}
+	}
+
 	svcApp := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: "app-server", Namespace: cfg.Namespace},
 		Spec: corev1.ServiceSpec{
@@ -667,6 +681,17 @@ func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, _ core
 		}
 		if _, err := k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil {
 			return fmt.Errorf("create worker deployment %s: %w", depName, err)
+		}
+	}
+
+	if ac, err := parseAutoscaleConfig(cfg.Node.Config); err != nil {
+		return err
+	} else if ac != nil {
+		if len(groups) != 1 {
+			return fmt.Errorf("autoscale requires uniform instance size across replicas")
+		}
+		if err := ensureCPUHorizontalPodAutoscaler(ctx, k.clientset, cfg.Namespace, "worker", *ac); err != nil {
+			return err
 		}
 	}
 

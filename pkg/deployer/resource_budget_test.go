@@ -40,6 +40,29 @@ func TestSumDesignResources_urlShortenerDefaults(t *testing.T) {
 	assertQuantityEqual(t, got.Memory, "1152Mi", "memory total")
 }
 
+func TestReplicasForBudget_autoscaleUsesMax(t *testing.T) {
+	t.Parallel()
+
+	node := DeploymentNode{
+		Type: "app-server",
+		Config: map[string]any{
+			"replicas":     1,
+			"instanceSize": "small",
+		},
+	}
+	if got := replicasForBudget(node); got != 1 {
+		t.Fatalf("without autoscale: got %d want 1", got)
+	}
+	node.Config["autoscale"] = map[string]any{
+		"min":              1,
+		"max":              3,
+		"targetCPUPercent": 70,
+	}
+	if got := replicasForBudget(node); got != 3 {
+		t.Fatalf("with autoscale.max=3: got %d want 3", got)
+	}
+}
+
 func TestSumDesignResources_dbReadReplicasIncreaseBudget(t *testing.T) {
 	t.Parallel()
 

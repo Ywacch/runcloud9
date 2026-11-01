@@ -23,12 +23,7 @@ func ValidateTierTopology(design DeploymentDesign, limits TierTopologyLimits) er
 				return fmt.Errorf("message queues and workers require an active subscription — remove async components or upgrade")
 			}
 		case "app-server":
-			replicas, err := replicaCountFromConfig(
-				node.Config,
-				1,
-				minAppServerReplicas,
-				maxAppServerReplicas,
-			)
+			replicas, err := effectiveAppServerReplicasForTier(node)
 			if err != nil {
 				return fmt.Errorf("app server %q: %w", node.Name, err)
 			}
