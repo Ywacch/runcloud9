@@ -55,6 +55,11 @@ func (h *Handler) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "component not configured for introspection")
 		return
 	}
+	if component == "cache" && introSpec.Engine == "redis" {
+		if mq, hasMQ := tmpl.Introspection["mq"]; hasMQ {
+			introSpec.KeyPatterns = introspect.AppendQueueStreamKeys(introSpec.KeyPatterns, mq.Queues)
+		}
+	}
 
 	action := introspectAction(r.URL.Path, namespace, component)
 	if action == "" {

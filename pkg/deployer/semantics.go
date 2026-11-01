@@ -248,7 +248,7 @@ func AssessTopology(design DeploymentDesign) TopologyAssessment {
 			Explanation: msgPresenceCacheWithoutDB,
 		}
 	}
-	if hasWorker && !hasMQ {
+	if hasWorker && !hasMQ && workQueueCacheID(design) == "" {
 		return TopologyAssessment{
 			Verdict:     VerdictInvalid,
 			Explanation: msgPresenceWorkerWithoutMQ,
@@ -258,6 +258,12 @@ func AssessTopology(design DeploymentDesign) TopologyAssessment {
 		return TopologyAssessment{
 			Verdict:     VerdictInvalid,
 			Explanation: msgPresenceMQWithoutWorker,
+		}
+	}
+	if msg := workerInfraIssue(design, nodeMap, workQueueCacheID(design)); msg != "" {
+		return TopologyAssessment{
+			Verdict:     VerdictInvalid,
+			Explanation: msg,
 		}
 	}
 

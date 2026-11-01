@@ -220,6 +220,25 @@ func ValidateTopology(design DeploymentDesign) error {
 		}
 	}
 
+	queueCacheID := workQueueCacheID(design)
+	if msg := workerInfraIssue(design, nodeMap, queueCacheID); msg != "" {
+		return fmt.Errorf("%s", msg)
+	}
+
+	// UNDERSTAND: DeploymentConn uses source -> target where the source DEPENDS ON the target.
+	// Kahn's algorithm yields dependency-graph sources first, so we reverse the result to ensure
+	// infrastructure (targets) deploys before application (sources). DeploymentOrder also performs
+	// cycle detection for us.
+	if _, err := DeploymentOrder(design); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// workerInfraIssue reports the first missing worker dependency.
+// A cache that hosts work_queue satisfies the queue edge in place of an mq node.
+func workerInfraIssue(design DeploymentDesign, nodeMap map[string]DeploymentNode, queueCacheID string) string {
 	for _, workerNode := range design.Nodes {
 		if workerNode.Type != "worker" {
 			continue
@@ -239,6 +258,9 @@ func ValidateTopology(design DeploymentDesign) error {
 				if target.Type == "mq" {
 					hasMQDep = true
 				}
+				if queueCacheID != "" && target.ID == queueCacheID && target.Type == "cache" {
+					hasMQDep = true
+				}
 			}
 			if conn.TargetID == workerNode.ID {
 				src, ok := nodeMap[conn.SourceID]
@@ -248,25 +270,19 @@ func ValidateTopology(design DeploymentDesign) error {
 			}
 		}
 		if !hasDBDep {
-			return fmt.Errorf("%s", workerMissingDBMessage(workerNode.Name))
+			return workerMissingDBMessage(workerNode.Name)
 		}
 		if !hasMQDep {
 			if hasInboundMQ {
-				return fmt.Errorf("%s", workerWrongMQDirectionMessage(workerNode.Name))
+				return workerWrongMQDirectionMessage(workerNode.Name)
 			}
-			return fmt.Errorf("%s", workerMissingMQMessage(workerNode.Name))
+			if queueCacheID != "" {
+				return workerMissingQueueCacheMessage(workerNode.Name)
+			}
+			return workerMissingMQMessage(workerNode.Name)
 		}
 	}
-
-	// UNDERSTAND: DeploymentConn uses source -> target where the source DEPENDS ON the target.
-	// Kahn's algorithm yields dependency-graph sources first, so we reverse the result to ensure
-	// infrastructure (targets) deploys before application (sources). DeploymentOrder also performs
-	// cycle detection for us.
-	if _, err := DeploymentOrder(design); err != nil {
-		return err
-	}
-
-	return nil
+	return ""
 }
 
 // DeploymentOrder returns nodes in dependency order (infra before app).
