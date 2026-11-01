@@ -124,7 +124,7 @@ jobs:
     defaultNodeType: cache
   - id: work_queue
     required: false
-    allowedEngines: [rabbitmq]
+    allowedEngines: [rabbitmq, redis]
     defaultNodeType: mq
 prometheusMetrics:
   # Metric key convention (neutral, OSS-facing):
