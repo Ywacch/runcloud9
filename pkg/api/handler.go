@@ -61,6 +61,7 @@ type Handler struct {
 	inferenceTokenBudget *SessionTokenBudget
 	actAs                *actAsValidator
 	manifestRNG          func() int64
+	lbEndpointsWatch     *deployer.LBEndpointsWatcher
 }
 
 type deploymentStore interface {
@@ -150,6 +151,7 @@ func NewHandler(
 		inferenceClient:      inferenceSvc,
 		inferenceTokenBudget: NewSessionTokenBudget(),
 		manifestRNG:          randomManifestRNGSeed,
+		lbEndpointsWatch:     deployer.NewLBEndpointsWatcher(),
 	}
 }
 
@@ -750,6 +752,7 @@ func (h *Handler) orchestrate(
 		if err := deployer.ReconcileLBUpstream(ctx, h.clientset, namespace, design); err != nil {
 			log.Printf("lb upstream reconcile failed namespace=%s: %v", namespace, err)
 		}
+		h.lbEndpointsWatch.Start(h.clientset, namespace, design)
 	}
 
 	if h.clientset != nil {
@@ -1274,6 +1277,7 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 	if h.metricsCollector != nil {
 		h.metricsCollector.Cleanup(namespace)
 	}
+	h.lbEndpointsWatch.Stop(namespace)
 	h.ForgetActAsCache(namespace)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -1309,6 +1313,13 @@ func (h *Handler) cancelProvision(namespace string) {
 	h.provisionMu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+}
+
+// StopLBEndpointsWatch stops reconciling nginx upstreams for a terminated session.
+func (h *Handler) StopLBEndpointsWatch(namespace string) {
+	if h.lbEndpointsWatch != nil {
+		h.lbEndpointsWatch.Stop(namespace)
 	}
 }
 
