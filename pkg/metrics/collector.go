@@ -74,7 +74,9 @@ type MetricsCollector struct {
 	runInfoMu               sync.RWMutex
 	runInfo                 map[string]RunInfo
 	scaleDesiredMu          sync.Mutex
-	scaleDesired            map[string]map[string]int32                                                                           // namespace → component → last HPA desired
+	scaleDesired            map[string]map[string]int32 // namespace → component → last HPA desired
+	scaleLagMu              sync.Mutex
+	scaleLag                map[string]scaleLagState
 	publisherCollectHook    func(ctx context.Context, namespace, template string, topo TopologyFlags) (*DeploymentMetrics, error) // tests only
 	replSQLMu               sync.Mutex
 	replSQLCache            map[string]replSQLCacheEntry // key = namespace
@@ -176,6 +178,11 @@ func (c *MetricsCollector) Cleanup(namespace string) {
 		delete(c.scaleDesired, namespace)
 	}
 	c.scaleDesiredMu.Unlock()
+	c.scaleLagMu.Lock()
+	if c.scaleLag != nil {
+		delete(c.scaleLag, namespace)
+	}
+	c.scaleLagMu.Unlock()
 	c.clearRunInfo(namespace)
 	c.OpenPostgresSession(namespace)
 }
@@ -1305,6 +1312,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	// so the frontend gets everything on one WebSocket connection.
 	if c.loadgen != nil {
 		stats := c.loadgen.GetStats(namespace)
+		lagging := appServerScaleLagging(dm.Components["app-server"])
+		stats = c.applyScaleLagToLoadStats(namespace, lagging, stats)
 		dm.LoadGen = &stats
 		if stats.Active && len(stats.RecentIntervals) > 0 {
 			c.mergeClientLatencyHistory(namespace, stats.RecentIntervals)
