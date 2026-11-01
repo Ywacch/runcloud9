@@ -20,6 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
+	"github.com/ywacch/cloud9/pkg/templateapp/jobs/queue"
 	"github.com/ywacch/cloud9/pkg/templateapp/jobs/timeline"
 	"github.com/ywacch/cloud9/pkg/templateapp/postgres"
 	"github.com/ywacch/cloud9/pkg/templateapp/readrouter"
@@ -58,7 +59,7 @@ type Server struct {
 	cache    *Cache
 	timeline timeline.Store
 	proxy    *ProxyClient
-	mq       *MQPublisher
+	workQ    queue.Queue
 	cfg      Config
 
 	cacheHits   atomic.Int64
@@ -242,14 +243,14 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.mq != nil {
+	if s.workQ != nil {
 		msg, _ := json.Marshal(map[string]any{
 			"post_id":    post.ID,
 			"user_id":    post.UserID,
 			"content":    post.Content,
 			"created_at": post.CreatedAt,
 		})
-		if err := s.mq.Publish(ctx, msg); err != nil {
+		if err := s.workQ.Publish(ctx, msg); err != nil {
 			postTotal.WithLabelValues("async_error").Inc()
 			mqPublishErrors.Inc()
 			jsonError(w, http.StatusInternalServerError, "failed to enqueue post")
@@ -586,11 +587,22 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	mqHealth := "disabled"
 	mode := "pull"
-	if s.mq != nil {
+	if s.workQ != nil {
 		mode = "push"
-		if err := s.mq.Ping(); err != nil {
-			mqHealth = "error"
-		} else {
+		switch q := s.workQ.(type) {
+		case *queue.RabbitMQ:
+			if err := q.Ping(); err != nil {
+				mqHealth = "error"
+			} else {
+				mqHealth = "ok"
+			}
+		case *queue.Streams:
+			if err := q.Ping(ctx); err != nil {
+				mqHealth = "error"
+			} else {
+				mqHealth = "ok"
+			}
+		default:
 			mqHealth = "ok"
 		}
 	}
@@ -751,16 +763,21 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 		}
 	}
 
-	if cfg.MQHost != "" {
-		mq, err := NewMQPublisher(cfg.MQHost, cfg.MQPort, "fanout")
+	var queueRedis redis.UniversalClient
+	if s.cache != nil {
+		queueRedis = s.cache.redisClient()
+	}
+	qCfg := queue.EnvConfig("fanout", prometheus.DefaultRegisterer, queueRedis)
+	if strings.TrimSpace(qCfg.HostEnv) != "" {
+		q, err := queue.Open(qCfg)
 		if err != nil {
-			slog.Warn("rabbitmq connection failed; falling back to pull mode", "error", err)
+			slog.Warn("work queue connection failed; falling back to pull mode", "error", err, "engine", qCfg.EngineEnv)
 		} else {
-			s.mq = mq
+			s.workQ = q
 		}
 	}
 
-	if s.mq != nil {
+	if s.workQ != nil {
 		slog.Info("social-feed mode: push (fan-out on write)")
 	} else {
 		slog.Info("social-feed mode: pull (fan-out on read)")
@@ -784,8 +801,12 @@ func main() {
 	}
 	defer s.pg.pool.Close()
 	defer s.pg.Close()
-	if s.mq != nil {
-		defer s.mq.Close()
+	if s.workQ != nil {
+		defer func() {
+			if rmq, ok := s.workQ.(*queue.RabbitMQ); ok {
+				_ = rmq.Close()
+			}
+		}()
 	}
 
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: s.routes()}

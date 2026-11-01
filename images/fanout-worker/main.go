@@ -19,11 +19,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/redis/go-redis/v9"
+	"github.com/ywacch/cloud9/pkg/templateapp/jobs/queue"
 	"github.com/ywacch/cloud9/pkg/templateapp/jobs/timeline"
 	"github.com/ywacch/cloud9/pkg/templateapp/trace"
-	"github.com/ywacch/cloud9/pkg/templateapp/tracemq"
 )
 
 var (
@@ -168,33 +167,31 @@ func fanoutPost(ctx context.Context, followers FollowerStore, ts timeline.Store,
 	return nil
 }
 
-func processDelivery(ctx context.Context, followers FollowerStore, ts timeline.Store, d amqp.Delivery) uint64 {
+func processMessage(ctx context.Context, followers FollowerStore, ts timeline.Store, body []byte) error {
 	start := time.Now()
 	defer func() {
 		workerProcessingDuration.Observe(time.Since(start).Seconds())
 	}()
 
-	ctx = tracemq.ContextFromDelivery(ctx, d)
-
 	var msg fanoutMessage
-	if err := json.Unmarshal(d.Body, &msg); err != nil {
+	if err := json.Unmarshal(body, &msg); err != nil {
 		workerErrorsTotal.WithLabelValues("decode").Inc()
 		slog.Error("invalid fanout message", "error", err)
-		return d.DeliveryTag
+		return err
 	}
 
 	if err := fanoutPost(ctx, followers, ts, msg); err != nil {
 		reason := classifyFanoutError(err)
 		workerErrorsTotal.WithLabelValues(reason).Inc()
 		slog.Error("fanout failed", "post_id", msg.PostID, "author_id", msg.UserID, "reason", reason, "error", err, "request_id", trace.RequestID(ctx))
-	} else {
-		trace.LogWorker(ctx, "fanout", start)
-		workerProcessedTotal.Inc()
+		return err
 	}
-	return d.DeliveryTag
+	trace.LogWorker(ctx, "fanout", start)
+	workerProcessedTotal.Inc()
+	return nil
 }
 
-func healthHandler(pool *pgxpool.Pool, conn *amqp.Connection, rdb *redis.Client) http.HandlerFunc {
+func healthHandler(pool *pgxpool.Pool, mqStatus func(context.Context) string, rdb *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -206,10 +203,7 @@ func healthHandler(pool *pgxpool.Pool, conn *amqp.Connection, rdb *redis.Client)
 		if err := pool.QueryRow(ctx, "SELECT 1").Scan(new(int)); err != nil {
 			db = "error"
 		}
-		mq := "ok"
-		if conn == nil || conn.IsClosed() {
-			mq = "error"
-		}
+		mq := mqStatus(ctx)
 		cache := "disabled"
 		if rdb != nil {
 			if rdb.Ping(ctx).Err() != nil {
@@ -228,10 +222,10 @@ func healthHandler(pool *pgxpool.Pool, conn *amqp.Connection, rdb *redis.Client)
 	}
 }
 
-func startMetricsHTTP(pool *pgxpool.Pool, conn *amqp.Connection, rdb *redis.Client) *http.Server {
+func startMetricsHTTP(pool *pgxpool.Pool, mqStatus func(context.Context) string, rdb *redis.Client) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.Handle("/health", healthHandler(pool, conn, rdb))
+	mux.Handle("/health", healthHandler(pool, mqStatus, rdb))
 	srv := &http.Server{Addr: ":8080", Handler: mux}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -255,11 +249,16 @@ func main() {
 	defer stop()
 
 	slog.Info("fanout-worker startup begin")
-	mqHost := requiredEnv("MQ_HOST", "MQ_HOST required for worker")
-	mqPort := envOrDefault("MQ_PORT", "5672")
 	timelineEngine := strings.ToLower(strings.TrimSpace(os.Getenv("TIMELINE_ENGINE")))
 	timelineTTL := time.Duration(parseCacheTTLSeconds(os.Getenv("CACHE_TTL"), 0)) * time.Second
-	slog.Info("startup config resolved", "mqHost", mqHost, "mqPort", mqPort, "timelineEngine", timelineEngine, "timelineTTL", timelineTTL)
+	queueCfg := queue.EnvConfig("fanout", prometheus.DefaultRegisterer, nil)
+	slog.Info("startup config resolved",
+		"timelineEngine", timelineEngine,
+		"timelineTTL", timelineTTL,
+		"workQueueEngine", queueCfg.EngineEnv,
+		"workQueueHost", queueCfg.HostEnv,
+		"workQueuePort", queueCfg.PortEnv,
+	)
 
 	// DB connection with retry so worker doesn't crash-loop while dependencies boot.
 	var pool *pgxpool.Pool
@@ -288,33 +287,6 @@ func main() {
 	}
 	defer pool.Close()
 	followers := newPGFollowerStore(pool)
-
-	// AMQP connection with retry for RabbitMQ startup lag.
-	var conn *amqp.Connection
-	for attempt := 1; ; attempt++ {
-		var err error
-		slog.Info("attempting mq dial", "attempt", attempt, "mqHost", mqHost, "mqPort", mqPort)
-		conn, err = amqp.Dial(fmt.Sprintf("amqp://cloud9:cloud9@%s:%s/", mqHost, mqPort))
-		if err == nil {
-			slog.Info("mq dial established", "attempt", attempt)
-			break
-		}
-		if attempt >= 30 {
-			slog.Error("mq dial failed after retries", "error", err, "attempts", attempt)
-			os.Exit(1)
-		}
-		delay := time.Duration(attempt) * time.Second
-		if delay > 10*time.Second {
-			delay = 10 * time.Second
-		}
-		slog.Warn("mq dial failed, retrying", "error", err, "attempt", attempt, "retryIn", delay)
-		select {
-		case <-time.After(delay):
-		case <-ctx.Done():
-			os.Exit(0)
-		}
-	}
-	defer conn.Close()
 
 	var rdb *redis.Client
 	var timelineStore timeline.Store
@@ -372,58 +344,77 @@ func main() {
 		slog.Error("unsupported TIMELINE_ENGINE", "value", timelineEngine)
 		os.Exit(1)
 	}
+
+	queueCfg.RedisClient = rdb
+	var workQ queue.Queue
+	for attempt := 1; ; attempt++ {
+		if strings.EqualFold(strings.TrimSpace(queueCfg.EngineEnv), "redis") && queueCfg.RedisClient == nil {
+			cacheHost := strings.TrimSpace(queueCfg.HostEnv)
+			if cacheHost == "" {
+				slog.Error("WORK_QUEUE_HOST required for redis work queue")
+				os.Exit(1)
+			}
+			cachePort := queueCfg.PortEnv
+			if cachePort == "" {
+				cachePort = "6379"
+			}
+			client := redis.NewClient(&redis.Options{
+				Addr: fmt.Sprintf("%s:%s", cacheHost, cachePort),
+			})
+			queueCfg.RedisClient = client
+			rdb = client
+		}
+		var err error
+		workQ, err = queue.Open(queueCfg)
+		if err == nil {
+			slog.Info("work queue opened", "engine", workQ.Engine(), "attempt", attempt)
+			break
+		}
+		if attempt >= 30 {
+			slog.Error("work queue open failed after retries", "error", err, "attempts", attempt)
+			os.Exit(1)
+		}
+		delay := time.Duration(attempt) * time.Second
+		if delay > 10*time.Second {
+			delay = 10 * time.Second
+		}
+		slog.Warn("work queue open failed, retrying", "error", err, "attempt", attempt, "retryIn", delay)
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			os.Exit(0)
+		}
+	}
+	if rmq, ok := workQ.(*queue.RabbitMQ); ok {
+		defer func() { _ = rmq.Close() }()
+	}
 	if rdb != nil {
 		defer rdb.Close()
 	}
 
-	ch, err := conn.Channel()
-	if err != nil {
-		slog.Error("mq channel failed", "error", err)
-		os.Exit(1)
+	mqStatus := func(ctx context.Context) string {
+		switch q := workQ.(type) {
+		case *queue.RabbitMQ:
+			if q.Ping() != nil {
+				return "error"
+			}
+		case *queue.Streams:
+			if q.Ping(ctx) != nil {
+				return "error"
+			}
+		}
+		return "ok"
 	}
-	slog.Info("mq channel opened")
-	defer ch.Close()
 
-	slog.Info("declaring queue", "queue", "fanout")
-	if _, err := ch.QueueDeclare("fanout", true, false, false, false, nil); err != nil {
-		slog.Error("queue declare failed", "queue", "fanout", "error", err)
-		os.Exit(1)
-	}
-	slog.Info("queue declared", "queue", "fanout")
-
-	srv := startMetricsHTTP(pool, conn, rdb)
+	srv := startMetricsHTTP(pool, mqStatus, rdb)
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	prefetch := envIntOrDefault("WORKER_PREFETCH", 10)
 	concurrency := envIntOrDefault("WORKER_CONCURRENCY", 1)
-	if err := ch.Qos(prefetch, 0, false); err != nil {
-		slog.Error("failed to set QoS prefetch", "error", err)
-		os.Exit(1)
-	}
-
-	msgs, err := ch.Consume("fanout", "", false, false, false, false, nil)
-	if err != nil {
-		slog.Error("mq consume failed", "error", err)
-		os.Exit(1)
-	}
-	slog.Info("mq consumer registered", "queue", "fanout")
-
-	slog.Info("fanout-worker started", "queue", "fanout", "prefetch", prefetch, "concurrency", concurrency)
-
-	ackCh := make(chan uint64, prefetch+concurrency)
-	ackDone := make(chan struct{})
-	go func() {
-		defer close(ackDone)
-		for tag := range ackCh {
-			if err := ch.Ack(tag, false); err != nil {
-				slog.Warn("mq ack failed", "delivery_tag", tag, "error", err)
-			}
-		}
-	}()
+	slog.Info("fanout-worker started", "queue", "fanout", "engine", workQ.Engine(), "concurrency", concurrency)
 
 	var wg sync.WaitGroup
 	for workerID := 1; workerID <= concurrency; workerID++ {
@@ -431,38 +422,14 @@ func main() {
 		go func(id int) {
 			defer wg.Done()
 			slog.Info("fanout worker goroutine started", "worker_id", id)
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case d, ok := <-msgs:
-					if !ok {
-						return
-					}
-					tag := processDelivery(ctx, followers, timelineStore, d)
-					select {
-					case ackCh <- tag:
-					case <-ctx.Done():
-						return
-					}
-				}
+			err := workQ.Consume(ctx, func(ctx context.Context, body []byte) error {
+				return processMessage(ctx, followers, timelineStore, body)
+			})
+			if err != nil && ctx.Err() == nil {
+				slog.Error("work queue consume ended", "worker_id", id, "error", err)
 			}
 		}(workerID)
 	}
-
-	workersDone := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(workersDone)
-	}()
-
-	select {
-	case <-ctx.Done():
-		slog.Info("fanout-worker shutting down")
-	case <-workersDone:
-		slog.Error("mq consumer channel closed")
-	}
 	wg.Wait()
-	close(ackCh)
-	<-ackDone
+	slog.Info("fanout-worker shutting down")
 }
