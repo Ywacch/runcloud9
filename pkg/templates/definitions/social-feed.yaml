@@ -427,7 +427,7 @@ variations:
 introspection:
   db:
     engine: postgres
-    tables: [users, posts, follows]
+    tables: [users, posts, follows, timelines]
   cache:
     engine: redis
     keyPatterns: ["timeline:*"]
