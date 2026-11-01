@@ -599,7 +599,7 @@ func TestLoadgenSchedule_cpuRamp(t *testing.T) {
 			if !ok {
 				t.Fatal("cpu_ramp missing")
 			}
-			if sched.Label != "CPU ramp" {
+			if sched.Label != "Step up traffic to scale out" {
 				t.Fatalf("label: %q", sched.Label)
 			}
 			if len(sched.Phases) != 3 {
@@ -622,6 +622,11 @@ func TestLoadgenSchedule_cpuRamp(t *testing.T) {
 			if templateID == "social-feed" || templateID == "social-feed-pull" {
 				if !ids["steady"] || !ids["world_cup_goal"] {
 					t.Fatalf("lost schedules: %+v", ids)
+				}
+			}
+			if templateID == "url-shortener" || templateID == "ecommerce" {
+				if !ids["steady"] {
+					t.Fatalf("steady missing: %+v", ids)
 				}
 			}
 			if !ids["cpu_ramp"] {
