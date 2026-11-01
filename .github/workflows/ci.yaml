@@ -39,6 +39,9 @@ jobs:
             go-build-${{ runner.os }}-go1.25-
             go-build-${{ runner.os }}-
 
+      - name: Template image selector script
+        run: bash scripts/ci/changed-template-images_test.sh
+
       - name: Test
         run: |
           if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
