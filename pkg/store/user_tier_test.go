@@ -62,6 +62,7 @@ func TestGetTierLimits(t *testing.T) {
 		wantAllowLB         bool
 		wantAllowMQWorker   bool
 		wantAllowProxyCache bool
+		wantAllowAutoscale  bool
 		wantMaxInstanceSize string
 		wantMaxLoadgenRPS   int
 		wantAllowEngineSwap bool
@@ -69,19 +70,22 @@ func TestGetTierLimits(t *testing.T) {
 	}{
 		{
 			tier: TierFree, wantConcurrent: 1, wantSessionCap: 9, wantMonthlySessions: 3, wantAllTemplates: false,
-			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
+			wantMaxAppReplicas: 5, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
+			wantAllowAutoscale:  false,
 			wantMaxInstanceSize: InstanceSizeMedium, wantMaxLoadgenRPS: LoadgenRPSCapFree,
 			wantAllowEngineSwap: false, wantAllowHeavy: false,
 		},
 		{
 			tier: TierEngineer, wantConcurrent: 1, wantSessionCap: 15, wantMonthlySessions: 20, wantAllTemplates: true,
-			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
+			wantMaxAppReplicas: 5, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
+			wantAllowAutoscale:  false,
 			wantMaxInstanceSize: InstanceSizeLarge, wantMaxLoadgenRPS: LoadgenRPSCapEngineer,
 			wantAllowEngineSwap: true, wantAllowHeavy: false,
 		},
 		{
 			tier: TierInternal, wantConcurrent: 40, wantSessionCap: 30, wantMonthlySessions: 0, wantAllTemplates: true,
-			wantMaxAppReplicas: 3, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
+			wantMaxAppReplicas: 5, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
+			wantAllowAutoscale:  true,
 			wantMaxInstanceSize: InstanceSizeLarge, wantMaxLoadgenRPS: LoadgenRPSCapInternal,
 			wantAllowEngineSwap: true, wantAllowHeavy: true,
 		},
@@ -115,6 +119,9 @@ func TestGetTierLimits(t *testing.T) {
 			if got.AllowProxyCache != tt.wantAllowProxyCache {
 				t.Fatalf("AllowProxyCache = %v, want %v", got.AllowProxyCache, tt.wantAllowProxyCache)
 			}
+			if got.AllowAutoscale != tt.wantAllowAutoscale {
+				t.Fatalf("AllowAutoscale = %v, want %v", got.AllowAutoscale, tt.wantAllowAutoscale)
+			}
 			if got.MaxInstanceSize != tt.wantMaxInstanceSize {
 				t.Fatalf("MaxInstanceSize = %q, want %q", got.MaxInstanceSize, tt.wantMaxInstanceSize)
 			}
@@ -130,6 +137,9 @@ func TestGetTierLimits(t *testing.T) {
 			topo := got.TopologyLimits()
 			if topo.AllowProxyCache != tt.wantAllowProxyCache {
 				t.Fatalf("TopologyLimits().AllowProxyCache = %v, want %v", topo.AllowProxyCache, tt.wantAllowProxyCache)
+			}
+			if topo.AllowAutoscale != tt.wantAllowAutoscale {
+				t.Fatalf("TopologyLimits().AllowAutoscale = %v, want %v", topo.AllowAutoscale, tt.wantAllowAutoscale)
 			}
 		})
 	}

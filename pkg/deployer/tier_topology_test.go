@@ -108,8 +108,14 @@ func TestValidateTierTopology(t *testing.T) {
 			}(),
 		},
 		{
-			name:   "autoscale max blocked on legacy explorer",
-			limits: legacyExplorer,
+			name: "autoscale max blocked on legacy explorer",
+			limits: TierTopologyLimits{
+				MaxAppServerReplicas: 1,
+				AllowLoadBalancer:    false,
+				AllowMQWorker:        false,
+				AllowProxyCache:      false,
+				AllowAutoscale:       true,
+			},
 			design: func() DeploymentDesign {
 				d := urlShortenerLiteDesign()
 				d.Nodes[0].Config["autoscale"] = map[string]interface{}{
@@ -120,6 +126,39 @@ func TestValidateTierTopology(t *testing.T) {
 				return d
 			}(),
 			wantErr: "replicas 3 exceed your plan limit",
+		},
+		{
+			name:   "autoscale blocked when not allowed",
+			limits: launchFree,
+			design: func() DeploymentDesign {
+				d := urlShortenerLiteDesign()
+				d.Nodes[0].Config["autoscale"] = map[string]interface{}{
+					"min":              1,
+					"max":              2,
+					"targetCPUPercent": 70,
+				}
+				return d
+			}(),
+			wantErr: "cpu autoscale is limited to internal accounts",
+		},
+		{
+			name: "autoscale allowed for internal topology",
+			limits: TierTopologyLimits{
+				MaxAppServerReplicas: 3,
+				AllowLoadBalancer:    true,
+				AllowMQWorker:        true,
+				AllowProxyCache:      true,
+				AllowAutoscale:       true,
+			},
+			design: func() DeploymentDesign {
+				d := urlShortenerLiteDesign()
+				d.Nodes[0].Config["autoscale"] = map[string]interface{}{
+					"min":              1,
+					"max":              2,
+					"targetCPUPercent": 70,
+				}
+				return d
+			}(),
 		},
 	}
 	for _, tt := range tests {

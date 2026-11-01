@@ -46,6 +46,7 @@ type TierLimits struct {
 	AllowLoadBalancer    bool
 	AllowMQWorker        bool
 	AllowProxyCache      bool
+	AllowAutoscale       bool   // CPU HPA on app-server and worker; internal only for now
 	MaxInstanceSize      string // small/medium/large ceiling for canvas sizing knobs
 	MaxLoadgenRPS        int    // live loadgen requests-per-second ceiling
 	AllowEngineSwap      bool   // non-default job-engine pairs in the picker
@@ -81,10 +82,11 @@ func GetTierLimits(tier string) TierLimits {
 			SessionCapMins:       30,
 			MaxSessionsPerMonth:  0, // unlimited
 			AllTemplates:         true,
-			MaxAppServerReplicas: 3,
+			MaxAppServerReplicas: 5,
 			AllowLoadBalancer:    true,
 			AllowMQWorker:        true,
 			AllowProxyCache:      true,
+			AllowAutoscale:       true,
 			MaxInstanceSize:      InstanceSizeLarge,
 			MaxLoadgenRPS:        LoadgenRPSCapInternal,
 			AllowEngineSwap:      true,
@@ -97,7 +99,7 @@ func GetTierLimits(tier string) TierLimits {
 			SessionCapMins:       15,
 			MaxSessionsPerMonth:  20,
 			AllTemplates:         true,
-			MaxAppServerReplicas: 3,
+			MaxAppServerReplicas: 5,
 			AllowLoadBalancer:    true,
 			AllowMQWorker:        true,
 			AllowProxyCache:      true,
@@ -113,7 +115,7 @@ func GetTierLimits(tier string) TierLimits {
 			SessionCapMins:       9,
 			MaxSessionsPerMonth:  3,
 			AllTemplates:         false,
-			MaxAppServerReplicas: 3,
+			MaxAppServerReplicas: 5,
 			AllowLoadBalancer:    true,
 			AllowMQWorker:        true,
 			AllowProxyCache:      true,
@@ -151,6 +153,7 @@ func (l TierLimits) TopologyLimits() deployer.TierTopologyLimits {
 		AllowLoadBalancer:    l.AllowLoadBalancer,
 		AllowMQWorker:        l.AllowMQWorker,
 		AllowProxyCache:      l.AllowProxyCache,
+		AllowAutoscale:       l.AllowAutoscale,
 	}
 }
 

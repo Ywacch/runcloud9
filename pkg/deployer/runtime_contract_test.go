@@ -131,12 +131,12 @@ func TestValidateRuntimeContract_Table(t *testing.T) {
 			},
 		},
 		{
-			name:       "app-server replicas capped at 3",
+			name:       "app-server replicas capped at 5",
 			templateID: "url-shortener",
 			design: DeploymentDesign{
 				Template: "url-shortener",
 				Nodes: []DeploymentNode{
-					{ID: "app1", Type: "app-server", Name: "App", Config: map[string]interface{}{"replicas": 4}},
+					{ID: "app1", Type: "app-server", Name: "App", Config: map[string]interface{}{"replicas": 6}},
 					{ID: "db1", Type: "db", Name: "PostgreSQL"},
 				},
 				Connections: []DeploymentConn{{SourceID: "app1", TargetID: "db1"}},
@@ -144,12 +144,12 @@ func TestValidateRuntimeContract_Table(t *testing.T) {
 			wantErr: "replicas must be between",
 		},
 		{
-			name:       "worker replicas capped at 3",
+			name:       "worker replicas capped at 5",
 			templateID: "social-feed",
 			design: DeploymentDesign{
 				Template: "social-feed",
 				Nodes: []DeploymentNode{
-					{ID: "w1", Type: "worker", Name: "Worker", Config: map[string]interface{}{"replicas": 4}},
+					{ID: "w1", Type: "worker", Name: "Worker", Config: map[string]interface{}{"replicas": 6}},
 					{ID: "mq1", Type: "mq", Name: "MQ"},
 					{ID: "db1", Type: "db", Name: "PostgreSQL"},
 					{ID: "c1", Type: "cache", Name: "Cache"},
