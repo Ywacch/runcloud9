@@ -1,9 +1,9 @@
-package main
+package socialstore
 
 import "context"
 
-// SocialStore is the social-feed main_db job. Postgres is today's only implementation.
-type SocialStore interface {
+// Store is the social-feed main_db job.
+type Store interface {
 	InitSchema(ctx context.Context) error
 	SeedIfEmpty(ctx context.Context) error
 	Ping(ctx context.Context) error
@@ -20,5 +20,3 @@ type SocialStore interface {
 	QueryUserPool(ctx context.Context, sql string) ([]int, error)
 	ListThreadPool(ctx context.Context, limit int) ([]ThreadPoolEntry, error)
 }
-
-var _ SocialStore = (*DB)(nil)
