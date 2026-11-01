@@ -31,6 +31,11 @@ func QueueAllowed(queue string, queues []string) bool {
 	return TableAllowed(queue, queues)
 }
 
+// PatternHasGlob reports whether pattern uses Redis SCAN glob metacharacters.
+func PatternHasGlob(pattern string) bool {
+	return strings.ContainsAny(pattern, "*?[")
+}
+
 // KeyMatchesPatterns returns true if key matches any glob pattern.
 func KeyMatchesPatterns(key string, patterns []string) bool {
 	for _, p := range patterns {

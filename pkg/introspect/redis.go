@@ -72,9 +72,34 @@ func (d *RedisDriver) ScanKeys(ctx context.Context, pattern string, cursor uint6
 	if count > 100 {
 		count = 100
 	}
+	// Exact key patterns (e.g. work-queue stream "fanout") must not use SCAN:
+	// MATCH can return an empty batch while the cursor is still non-zero.
+	if !PatternHasGlob(pattern) {
+		if cursor != 0 {
+			return nil, 0, nil
+		}
+		exists, err := d.client.Exists(ctx, pattern).Result()
+		if err != nil {
+			return nil, 0, err
+		}
+		if exists == 0 || !IsStudentCacheKey(pattern) {
+			return nil, 0, nil
+		}
+		out, err := d.keyInfosForKeys(ctx, []string{pattern})
+		return out, 0, err
+	}
+
 	keys, next, err := d.client.Scan(ctx, cursor, pattern, int64(count)).Result()
 	if err != nil {
 		return nil, 0, err
+	}
+	out, err := d.keyInfosForKeys(ctx, keys)
+	return out, next, err
+}
+
+func (d *RedisDriver) keyInfosForKeys(ctx context.Context, keys []string) ([]KeyInfo, error) {
+	if len(keys) == 0 {
+		return nil, nil
 	}
 
 	pipe := d.client.Pipeline()
@@ -115,7 +140,7 @@ func (d *RedisDriver) ScanKeys(ctx context.Context, pattern string, cursor uint6
 		}
 		out = append(out, ki)
 	}
-	return out, next, nil
+	return out, nil
 }
 
 func (d *RedisDriver) GetKeyValue(ctx context.Context, key string) (KeyValue, error) {
