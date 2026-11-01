@@ -31,8 +31,13 @@ loadgen:
       bodyTemplate: '{"url":"https://example.com/page/{{.Rand}}"}'
       weight: 20
   schedules:
+    - id: steady
+      label: Steady load
+      phases:
+        - durationSeconds: 0
+          rpsMultiplier: 1
     - id: cpu_ramp
-      label: CPU ramp
+      label: Step up traffic to scale out
       phases:
         - durationSeconds: 30
           rpsMultiplier: 1

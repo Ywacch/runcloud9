@@ -100,7 +100,7 @@ loadgen:
         - durationSeconds: 0
           rpsMultiplier: 1.0
     - id: cpu_ramp
-      label: CPU ramp
+      label: Step up traffic to scale out
       phases:
         - durationSeconds: 30
           rpsMultiplier: 1
