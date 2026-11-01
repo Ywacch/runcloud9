@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"time"
 
@@ -12,6 +13,13 @@ import (
 	"github.com/ywacch/cloud9/pkg/rules"
 	"github.com/ywacch/cloud9/pkg/rules/verify"
 	"github.com/ywacch/cloud9/pkg/templates"
+)
+
+const (
+	PostmortemStatusPending = "pending"
+	PostmortemStatusOK      = "ok"
+	PostmortemStatusSkipped = "skipped"
+	PostmortemStatusError   = "error"
 )
 
 // PostmortemClaimView is one verifier-approved claim persisted for the session summary UI.
@@ -186,16 +194,22 @@ func (h *Handler) runPostmortemAfterTeardown(namespace string) {
 		return
 	}
 
+	requestedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	_ = h.persistAIPostmortemMap(ctx, namespace, map[string]any{
+		"status":      PostmortemStatusPending,
+		"requestedAt": requestedAt,
+	})
+
 	resp, err := h.inferenceClient.Postmortem(ctx, aiCtx)
 	if err != nil {
 		log.Printf("postmortem %s: inference: %v", namespace, err)
 		_ = h.persistAIPostmortemMap(ctx, namespace, map[string]any{
-			"status":      "error",
+			"status":      PostmortemStatusError,
 			"generatedAt": time.Now().UTC().Format(time.RFC3339Nano),
 		})
 		return
 	}
-	if resp.Status == "skipped" {
+	if resp.Status == PostmortemStatusSkipped {
 		pm := buildAIPostmortem(resp, nil)
 		_ = h.persistAIPostmortem(ctx, namespace, pm)
 		return
@@ -243,14 +257,9 @@ func aiPostmortemToMap(pm AIPostmortem) (map[string]any, error) {
 }
 
 func (h *Handler) persistAIPostmortemMap(ctx context.Context, namespace string, aiPostmortem map[string]any) error {
-	row, err := h.store.GetDeployment(ctx, namespace)
-	if err != nil {
-		return err
+	if h == nil || h.store == nil {
+		return fmt.Errorf("postmortem: handler store missing")
 	}
-	merged := make(map[string]any, len(row.MetricsSummary)+1)
-	for k, v := range row.MetricsSummary {
-		merged[k] = v
-	}
-	merged["ai_postmortem"] = aiPostmortem
-	return h.store.UpdateMetricsSummary(ctx, namespace, merged)
+	h.stampMetrics(ctx, namespace, map[string]any{"ai_postmortem": aiPostmortem})
+	return nil
 }
