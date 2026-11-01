@@ -120,6 +120,11 @@ func effectiveAppServerReplicasForTier(node DeploymentNode) (int32, error) {
 	return replicaCountFromConfig(node.Config, 1, minAppServerReplicas, maxAppServerReplicas)
 }
 
+// hpaScaleDownStabilizationSeconds is how long a lower replica recommendation
+// must persist before the HPA removes pods. The Kubernetes default is 300s,
+// which outlasts a lab session. 15s is long enough to ignore one noisy sample.
+const hpaScaleDownStabilizationSeconds int32 = 15
+
 func cpuUtilizationHPA(namespace, deploymentName string, ac AutoscaleConfig) *autoscalingv2.HorizontalPodAutoscaler {
 	target := ac.TargetCPUPercent
 	return &autoscalingv2.HorizontalPodAutoscaler{
@@ -135,6 +140,11 @@ func cpuUtilizationHPA(namespace, deploymentName string, ac AutoscaleConfig) *au
 			},
 			MinReplicas: ptr(ac.Min),
 			MaxReplicas: ac.Max,
+			Behavior: &autoscalingv2.HorizontalPodAutoscalerBehavior{
+				ScaleDown: &autoscalingv2.HPAScalingRules{
+					StabilizationWindowSeconds: ptr(hpaScaleDownStabilizationSeconds),
+				},
+			},
 			Metrics: []autoscalingv2.MetricSpec{
 				{
 					Type: autoscalingv2.ResourceMetricSourceType,

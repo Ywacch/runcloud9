@@ -6,6 +6,25 @@ import (
 	"github.com/ywacch/cloud9/pkg/templates"
 )
 
+func TestEnsureLoadBalancerForReplicas_autoscaleMaxAboveOne(t *testing.T) {
+	t.Parallel()
+
+	d := urlShortenerLiteDesign()
+	d.Nodes[0].Config["replicas"] = 1
+	d.Nodes[0].Config["autoscale"] = map[string]any{
+		"min":              1,
+		"max":              5,
+		"targetCPUPercent": 70,
+	}
+	EnsureLoadBalancerForReplicas(&d)
+	if !designHasLBNode(d) {
+		t.Fatal("expected lb node when autoscale max is above 1")
+	}
+	if !hasConnection(d, autoLoadBalancerNodeID, "app-1") {
+		t.Fatal("expected lb -> app-1 connection")
+	}
+}
+
 func TestEnsureLoadBalancerForReplicas_noOpSingleReplica(t *testing.T) {
 	t.Parallel()
 

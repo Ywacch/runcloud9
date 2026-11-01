@@ -163,4 +163,10 @@ func TestEnsureCPUHorizontalPodAutoscaler(t *testing.T) {
 	if hpa.Spec.ScaleTargetRef.Name != "app-server" {
 		t.Fatalf("scale target: got %q want app-server", hpa.Spec.ScaleTargetRef.Name)
 	}
+	if hpa.Spec.Behavior == nil || hpa.Spec.Behavior.ScaleDown == nil || hpa.Spec.Behavior.ScaleDown.StabilizationWindowSeconds == nil {
+		t.Fatal("expected scale-down stabilization window")
+	}
+	if got := *hpa.Spec.Behavior.ScaleDown.StabilizationWindowSeconds; got != hpaScaleDownStabilizationSeconds {
+		t.Fatalf("scaleDown stabilization: got %d want %d", got, hpaScaleDownStabilizationSeconds)
+	}
 }
