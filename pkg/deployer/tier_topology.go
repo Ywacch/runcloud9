@@ -8,6 +8,7 @@ type TierTopologyLimits struct {
 	AllowLoadBalancer    bool
 	AllowMQWorker        bool
 	AllowProxyCache      bool
+	AllowAutoscale       bool
 }
 
 // ValidateTierTopology rejects designs that exceed subscription topology caps.
@@ -22,7 +23,15 @@ func ValidateTierTopology(design DeploymentDesign, limits TierTopologyLimits) er
 			if !limits.AllowMQWorker {
 				return fmt.Errorf("message queues and workers require an active subscription — remove async components or upgrade")
 			}
+			if node.Type == "worker" {
+				if err := rejectAutoscaleUnlessAllowed(node, limits); err != nil {
+					return err
+				}
+			}
 		case "app-server":
+			if err := rejectAutoscaleUnlessAllowed(node, limits); err != nil {
+				return err
+			}
 			replicas, err := effectiveAppServerReplicasForTier(node)
 			if err != nil {
 				return fmt.Errorf("app server %q: %w", node.Name, err)
@@ -42,4 +51,23 @@ func ValidateTierTopology(design DeploymentDesign, limits TierTopologyLimits) er
 		}
 	}
 	return nil
+}
+
+func rejectAutoscaleUnlessAllowed(node DeploymentNode, limits TierTopologyLimits) error {
+	if limits.AllowAutoscale || !nodeRequestsAutoscale(node.Config) {
+		return nil
+	}
+	kind := "app server"
+	if node.Type == "worker" {
+		kind = "worker"
+	}
+	return fmt.Errorf("%s %q: cpu autoscale is limited to internal accounts", kind, node.Name)
+}
+
+func nodeRequestsAutoscale(config map[string]interface{}) bool {
+	if config == nil {
+		return false
+	}
+	raw, ok := config["autoscale"]
+	return ok && raw != nil
 }

@@ -19,6 +19,7 @@ type currentUserLimitsResponse struct {
 	AllowLoadBalancer    bool   `json:"allowLoadBalancer"`
 	AllowMQWorker        bool   `json:"allowMQWorker"`
 	AllowProxyCache      bool   `json:"allowProxyCache"`
+	AllowAutoscale       bool   `json:"allowAutoscale"`
 	MaxInstanceSize      string `json:"maxInstanceSize"`
 	MaxLoadgenRps        int    `json:"maxLoadgenRps"`
 	AllowEngineSwap      bool   `json:"allowEngineSwap"`
@@ -71,6 +72,7 @@ func currentUserLimitsFromStore(limits store.TierLimits) currentUserLimitsRespon
 		AllowLoadBalancer:    limits.AllowLoadBalancer,
 		AllowMQWorker:        limits.AllowMQWorker,
 		AllowProxyCache:      limits.AllowProxyCache,
+		AllowAutoscale:       limits.AllowAutoscale,
 		MaxInstanceSize:      limits.MaxInstanceSize,
 		MaxLoadgenRps:        limits.MaxLoadgenRPS,
 		AllowEngineSwap:      limits.AllowEngineSwap,

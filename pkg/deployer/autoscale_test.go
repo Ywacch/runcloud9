@@ -62,7 +62,7 @@ func TestParseAutoscaleConfig(t *testing.T) {
 			config: map[string]any{
 				"autoscale": map[string]any{
 					"min":              1,
-					"max":              4,
+					"max":              6,
 					"targetCPUPercent": 50,
 				},
 			},

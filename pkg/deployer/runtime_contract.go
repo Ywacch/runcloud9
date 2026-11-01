@@ -8,7 +8,7 @@ import (
 
 const (
 	minAppServerReplicas = 1
-	maxAppServerReplicas = 3
+	maxAppServerReplicas = 5
 	// Workers share the same horizontal scale ceiling as app-servers.
 	minWorkerReplicas = minAppServerReplicas
 	maxWorkerReplicas = maxAppServerReplicas
