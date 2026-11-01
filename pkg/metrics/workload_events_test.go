@@ -69,6 +69,27 @@ func TestBuildWorkloadEventsSummary_FiltersDedupCap(t *testing.T) {
 	}
 }
 
+func TestBuildWorkloadEventsSummary_KeepsScaleKind(t *testing.T) {
+	t.Parallel()
+	ts := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	hist := []DeploymentMetrics{{
+		Timestamp: ts,
+		Events: []Event{{
+			Timestamp: ts,
+			Type:      "action",
+			Source:    "autoscaler",
+			Kind:      "scale",
+			Component: "app-server",
+			Title:     "App servers scaled",
+			Detail:    map[string]string{"from": "1", "to": "2"},
+		}},
+	}}
+	got := BuildWorkloadEventsSummary(hist, 10)
+	if len(got) != 1 || got[0]["kind"] != "scale" {
+		t.Fatalf("got %#v", got)
+	}
+}
+
 func TestBuildWorkloadEventsSummary_Empty(t *testing.T) {
 	t.Parallel()
 	if got := BuildWorkloadEventsSummary(nil, 10); len(got) != 0 {

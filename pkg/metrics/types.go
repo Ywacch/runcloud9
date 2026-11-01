@@ -236,6 +236,8 @@ type ComponentMetrics struct {
 	PerBackendRPS map[string]float64 `json:"perBackendRps,omitempty"`
 	// Replicas is per-pod breakdown on app-server and worker (empty when single replica or pods not listed).
 	Replicas []ReplicaMetrics `json:"replicas,omitempty"`
+	// Scale reports HPA desired vs ready pod counts when a CPU HPA targets this component.
+	Scale *ScaleStatus `json:"scale,omitempty"`
 	// BackendReplicas / BackendPods expose LB-facing pod rollout and per-backend metrics.
 	BackendReplicas *BackendReplicas `json:"backendReplicas,omitempty"`
 	BackendPods     []BackendPod     `json:"backendPods,omitempty"`
@@ -349,6 +351,13 @@ type ComponentLayerMetrics struct {
 	// Freshness tags containerCpu / containerMem for this layer (proxy vs backing store
 	// can sit on different tiers). See freshness.go.
 	Freshness map[string]SignalFreshness `json:"freshness,omitempty"`
+}
+
+// ScaleStatus is set only when an HPA targets that component.
+// Desired comes from HorizontalPodAutoscaler status, not Deployment spec.
+type ScaleStatus struct {
+	Desired int32 `json:"desired"`
+	Ready   int32 `json:"ready"`
 }
 
 // BackendReplicas tracks desired vs ready app-server pods (LB-facing view).

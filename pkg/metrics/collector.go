@@ -17,6 +17,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/probes"
 	"github.com/ywacch/cloud9/pkg/templates"
 	"golang.org/x/sync/singleflight"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -72,6 +73,8 @@ type MetricsCollector struct {
 	publishers              map[string]*sessionPublisher
 	runInfoMu               sync.RWMutex
 	runInfo                 map[string]RunInfo
+	scaleDesiredMu          sync.Mutex
+	scaleDesired            map[string]map[string]int32                                                                           // namespace → component → last HPA desired
 	publisherCollectHook    func(ctx context.Context, namespace, template string, topo TopologyFlags) (*DeploymentMetrics, error) // tests only
 	replSQLMu               sync.Mutex
 	replSQLCache            map[string]replSQLCacheEntry // key = namespace
@@ -168,6 +171,11 @@ func (c *MetricsCollector) Cleanup(namespace string) {
 	if c.sessionAcc != nil {
 		c.sessionAcc.Cleanup(namespace)
 	}
+	c.scaleDesiredMu.Lock()
+	if c.scaleDesired != nil {
+		delete(c.scaleDesired, namespace)
+	}
+	c.scaleDesiredMu.Unlock()
 	c.clearRunInfo(namespace)
 	c.OpenPostgresSession(namespace)
 }
@@ -741,6 +749,15 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	// App-server SQL histogram only — excludes worker/fanout-worker pods when they export db_query_duration_seconds.
 	appServerSel := appServerPromSelector(ns)
 
+	var sessionHPAs []autoscalingv2.HorizontalPodAutoscaler
+	sessionHPAsOK := false
+	if c.clientset != nil {
+		if hpaList, err := c.clientset.AutoscalingV2().HorizontalPodAutoscalers(ns).List(ctx, metav1.ListOptions{}); err == nil {
+			sessionHPAs = hpaList.Items
+			sessionHPAsOK = true
+		}
+	}
+
 	// DB (postgres) — CPU/memory: container cAdvisor → Metrics API → kube requests.
 	// Include postgres-replica containers so a promoted writer still contributes
 	// after FencePrimary scales the postgres Deployment to zero.
@@ -954,6 +971,11 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	if len(replicaRows) > 0 {
 		cmApp.Replicas = replicaRows
 	}
+	if sessionHPAsOK {
+		if st := scaleStatusForApp(sessionHPAs, "app-server", backendReplicas.Ready); st != nil {
+			cmApp.Scale = st
+		}
+	}
 
 	dm.Components["app-server"] = cmApp
 
@@ -1141,7 +1163,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	wRpsByPod, wP50ByPod, wP95ByPod, wP99ByPod, wP50SessionByPod, wP95SessionByPod, wP99SessionByPod, wCPUByPod, wErrByPod, wTotalProcessedByPod, wTotalErrorsByPod, wMemByPod := c.workerReplicaSeries(ctx, ns)
 	cmWorker.TotalRequests = c.sessionAcc.Observe(ns, seriesWorkerProcessed, wTotalProcessedByPod)
 	cmWorker.TotalErrors9m = c.sessionAcc.Observe(ns, seriesWorkerErrors, wTotalErrorsByPod)
-	workerPodNames, workerReadyByPod, _ := c.listWorkerPods(ctx, ns)
+	workerPodNames, workerReadyByPod, workerReplicaCounts := c.listWorkerPods(ctx, ns)
 	workerReplicaRows := mergePodMetricMaps(
 		workerPodNames, workerReadyByPod,
 		wRpsByPod, wP50ByPod, wP95ByPod, wP99ByPod,
@@ -1150,6 +1172,11 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	)
 	if len(workerReplicaRows) > 0 {
 		cmWorker.Replicas = workerReplicaRows
+	}
+	if sessionHPAsOK {
+		if st := scaleStatusForApp(sessionHPAs, "worker", workerReplicaCounts.Ready); st != nil {
+			cmWorker.Scale = st
+		}
 	}
 	dm.Components["worker"] = cmWorker
 	if workerRPS > 0 {
@@ -1315,6 +1342,16 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		}
 		ev = append(ev, c.consistency.Eval(namespace, dm, topo, tmpl)...)
 		appendReplyBeforeParentPhenomenon(dm, template, topo, threadTraffic)
+	}
+	if sessionHPAsOK {
+		nextScale := make(map[string]int32)
+		if app, ok := dm.Components["app-server"]; ok && app.Scale != nil {
+			nextScale["app-server"] = app.Scale.Desired
+		}
+		if w, ok := dm.Components["worker"]; ok && w.Scale != nil {
+			nextScale["worker"] = w.Scale.Desired
+		}
+		ev = append(ev, c.appendScaleEvents(ns, nextScale, dm.Timestamp)...)
 	}
 	dm.Events = ev
 
