@@ -140,7 +140,8 @@ func buildAIPostmortem(resp *inference.PostmortemResponse, claims []PostmortemCl
 	return pm
 }
 
-func (h *Handler) schedulePostmortemAfterTeardown(namespace string) {
+// SchedulePostmortemAfterTeardown starts async post-mortem generation for a terminated session.
+func (h *Handler) SchedulePostmortemAfterTeardown(namespace string) {
 	if h == nil || h.inferenceClient == nil || h.store == nil {
 		return
 	}

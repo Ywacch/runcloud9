@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,15 +16,27 @@ import (
 )
 
 type stubInferenceService struct {
-	chatResp *inference.ChatResponse
-	chatErr  error
+	chatResp        *inference.ChatResponse
+	chatErr         error
+	reelCalls       atomic.Int32
+	postmortemCalls atomic.Int32
+	reelResp        *inference.ReelCaptionsResponse
+	postmortemResp  *inference.PostmortemResponse
 }
 
 func (s *stubInferenceService) ReelCaptions(context.Context, inference.ReelCaptionsRequest) (*inference.ReelCaptionsResponse, error) {
+	s.reelCalls.Add(1)
+	if s.reelResp != nil {
+		return s.reelResp, nil
+	}
 	return nil, nil
 }
 
 func (s *stubInferenceService) Postmortem(context.Context, any) (*inference.PostmortemResponse, error) {
+	s.postmortemCalls.Add(1)
+	if s.postmortemResp != nil {
+		return s.postmortemResp, nil
+	}
 	return nil, nil
 }
 
