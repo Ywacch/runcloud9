@@ -36,6 +36,7 @@ func ValidateRuntimeContract(design DeploymentDesign, tmpl *templates.TemplateSp
 		validateDBReadConsistency,
 		validateDBReplicaApplyDelay,
 		validateProxyQueries,
+		validateCacheEngineStrategy,
 		validateAppServerEnv,
 		validateWorkerEnv,
 		validateJobBindingsContract,
@@ -380,6 +381,26 @@ func RequiresProxyQueries(cacheNode DeploymentNode, tmpl *templates.TemplateSpec
 			cacheNode.Name,
 			templateID,
 		)
+	}
+	return nil
+}
+
+func validateCacheEngineStrategy(design DeploymentDesign, _ *templates.TemplateSpec) error {
+	for _, node := range design.Nodes {
+		if node.Type != "cache" {
+			continue
+		}
+		if !requiresProxy(node) {
+			continue
+		}
+		eng := cacheEngineFromConfig(node.Config)
+		if eng != "redis" {
+			return fmt.Errorf(
+				"cache %q: engine %q does not support write-through or write-behind (use redis or cache-aside)",
+				node.Name,
+				eng,
+			)
+		}
 	}
 	return nil
 }

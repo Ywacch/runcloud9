@@ -55,9 +55,14 @@ func (h *Handler) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "component not configured for introspection")
 		return
 	}
-	if component == "cache" && introSpec.Engine == "redis" {
-		if mq, hasMQ := tmpl.Introspection["mq"]; hasMQ {
-			introSpec.KeyPatterns = introspect.AppendQueueStreamKeys(introSpec.KeyPatterns, mq.Queues)
+	if component == "cache" {
+		if eng := cacheEngineFromStoredDesign(row.Design); eng == "memcached" {
+			introSpec.Engine = "memcached"
+			introSpec.KeyPatterns = nil
+		} else if introSpec.Engine == "redis" {
+			if mq, hasMQ := tmpl.Introspection["mq"]; hasMQ {
+				introSpec.KeyPatterns = introspect.AppendQueueStreamKeys(introSpec.KeyPatterns, mq.Queues)
+			}
 		}
 	}
 
@@ -94,6 +99,8 @@ func (h *Handler) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 		h.handlePostgresIntrospect(ctx, w, host, action, param, introSpec, r)
 	case "redis":
 		h.handleRedisIntrospect(ctx, w, host, action, param, introSpec, r)
+	case "memcached":
+		h.handleMemcachedIntrospect(ctx, w, host, action, introSpec)
 	case "rabbitmq":
 		h.handleRabbitMQIntrospect(ctx, w, host, action, param, introSpec)
 	default:
@@ -151,6 +158,11 @@ func resolveIntrospectHost(ctx context.Context, engine, component, namespace, ta
 		}
 		svcHost := resolveIntrospectRedisHost(design)
 		return fmt.Sprintf("%s.%s.svc.cluster.local", svcHost, namespace), nil
+	case "memcached":
+		if component != "cache" {
+			return "", fmt.Errorf("memcached introspection only supports cache component")
+		}
+		return fmt.Sprintf("cache.%s.svc.cluster.local", namespace), nil
 	case "rabbitmq":
 		if component != "mq" {
 			return "", fmt.Errorf("rabbitmq introspection only supports mq component")
@@ -218,6 +230,9 @@ func introspectAction(path, namespace, component string) string {
 }
 
 func validateIntrospectAction(action string, spec introspect.ComponentSpec, param string, r *http.Request) error {
+	if spec.Engine == "memcached" && action != "stats" && action != "capabilities" {
+		return fmt.Errorf("memcached introspection supports stats only")
+	}
 	switch action {
 	case "schema", "rows":
 		if param == "" {
@@ -257,6 +272,19 @@ func validateIntrospectAction(action string, spec introspect.ComponentSpec, para
 		// Unknown actions are rejected later by the engine handler.
 	}
 	return nil
+}
+
+func cacheEngineFromStoredDesign(design map[string]any) string {
+	parsed, err := deployer.DesignFromMap(design)
+	if err != nil {
+		return "redis"
+	}
+	for _, n := range parsed.Nodes {
+		if n.Type == "cache" {
+			return deployer.CacheEngineFromNode(n)
+		}
+	}
+	return "redis"
 }
 
 func (h *Handler) handlePostgresIntrospect(ctx context.Context, w http.ResponseWriter, host, action, table string, spec introspect.ComponentSpec, r *http.Request) {
@@ -372,6 +400,29 @@ func (h *Handler) handleRedisIntrospect(ctx context.Context, w http.ResponseWrit
 	default:
 		writeError(w, http.StatusNotFound, "unknown redis action")
 	}
+}
+
+func (h *Handler) handleMemcachedIntrospect(ctx context.Context, w http.ResponseWriter, host, action string, spec introspect.ComponentSpec) {
+	driver, err := introspect.NewMemcachedDriver(ctx, host)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("memcached connect failed: %v", err))
+		return
+	}
+
+	switch action {
+	case "capabilities":
+		writeIntrospectJSON(w, map[string]any{"capabilities": driver.Capabilities()})
+	case "stats":
+		stats, err := driver.ServerStats(ctx)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeIntrospectJSON(w, map[string]any{"stats": stats})
+	default:
+		writeError(w, http.StatusNotFound, "unknown memcached action")
+	}
+	_ = spec
 }
 
 func (h *Handler) handleRabbitMQIntrospect(ctx context.Context, w http.ResponseWriter, host, action, queue string, spec introspect.ComponentSpec) {

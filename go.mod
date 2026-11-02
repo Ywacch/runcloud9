@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	cloud.google.com/go/storage v1.61.3
 	github.com/alicebob/miniredis/v2 v2.33.0
+	github.com/bradfitz/gomemcache v0.0.0-20190913173617-a41fca850d0b
 	github.com/getsentry/sentry-go v0.46.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0

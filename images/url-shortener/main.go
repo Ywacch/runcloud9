@@ -699,6 +699,8 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 			ping := func(context.Context) error { return nil }
 			if r, ok := kv.(*kvcache.Redis); ok {
 				ping = r.Ping
+			} else if mc, ok := kv.(*kvcache.Memcached); ok {
+				ping = mc.Ping
 			}
 			// Best-effort ping: cache errors are never fatal.
 			if err := ping(ctx); err != nil {

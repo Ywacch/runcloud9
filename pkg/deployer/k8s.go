@@ -474,6 +474,11 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 		return k.waitForReady(ctx, cfg, "cache-proxy", replicas, waitProgressOpts{})
 	}
 
+	engine := cacheEngineFromConfig(cfg.Node.Config)
+	if engine == "memcached" {
+		return k.deployMemcachedCacheAside(ctx, cfg, resources, replicas, envVars)
+	}
+
 	// Cache-aside: single Redis pod/service + redis_exporter sidecar for Prometheus.
 	labels := map[string]string{"app": "redis", "deployment": cfg.Namespace}
 
@@ -544,6 +549,75 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 	}
 
 	return k.waitForReady(ctx, cfg, "redis", replicas, waitProgressOpts{})
+}
+
+func (k *K8sDeployer) deployMemcachedCacheAside(ctx context.Context, cfg DeployConfig, resources corev1.ResourceRequirements, replicas int32, envVars map[string]string) error {
+	labels := map[string]string{"app": "memcached", "deployment": cfg.Namespace}
+
+	exporter := corev1.Container{
+		Name:      "memcached-exporter",
+		Image:     "prom/memcached-exporter:v0.14.4",
+		Ports:     []corev1.ContainerPort{{ContainerPort: 9150}},
+		Resources: ExporterResources(),
+		Env:       []corev1.EnvVar{{Name: "MEMCACHED_ADDR", Value: "localhost:11211"}},
+	}
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "memcached", Namespace: cfg.Namespace},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: ptr(replicas),
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+					Annotations: map[string]string{
+						"prometheus.io/scrape": "true",
+						"prometheus.io/port":   "9150",
+						"prometheus.io/path":   "/metrics",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:      "memcached",
+							Image:     imageMemcached,
+							Args:      memcachedServerArgs(cfg.Node.Config, resources),
+							Ports:     []corev1.ContainerPort{{ContainerPort: 11211}},
+							Resources: resources,
+							Env:       envMapToK8s(envVars),
+							ReadinessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(11211)},
+								},
+								InitialDelaySeconds: 2,
+								PeriodSeconds:       2,
+								FailureThreshold:    3,
+							},
+						},
+						exporter,
+					},
+				},
+			},
+		},
+	}
+
+	if _, err := k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("create memcached deployment: %w", err)
+	}
+
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: cfg.Namespace},
+		Spec: corev1.ServiceSpec{
+			Type:     corev1.ServiceTypeClusterIP,
+			Selector: labels,
+			Ports:    []corev1.ServicePort{{Port: 11211, TargetPort: intstr.FromInt32(11211)}},
+		},
+	}
+	if _, err := k.clientset.CoreV1().Services(cfg.Namespace).Create(ctx, svc, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("create memcached service: %w", err)
+	}
+
+	return k.waitForReady(ctx, cfg, "memcached", replicas, waitProgressOpts{})
 }
 
 func (k *K8sDeployer) deployAppServer(ctx context.Context, cfg DeployConfig, _ corev1.ResourceRequirements, replicas int32) error {

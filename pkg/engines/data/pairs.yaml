@@ -10,6 +10,12 @@
   build: available
   reason: In-memory key cache with TTL.
   fidelity: real
+- job: hot_cache
+  engine: memcached
+  fit: natural
+  build: available
+  reason: In-memory key cache with TTL; compare lost-update behavior on timelines.
+  fidelity: real
 - job: timeline
   engine: redis
   fit: natural
