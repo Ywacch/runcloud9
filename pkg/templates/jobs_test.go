@@ -79,6 +79,31 @@ func TestTemplates_JobsDeclared(t *testing.T) {
 	}
 }
 
+func TestHotCacheAllowsMemcached(t *testing.T) {
+	t.Parallel()
+
+	tests := []string{"url-shortener", "ecommerce"}
+	for _, id := range tests {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+			spec := GetTemplate(id)
+			if spec == nil {
+				t.Fatalf("template %q missing", id)
+			}
+			var allowed []string
+			for _, job := range spec.Jobs {
+				if job.ID == "hot_cache" {
+					allowed = job.AllowedEngines
+					break
+				}
+			}
+			if !slices.Contains(allowed, "redis") || !slices.Contains(allowed, "memcached") {
+				t.Fatalf("hot_cache allowedEngines: %v", allowed)
+			}
+		})
+	}
+}
+
 func TestSocialFeedWorkQueueAllowsRedis(t *testing.T) {
 	t.Parallel()
 	spec := GetTemplate("social-feed")

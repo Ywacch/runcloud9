@@ -56,7 +56,7 @@ jobs:
     defaultNodeType: db
   - id: hot_cache
     required: false
-    allowedEngines: [redis]
+    allowedEngines: [redis, memcached]
     defaultNodeType: cache
 prometheusMetrics:
   queries:

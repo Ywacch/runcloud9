@@ -67,7 +67,7 @@ jobs:
     defaultNodeType: db
   - id: hot_cache
     required: false
-    allowedEngines: [redis]
+    allowedEngines: [redis, memcached]
     defaultNodeType: cache
   - id: work_queue
     required: false
