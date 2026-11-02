@@ -22,6 +22,7 @@ type Config struct {
 }
 
 // Open returns a Queue from WORK_QUEUE_* (or legacy MQ_HOST) configuration.
+// A nil concrete Redis client stored in RedisClient counts as no client.
 func Open(cfg Config) (Queue, error) {
 	engine := strings.ToLower(strings.TrimSpace(cfg.EngineEnv))
 	host := strings.TrimSpace(cfg.HostEnv)
@@ -46,9 +47,8 @@ func Open(cfg Config) (Queue, error) {
 			Registerer: cfg.Registerer,
 		})
 	case "redis":
-		if cfg.RedisClient == nil {
-			client := redis.NewClient(&redis.Options{Addr: fmt.Sprintf("%s:%s", host, port)})
-			cfg.RedisClient = client
+		if usableRedisClient(cfg.RedisClient) == nil {
+			cfg.RedisClient = redis.NewClient(&redis.Options{Addr: fmt.Sprintf("%s:%s", host, port)})
 		}
 		return NewStreams(StreamsOptions{
 			Client:     cfg.RedisClient,
@@ -58,6 +58,28 @@ func Open(cfg Config) (Queue, error) {
 	default:
 		return nil, fmt.Errorf("queue: unsupported WORK_QUEUE_ENGINE %q", engine)
 	}
+}
+
+// usableRedisClient returns nil when c is a nil interface or a nil pointer
+// stored in redis.UniversalClient. The second form compares unequal to nil.
+func usableRedisClient(c redis.UniversalClient) redis.UniversalClient {
+	switch v := c.(type) {
+	case nil:
+		return nil
+	case *redis.Client:
+		if v == nil {
+			return nil
+		}
+	case *redis.ClusterClient:
+		if v == nil {
+			return nil
+		}
+	case *redis.Ring:
+		if v == nil {
+			return nil
+		}
+	}
+	return c
 }
 
 func defaultPort(engine string) string {

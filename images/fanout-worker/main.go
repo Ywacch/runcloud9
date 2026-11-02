@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -240,7 +241,7 @@ func main() {
 	slog.SetDefault(logger)
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("worker panic", "recover", r)
+			slog.Error("worker panic", "recover", r, "stack", string(debug.Stack()))
 			os.Exit(1)
 		}
 	}()
@@ -345,7 +346,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	queueCfg.RedisClient = rdb
+	// A nil *redis.Client inside the interface compares unequal to nil.
+	if rdb != nil {
+		queueCfg.RedisClient = rdb
+	}
 	var workQ queue.Queue
 	for attempt := 1; ; attempt++ {
 		if strings.EqualFold(strings.TrimSpace(queueCfg.EngineEnv), "redis") && queueCfg.RedisClient == nil {
