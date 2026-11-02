@@ -15,11 +15,24 @@ func TestMemcachedServerArgs_MemoryLimit(t *testing.T) {
 		},
 	}
 	got := memcachedServerArgs(nil, res)
-	if len(got) != 2 || got[0] != "-m" {
+	if len(got) != 3 || got[0] != "-m" || got[2] != "-v" {
 		t.Fatalf("got %v", got)
 	}
 	// 90% of 256Mi ≈ 230Mi
 	if got[1] != "230" && got[1] != "229" {
 		t.Fatalf("unexpected -m value %q", got[1])
+	}
+}
+
+func TestMemcachedServerArgs_Verbose(t *testing.T) {
+	t.Parallel()
+	got := memcachedServerArgs(nil, corev1.ResourceRequirements{})
+	if len(got) < 2 || got[len(got)-1] != "-v" {
+		t.Fatalf("args %v want trailing -v", got)
+	}
+	for _, arg := range got {
+		if arg == "-vv" {
+			t.Fatal("memcached args must not include -vv")
+		}
 	}
 }

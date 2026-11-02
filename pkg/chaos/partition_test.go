@@ -10,6 +10,26 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+func TestPartition_AllowsMemcachedPort(t *testing.T) {
+	t.Parallel()
+	port := memcachedPartitionPort()
+	policy, err := BuildPartitionNetworkPolicy(PartitionPolicyInput{
+		Namespace:       "cloud9-test",
+		Scenario:        "split_app_store",
+		TargetComponent: "cache",
+		ExpiresAt:       time.Now().Add(time.Minute),
+		DestAppLabel:    "memcached",
+		Port:            port,
+		Exclude:         PartitionPeerExclusion{AppLabel: "app-server"},
+	})
+	if err != nil {
+		t.Fatalf("memcached port %d: %v", port, err)
+	}
+	if policy.Spec.PodSelector.MatchLabels["app"] != "memcached" {
+		t.Fatalf("dest label: %v", policy.Spec.PodSelector.MatchLabels)
+	}
+}
+
 func TestBuildPartitionNetworkPolicy(t *testing.T) {
 	expires := time.Date(2026, 9, 12, 15, 0, 0, 0, time.UTC)
 

@@ -12,13 +12,13 @@ const imageMemcached = "memcached:1.6"
 func memcachedServerArgs(_ map[string]interface{}, resources corev1.ResourceRequirements) []string {
 	const defaultMB = 64
 	mem := resources.Limits.Memory()
-	if mem == nil || mem.IsZero() {
-		return []string{"-m", strconv.Itoa(defaultMB)}
+	mb := int64(defaultMB)
+	if mem != nil && !mem.IsZero() {
+		mb = mem.Value() * 90 / 100 / (1024 * 1024)
+		if mb < defaultMB {
+			mb = defaultMB
+		}
 	}
-	bytes := mem.Value() * 90 / 100
-	mb := bytes / (1024 * 1024)
-	if mb < defaultMB {
-		mb = defaultMB
-	}
-	return []string{"-m", strconv.FormatInt(mb, 10)}
+	// -v logs errors and warnings. -vv would write one line per command.
+	return []string{"-m", strconv.FormatInt(mb, 10), "-v"}
 }

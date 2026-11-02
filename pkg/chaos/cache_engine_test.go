@@ -1,6 +1,7 @@
 package chaos
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -14,8 +15,8 @@ func TestCacheFlushCommand(t *testing.T) {
 	}{
 		{engine: "redis", want: []string{"redis-cli", "FLUSHALL"}},
 		{engine: "Redis", want: []string{"redis-cli", "FLUSHALL"}},
-		{engine: "memcached", want: []string{"sh", "-c", "printf 'flush_all\\r\\n' | nc -q 1 127.0.0.1 11211"}},
-		{engine: "scylla", wantErr: true, errSubstr: "supported: redis"},
+		{engine: "memcached", wantErr: true, errSubstr: "dials from the control plane"},
+		{engine: "scylla", wantErr: true, errSubstr: "supported: redis, memcached"},
 	}
 
 	for _, tc := range tests {
@@ -24,6 +25,9 @@ func TestCacheFlushCommand(t *testing.T) {
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("expected error")
+				}
+				if tc.engine == "memcached" && !errors.Is(err, errMemcachedFlushDial) {
+					t.Fatalf("memcached flush: %v", err)
 				}
 				if tc.errSubstr != "" && !strings.Contains(err.Error(), tc.errSubstr) {
 					t.Fatalf("error %q should contain %q", err.Error(), tc.errSubstr)

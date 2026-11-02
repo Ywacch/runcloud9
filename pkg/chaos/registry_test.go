@@ -126,6 +126,39 @@ func TestResolve(t *testing.T) {
 	}
 }
 
+func TestResolve_CacheFlushMemcached(t *testing.T) {
+	design := deployer.DeploymentDesign{
+		Template: "url-shortener",
+		Nodes: []deployer.DeploymentNode{
+			{Type: "cache", Name: "Memcached", Config: map[string]any{"engine": "memcached"}},
+		},
+	}
+	s, err := Resolve("cache_flush", "cache", design, fake.NewClientset())
+	if err != nil {
+		t.Fatalf("Resolve cache_flush memcached: %v", err)
+	}
+	if s == nil {
+		t.Fatal("nil scenario")
+	}
+}
+
+func TestResolve_SplitAppStoreMemcached(t *testing.T) {
+	design := deployer.DeploymentDesign{
+		Template: "url-shortener",
+		Nodes: []deployer.DeploymentNode{
+			{Type: "app-server", Name: "App"},
+			{Type: "cache", Name: "Memcached", Config: map[string]any{"engine": "memcached"}},
+		},
+	}
+	s, err := Resolve(scenarioSplitAppStore, "cache", design, fake.NewClientset())
+	if err != nil {
+		t.Fatalf("Resolve split_app_store memcached: %v", err)
+	}
+	if s == nil || !s.Stateful() {
+		t.Fatal("split_app_store memcached should be stateful")
+	}
+}
+
 func TestResolve_requiresClient(t *testing.T) {
 	design := deployer.DeploymentDesign{
 		Nodes: []deployer.DeploymentNode{{Type: "app-server", Name: "App"}},

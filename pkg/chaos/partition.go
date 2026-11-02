@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ywacch/cloud9/pkg/deployer"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -64,8 +65,8 @@ func BuildPartitionNetworkPolicy(in PartitionPolicyInput) (*networkingv1.Network
 	if in.DestAppLabel == "" {
 		return nil, fmt.Errorf("chaos: partition destAppLabel is required")
 	}
-	if in.Port != postgresPartitionPort && in.Port != redisPartitionPort {
-		return nil, fmt.Errorf("chaos: partition port must be %d or %d", postgresPartitionPort, redisPartitionPort)
+	if !partitionPortAllowed(in.Port) {
+		return nil, fmt.Errorf("chaos: partition port must be %d, %d, or %d", postgresPartitionPort, redisPartitionPort, memcachedPartitionPort())
 	}
 	if err := validatePeerExclusion(in.Exclude); err != nil {
 		return nil, err
@@ -103,6 +104,21 @@ func BuildPartitionNetworkPolicy(in PartitionPolicyInput) (*networkingv1.Network
 			},
 		},
 	}, nil
+}
+
+func memcachedPartitionPort() int32 {
+	port, ok := deployer.ListenPort("memcached")
+	if !ok {
+		return 11211
+	}
+	return port
+}
+
+func partitionPortAllowed(port int32) bool {
+	if port == postgresPartitionPort || port == redisPartitionPort || port == memcachedPartitionPort() {
+		return true
+	}
+	return false
 }
 
 func validatePeerExclusion(ex PartitionPeerExclusion) error {
