@@ -59,4 +59,11 @@ func (c *MetricsCollector) applyMemcachedCacheMetrics(ctx context.Context, ns st
 		ns, promRateRange(),
 	))
 	cm.RedisRejectedRate = rejected
+	cm.CPULimit = c.kubeLimitCPU(ctx, ns, "memcached.*", "memcached")
+	// memcached_exporter has no latency histogram. Clear Redis leftovers.
+	cm.P50Latency = 0
+	cm.P95Latency = 0
+	cm.P99Latency = 0
+	cm.P99Latency9m = 0
+	cm.AvgLatency = 0
 }

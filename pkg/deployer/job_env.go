@@ -1,6 +1,7 @@
 package deployer
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/ywacch/cloud9/pkg/templates"
@@ -19,6 +20,20 @@ func cacheListenPort(node DeploymentNode) string {
 		return port
 	}
 	return defaultPortsByEngine["redis"]
+}
+
+// ListenPort is the client TCP port for an engine id.
+// Chaos and introspection use this table. Do not copy the port literal.
+func ListenPort(engine string) (int32, bool) {
+	raw, ok := defaultPortsByEngine[strings.ToLower(strings.TrimSpace(engine))]
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return int32(n), true
 }
 
 // jobEnv returns per-job ENGINE/HOST/PORT vars for node when it has an outbound

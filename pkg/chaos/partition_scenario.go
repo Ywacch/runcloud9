@@ -208,9 +208,9 @@ func buildSplitAppStoreInput(namespace, targetComponent string, design deployer.
 	if err != nil {
 		return PartitionPolicyInput{}, err
 	}
-	port := postgresPartitionPort
-	if targetComponent == "cache" {
-		port = redisPartitionPort
+	port, err := splitAppStorePort(targetComponent, design)
+	if err != nil {
+		return PartitionPolicyInput{}, err
 	}
 	return PartitionPolicyInput{
 		Namespace:       namespace,
@@ -221,6 +221,33 @@ func buildSplitAppStoreInput(namespace, targetComponent string, design deployer.
 		Port:            port,
 		Exclude:         PartitionPeerExclusion{AppLabel: appServerAppLabel},
 	}, nil
+}
+
+func splitAppStorePort(targetComponent string, design deployer.DeploymentDesign) (int32, error) {
+	switch targetComponent {
+	case "db":
+		return postgresPartitionPort, nil
+	case "cache":
+		topo := deployer.StorytellingTopologyFromDesign(&design, design.Template)
+		engine := strings.ToLower(strings.TrimSpace(topo.CacheEngine))
+		if engine == "" {
+			engine = "redis"
+		}
+		switch engine {
+		case "memcached":
+			return memcachedPartitionPort(), nil
+		case "redis":
+			return redisPartitionPort, nil
+		default:
+			port, ok := deployer.ListenPort(engine)
+			if !ok {
+				return 0, fmt.Errorf("chaos: split_app_store has no port for cache engine %q", engine)
+			}
+			return port, nil
+		}
+	default:
+		return 0, fmt.Errorf("chaos: %s only supports targetComponent \"db\" or \"cache\"", scenarioSplitAppStore)
+	}
 }
 
 func requireDBStreamingReplicas(design deployer.DeploymentDesign) error {

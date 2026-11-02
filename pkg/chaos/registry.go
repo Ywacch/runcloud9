@@ -50,6 +50,14 @@ var scenarioRegistry = []scenarioRegistration{
 		},
 	},
 	{
+		scenario: "cache_flush",
+		engine:   "memcached",
+		targets:  []string{"cache"},
+		new: func(client kubernetes.Interface) ChaosScenario {
+			return &CacheFlushScenario{Client: client}
+		},
+	},
+	{
 		scenario: scenarioStallReplica,
 		engine:   "postgresql",
 		targets:  []string{"db"},
@@ -77,6 +85,15 @@ var scenarioRegistry = []scenarioRegistration{
 	{
 		scenario: scenarioSplitAppStore,
 		engine:   "redis",
+		targets:  []string{"cache"},
+		fidelity: rules.FidelityCompressed,
+		new: func(client kubernetes.Interface) ChaosScenario {
+			return &PartitionScenario{Client: client, Scenario: scenarioSplitAppStore}
+		},
+	},
+	{
+		scenario: scenarioSplitAppStore,
+		engine:   "memcached",
 		targets:  []string{"cache"},
 		fidelity: rules.FidelityCompressed,
 		new: func(client kubernetes.Interface) ChaosScenario {

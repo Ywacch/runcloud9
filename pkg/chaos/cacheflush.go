@@ -2,10 +2,13 @@ package chaos
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
+	"github.com/bradfitz/gomemcache/memcache"
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"k8s.io/client-go/kubernetes"
 )
@@ -23,6 +26,9 @@ func (s *CacheFlushScenario) Apply(ctx context.Context, namespace string, design
 
 	topo := deployer.StorytellingTopologyFromDesign(&design, design.Template)
 	cmd, err := cacheFlushCommand(topo.CacheEngine)
+	if errors.Is(err, errMemcachedFlushDial) {
+		return flushMemcached(ctx, namespace)
+	}
 	if err != nil {
 		return err
 	}
@@ -48,6 +54,35 @@ func (s *CacheFlushScenario) Apply(ctx context.Context, namespace string, design
 	}
 	slog.Info("chaos cache flush", "namespace", namespace, "pod", podName, "app", resolved.AppLabel, "result", out)
 	return nil
+}
+
+// flushMemcached sends flush_all to the cache Service.
+// The address matches resolveIntrospectHost for engine memcached.
+func flushMemcached(ctx context.Context, namespace string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	port, ok := deployer.ListenPort("memcached")
+	if !ok {
+		return fmt.Errorf("chaos: memcached listen port is not configured")
+	}
+	addr := fmt.Sprintf("cache.%s.svc.cluster.local:%d", namespace, port)
+	client := memcache.New(addr)
+	client.Timeout = 5 * time.Second
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.FlushAll()
+	}()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("chaos: memcached flush_all: %w", ctx.Err())
+	case err := <-errCh:
+		if err != nil {
+			return fmt.Errorf("chaos: memcached flush_all: %w", err)
+		}
+		slog.Info("chaos cache flush", "namespace", namespace, "addr", addr, "result", "flush_all")
+		return nil
+	}
 }
 
 // Revert is a no-op for cache_flush.
