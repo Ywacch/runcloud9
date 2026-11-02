@@ -18,8 +18,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/redis/go-redis/v9"
 	"github.com/ywacch/cloud9/pkg/templateapp/consistency"
+	"github.com/ywacch/cloud9/pkg/templateapp/jobs/kvcache"
 	"github.com/ywacch/cloud9/pkg/templateapp/postgres"
 	"github.com/ywacch/cloud9/pkg/templateapp/readrouter"
 	"github.com/ywacch/cloud9/pkg/templateapp/trace"
@@ -528,7 +528,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			cacheHealth = "ok"
 		}
 	} else if s.cache != nil {
-		if err := s.cache.client.Ping(ctx).Err(); err != nil {
+		if err := s.cache.Ping(ctx); err != nil {
 			cacheHealth = "error"
 		} else {
 			cacheHealth = "ok"
@@ -670,14 +670,23 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 			s.proxy = NewProxyClient(cfg.CacheHost, cfg.ProxyPort)
 			slog.Info("cache mode: proxy", "host", cfg.CacheHost, "port", cfg.ProxyPort)
 		} else {
-			client := redis.NewClient(&redis.Options{
-				Addr: fmt.Sprintf("%s:%s", cfg.CacheHost, cfg.CachePort),
-			})
-			if err := client.Ping(ctx).Err(); err != nil {
-				slog.Warn("redis ping failed; continuing with cache disabled", "error", err)
+			openCfg := kvcache.EnvConfig(nil)
+			openCfg.HostEnv = cfg.CacheHost
+			openCfg.PortEnv = cfg.CachePort
+			kv, err := kvcache.Open(openCfg)
+			if err != nil {
+				slog.Warn("cache open failed; continuing with cache disabled", "error", err)
 			} else {
-				s.cache = newCache(client, cfg.Stampede)
-				slog.Info("cache mode: redis", "host", cfg.CacheHost, "port", cfg.CachePort)
+				ping := func(context.Context) error { return nil }
+				if r, ok := kv.(*kvcache.Redis); ok {
+					ping = r.Ping
+				}
+				if err := ping(ctx); err != nil {
+					slog.Warn("cache ping failed; continuing with cache disabled", "error", err)
+				} else {
+					s.cache = newCache(kv, cfg.Stampede, ping)
+					slog.Info("cache mode: redis", "host", cfg.CacheHost, "port", cfg.CachePort)
+				}
 			}
 		}
 	}
