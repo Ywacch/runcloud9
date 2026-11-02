@@ -45,6 +45,26 @@ func TestOpen_UnsupportedEngine(t *testing.T) {
 	}
 }
 
+func TestWithLegacyAddr_KeepsJobPort(t *testing.T) {
+	t.Parallel()
+	cfg := kvcache.Config{
+		EngineEnv: "memcached",
+		HostEnv:   "cache",
+		PortEnv:   "11211",
+	}.WithLegacyAddr("cache", "6379")
+	if cfg.PortEnv != "11211" || cfg.HostEnv != "cache" {
+		t.Fatalf("legacy addr replaced job addr: %+v", cfg)
+	}
+}
+
+func TestWithLegacyAddr_FillsEmpty(t *testing.T) {
+	t.Parallel()
+	cfg := kvcache.Config{EngineEnv: "redis"}.WithLegacyAddr("cache", "6379")
+	if cfg.HostEnv != "cache" || cfg.PortEnv != "6379" {
+		t.Fatalf("empty addr not filled: %+v", cfg)
+	}
+}
+
 func TestOpen_Memcached(t *testing.T) {
 	t.Parallel()
 	c, err := kvcache.Open(kvcache.Config{
