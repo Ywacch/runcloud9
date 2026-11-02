@@ -54,21 +54,11 @@ func ValidateReplicaApplyDelay(config map[string]any, delaysMs []int) error {
 	if !HasPositiveReplicaApplyDelay(delaysMs) {
 		return nil
 	}
-	mode, err := parseReplicationMode(config)
+	delayer, err := LookupReplicaDelayer(dbEngineFromConfig(config))
 	if err != nil {
 		return err
 	}
-	if !requiresSynchronousReplication(mode) {
-		return nil
-	}
-	level, err := syncCommitLevelFromConfig(config)
-	if err != nil {
-		return err
-	}
-	if level == syncCommitRemoteApply {
-		return fmt.Errorf("replicaApplyDelayMs cannot be set with syncCommitLevel remote_apply (commits would wait on the delayed standby)")
-	}
-	return nil
+	return delayer.Validate(config, delaysMs)
 }
 
 // ReplicaApplyDelayUniform reports whether every standby has the same delay.

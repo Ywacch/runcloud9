@@ -83,6 +83,11 @@ func (h *Handler) handleUpdateReplicaLag(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	delayer, err := deployer.LookupReplicaDelayer(deployer.DBEngineFromConfig(cfg))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	hosts := deployer.DBReplicaHostnamesFromConfig(dbNode.Config)
 	if len(hosts) != len(delays) {
 		writeError(w, http.StatusInternalServerError, "replica host count mismatch")
@@ -90,18 +95,9 @@ func (h *Handler) handleUpdateReplicaLag(w http.ResponseWriter, r *http.Request)
 	}
 
 	ctx := r.Context()
-	for i, host := range hosts {
-		admin := deployer.NewPostgresPodAdmin(h.clientset, namespace, host, "postgres-replica")
-		ms := delays[i]
-		alter := fmt.Sprintf("ALTER SYSTEM SET recovery_min_apply_delay = '%dms'", ms)
-		if _, err := admin.ExecSQL(ctx, alter); err != nil {
-			writeError(w, http.StatusBadGateway, fmt.Sprintf("apply delay on %s: %v", host, err))
-			return
-		}
-		if _, err := admin.ExecSQL(ctx, "SELECT pg_reload_conf()"); err != nil {
-			writeError(w, http.StatusBadGateway, fmt.Sprintf("reload on %s: %v", host, err))
-			return
-		}
+	if err := deployer.ApplyReplicaDelays(ctx, h.clientset, namespace, delayer, hosts, delays); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
 	}
 
 	if h.eventBus != nil {

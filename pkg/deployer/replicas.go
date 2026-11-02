@@ -224,3 +224,8 @@ func dbEngineSupportsStreamingReplicas(engine string) bool {
 func dbEngineFromConfig(config map[string]any) string {
 	return strings.ToLower(strings.TrimSpace(configString(config, "engine", "postgresql")))
 }
+
+// DBEngineFromConfig is the exported name for API and validation call sites.
+func DBEngineFromConfig(config map[string]any) string {
+	return dbEngineFromConfig(config)
+}

@@ -56,7 +56,11 @@ func buildDBReplicaInitScript(cfg DeployConfig) string {
 	if err != nil || len(hosts) != len(delays) {
 		delays = zeroDelays(readReplicas)
 	}
-	return dbReplicaBasebackupScriptCore + replicaApplyDelayCaseScript(hosts, delays)
+	delayer, err := LookupReplicaDelayer(dbEngineFromConfig(cfg.Node.Config))
+	if err != nil {
+		return dbReplicaBasebackupScriptCore
+	}
+	return dbReplicaBasebackupScriptCore + delayer.InitScript(hosts, delays)
 }
 
 func replicaApplyDelayCaseScript(hosts []string, delaysMs []int) string {

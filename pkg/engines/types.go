@@ -9,7 +9,7 @@ const (
 )
 
 // CatalogVersion bumps when the served JSON shape or semantics change.
-const CatalogVersion = "2"
+const CatalogVersion = "3"
 
 // Fit describes how naturally an engine serves a job.
 type Fit string
@@ -47,14 +47,15 @@ type Job struct {
 
 // Engine is a datastore or broker family we can mount in a lab.
 type Engine struct {
-	ID            string   `json:"id" yaml:"id"`
-	Label         string   `json:"label" yaml:"label"`
-	Family        string   `json:"family" yaml:"family"`
-	WireCompat    string   `json:"wireCompat,omitempty" yaml:"wireCompat,omitempty"`
-	Weight        string   `json:"weight" yaml:"weight"`
-	MinShape      Shape    `json:"minShape" yaml:"minShape"`
-	NativeSignals []string `json:"nativeSignals,omitempty" yaml:"nativeSignals,omitempty"`
-	Exporter      string   `json:"exporter,omitempty" yaml:"exporter,omitempty"`
+	ID                string   `json:"id" yaml:"id"`
+	Label             string   `json:"label" yaml:"label"`
+	Family            string   `json:"family" yaml:"family"`
+	WireCompat        string   `json:"wireCompat,omitempty" yaml:"wireCompat,omitempty"`
+	Weight            string   `json:"weight" yaml:"weight"`
+	MinShape          Shape    `json:"minShape" yaml:"minShape"`
+	NativeSignals     []string `json:"nativeSignals,omitempty" yaml:"nativeSignals,omitempty"`
+	Exporter          string   `json:"exporter,omitempty" yaml:"exporter,omitempty"`
+	ReplicaApplyDelay bool     `json:"replicaApplyDelay,omitempty" yaml:"replicaApplyDelay,omitempty"`
 }
 
 // Demo links a poor-fit pair to a chaos scenario and check rule for teaching.
