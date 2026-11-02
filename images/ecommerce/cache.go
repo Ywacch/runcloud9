@@ -5,39 +5,48 @@ import (
 	"sync"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	"github.com/ywacch/cloud9/pkg/templateapp/jobs/kvcache"
 	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 )
 
 type Cache struct {
-	client *redis.Client
+	kv kvcache.Cache
 	// singleflight-like per-key mutex to avoid stampedes.
 	inflightMu sync.Map // map[string]*sync.Mutex
 
 	stampedeProtection bool
+	ping               func(context.Context) error
 }
 
-func newCache(client *redis.Client, stampedeProtection bool) *Cache {
+func newCache(kv kvcache.Cache, stampedeProtection bool, ping func(context.Context) error) *Cache {
 	return &Cache{
-		client:             client,
+		kv:                 kv,
 		stampedeProtection: stampedeProtection,
+		ping:               ping,
 	}
+}
+
+func (c *Cache) Ping(ctx context.Context) error {
+	if c.ping == nil {
+		return nil
+	}
+	return c.ping(ctx)
 }
 
 func (c *Cache) Get(ctx context.Context, key string) (string, bool) {
 	start := time.Now()
-	val, err := c.client.Get(ctx, key).Result()
-	if err == redis.Nil || err != nil {
+	val, ok, err := c.kv.Get(ctx, key)
+	if err != nil || !ok {
 		trace.LogCacheGet(ctx, key, false, start)
 		return "", false
 	}
 	trace.LogCacheGet(ctx, key, true, start)
-	return val, true
+	return string(val), true
 }
 
 func (c *Cache) Set(ctx context.Context, key string, value string, ttl time.Duration) error {
 	start := time.Now()
-	err := c.client.Set(ctx, key, value, ttl).Err()
+	err := c.kv.Set(ctx, key, []byte(value), ttl)
 	trace.LogCacheSet(ctx, key, start)
 	return err
 }
@@ -47,7 +56,12 @@ func (c *Cache) Delete(ctx context.Context, keys ...string) error {
 		return nil
 	}
 	start := time.Now()
-	err := c.client.Del(ctx, keys...).Err()
+	var err error
+	for _, key := range keys {
+		if delErr := c.kv.Delete(ctx, key); delErr != nil {
+			err = delErr
+		}
+	}
 	trace.LogCacheDelete(ctx, start)
 	return err
 }
