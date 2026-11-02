@@ -689,9 +689,7 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 
 	// Optional cache.
 	if cfg.CacheHost != "" {
-		openCfg := kvcache.EnvConfig(nil)
-		openCfg.HostEnv = cfg.CacheHost
-		openCfg.PortEnv = cfg.CachePort
+		openCfg := kvcache.EnvConfig(nil).WithLegacyAddr(cfg.CacheHost, cfg.CachePort)
 		kv, err := kvcache.Open(openCfg)
 		if err != nil {
 			slog.Warn("cache open failed; continuing with cache disabled", "error", err)

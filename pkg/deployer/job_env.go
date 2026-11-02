@@ -13,6 +13,14 @@ var defaultPortsByEngine = map[string]string{
 	"rabbitmq":   "5672",
 }
 
+// cacheListenPort is the TCP port clients use for this cache node.
+func cacheListenPort(node DeploymentNode) string {
+	if port, ok := defaultPortsByEngine[NodeEngine(node)]; ok {
+		return port
+	}
+	return defaultPortsByEngine["redis"]
+}
+
 // jobEnv returns per-job ENGINE/HOST/PORT vars for node when it has an outbound
 // connection to each bound job node. bindings come from ResolveJobBindings.
 func jobEnv(node DeploymentNode, design DeploymentDesign, bindings []Binding) map[string]string {

@@ -80,3 +80,15 @@ func EnvConfig(rdb redis.UniversalClient) Config {
 		RedisClient: rdb,
 	}
 }
+
+// WithLegacyAddr fills host and port only when EnvConfig left them empty.
+// A legacy CACHE_PORT of 6379 must not replace HOT_CACHE_PORT.
+func (c Config) WithLegacyAddr(host, port string) Config {
+	if strings.TrimSpace(c.HostEnv) == "" {
+		c.HostEnv = strings.TrimSpace(host)
+	}
+	if strings.TrimSpace(c.PortEnv) == "" {
+		c.PortEnv = strings.TrimSpace(port)
+	}
+	return c
+}

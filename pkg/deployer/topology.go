@@ -516,7 +516,7 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 			if !isAppServer {
 				if node.Type == "worker" {
 					env["CACHE_HOST"] = "cache"
-					env["CACHE_PORT"] = "6379"
+					env["CACHE_PORT"] = cacheListenPort(target)
 					// Workers write timeline entries, so they honor the same
 					// cache-node-owned TTL as every other cache writer.
 					if ttl, ok := normalizeCacheTTLSeconds(target.Config); ok {
@@ -533,8 +533,8 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 				// Intentionally do not set CACHE_PORT; the url-shortener in proxy
 				// mode uses the proxy's fixed HTTP port (8081).
 			} else {
-				// Cache-aside topology: app-server -> Redis
-				env["CACHE_PORT"] = "6379"
+				// Cache-aside: app dials the cache engine port (Redis 6379, Memcached 11211).
+				env["CACHE_PORT"] = cacheListenPort(target)
 			}
 		case "mq":
 			env["MQ_HOST"] = "mq"

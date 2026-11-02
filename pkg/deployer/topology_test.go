@@ -340,6 +340,36 @@ func TestDeriveEnvVars_WorkerGetsMQFromOutboundEdge(t *testing.T) {
 	}
 }
 
+func TestDeriveEnvVars_MemcachedCacheAsideUsesMemcachedPort(t *testing.T) {
+	design := DeploymentDesign{
+		Nodes: []DeploymentNode{
+			{ID: "a", Type: "app-server", Name: "API"},
+			{
+				ID:   "c",
+				Type: "cache",
+				Name: "Memcached",
+				Config: map[string]any{
+					"engine":   "memcached",
+					"strategy": "cache-aside",
+				},
+			},
+			{ID: "w", Type: "worker", Name: "worker"},
+		},
+		Connections: []DeploymentConn{
+			{SourceID: "a", TargetID: "c"},
+			{SourceID: "w", TargetID: "c"},
+		},
+	}
+	appEnv := DeriveEnvVars(design.Nodes[0], design)
+	if appEnv["CACHE_HOST"] != "cache" || appEnv["CACHE_PORT"] != "11211" {
+		t.Fatalf("app cache addr: host=%q port=%q", appEnv["CACHE_HOST"], appEnv["CACHE_PORT"])
+	}
+	workerEnv := DeriveEnvVars(design.Nodes[2], design)
+	if workerEnv["CACHE_HOST"] != "cache" || workerEnv["CACHE_PORT"] != "11211" {
+		t.Fatalf("worker cache addr: host=%q port=%q", workerEnv["CACHE_HOST"], workerEnv["CACHE_PORT"])
+	}
+}
+
 func TestDeriveEnvVars_WorkerGetsCacheFromOutboundEdge(t *testing.T) {
 	design := DeploymentDesign{
 		Nodes: []DeploymentNode{

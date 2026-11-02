@@ -670,9 +670,7 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 			s.proxy = NewProxyClient(cfg.CacheHost, cfg.ProxyPort)
 			slog.Info("cache mode: proxy", "host", cfg.CacheHost, "port", cfg.ProxyPort)
 		} else {
-			openCfg := kvcache.EnvConfig(nil)
-			openCfg.HostEnv = cfg.CacheHost
-			openCfg.PortEnv = cfg.CachePort
+			openCfg := kvcache.EnvConfig(nil).WithLegacyAddr(cfg.CacheHost, cfg.CachePort)
 			kv, err := kvcache.Open(openCfg)
 			if err != nil {
 				slog.Warn("cache open failed; continuing with cache disabled", "error", err)
