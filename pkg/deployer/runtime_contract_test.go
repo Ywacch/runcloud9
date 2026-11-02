@@ -394,7 +394,6 @@ func TestValidateRuntimeContract_Table(t *testing.T) {
 					{ID: "app1", Type: "app-server", Name: "App"},
 					{ID: "db1", Type: "db", Name: "DB", Config: map[string]interface{}{
 						"engine":              "mysql",
-						"readReplicas":        1,
 						"replicaApplyDelayMs": 500,
 					}},
 				},
