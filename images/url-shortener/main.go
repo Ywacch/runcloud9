@@ -46,7 +46,8 @@ type Config struct {
 }
 
 type Server struct {
-	db    *DB
+	store URLStore
+	pg    *DB
 	cache *Cache // nil if CACHE_HOST empty
 	proxy *ProxyClient
 	cfg   Config
@@ -312,7 +313,7 @@ func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 		s.cacheMisses.Add(1)
 		cacheMissesTotal.Inc()
 		fetchFn := func() (string, error) {
-			rec, err := s.db.GetURL(ctx, code)
+			rec, err := s.store.GetURL(ctx, code)
 			if err != nil {
 				return "", err
 			}
@@ -343,7 +344,7 @@ func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Cache disabled: read from DB.
-	rec, err := s.db.GetURL(ctx, code)
+	rec, err := s.store.GetURL(ctx, code)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			jsonError(w, http.StatusNotFound, "not found")
@@ -396,7 +397,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// UNDERSTAND: /stats bypasses cache and reads authoritative row data from Postgres.
-	rec, err := s.db.GetURL(ctx, code)
+	rec, err := s.store.GetURL(ctx, code)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			jsonError(w, http.StatusNotFound, "not found")
@@ -423,7 +424,7 @@ func (s *Server) handleCodePool(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if s.db == nil || s.db.pool == nil {
+	if s.store == nil {
 		if s.proxy != nil {
 			codes, err := s.proxy.Codes(r.Context())
 			if err != nil {
@@ -438,21 +439,10 @@ func (s *Server) handleCodePool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	const limit = 200
-	rows, err := s.db.pool.Query(r.Context(),
-		`SELECT code FROM urls ORDER BY code LIMIT $1`, limit)
+	codes, err := s.store.ListCodes(r.Context(), limit)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to fetch codes")
 		return
-	}
-	defer rows.Close()
-
-	var codes []string
-	for rows.Next() {
-		var code string
-		if err := rows.Scan(&code); err != nil {
-			continue
-		}
-		codes = append(codes, code)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"codes": codes})
 }
@@ -485,8 +475,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// DB health.
-	var n int
-	if err := s.db.pool.QueryRow(ctx, "SELECT 1").Scan(&n); err != nil {
+	if s.store == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"status": "error",
+			"db":     "unreachable",
+		})
+		return
+	}
+	if err := s.store.Ping(ctx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"status": "error",
 			"db":     "unreachable",
@@ -600,7 +596,7 @@ func (s *Server) allocateCodeProxy(ctx context.Context, longURL string) (string,
 func (s *Server) allocateCodeDB(ctx context.Context, longURL string) (string, error) {
 	for attempt := 1; attempt <= 5; attempt++ {
 		code := generateCode()
-		inserted, err := s.db.InsertURL(ctx, code, longURL)
+		inserted, err := s.store.InsertURL(ctx, code, longURL)
 		if err != nil {
 			return "", err
 		}
@@ -646,19 +642,6 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 		return nil, err
 	}
 
-	// Create schema.
-	_, err = pool.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS urls (
-			code        VARCHAR(8) PRIMARY KEY,
-			original    TEXT NOT NULL,
-			created_at  TIMESTAMPTZ DEFAULT NOW()
-		);
-	`)
-	if err != nil {
-		pool.Close()
-		return nil, err
-	}
-
 	var readPools []*pgxpool.Pool
 	var router readSplitRouter
 	if len(replicaHosts) > 0 {
@@ -689,9 +672,19 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 		)
 	}
 
+	db := newDB(pool, readPools, router)
+	if err := db.InitSchema(ctx); err != nil {
+		pool.Close()
+		for _, rp := range readPools {
+			rp.Close()
+		}
+		return nil, err
+	}
+
 	s := &Server{
-		db:  newDB(pool, readPools, router),
-		cfg: cfg,
+		store: db,
+		pg:    db,
+		cfg:   cfg,
 	}
 
 	// Optional cache.
@@ -726,9 +719,9 @@ func main() {
 		slog.Error("newServer failed", "error", err)
 		os.Exit(1)
 	}
-	if s.db != nil && s.db.pool != nil {
-		defer s.db.pool.Close()
-		defer s.db.Close()
+	if s.pg != nil && s.pg.pool != nil {
+		defer s.pg.pool.Close()
+		defer s.pg.Close()
 	}
 
 	srv := &http.Server{

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,12 +10,6 @@ import (
 	"github.com/ywacch/cloud9/pkg/templateapp/readrouter"
 	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 )
-
-type URLStats struct {
-	Code      string
-	Original  string
-	CreatedAt time.Time
-}
 
 type readSplitRouter interface {
 	QueryRead(
@@ -51,6 +44,42 @@ func (db *DB) Close() {
 			p.Close()
 		}
 	}
+}
+
+func (db *DB) Ping(ctx context.Context) error {
+	var n int
+	return db.pool.QueryRow(ctx, "SELECT 1").Scan(&n)
+}
+
+func (db *DB) InitSchema(ctx context.Context) error {
+	_, err := db.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS urls (
+			code        VARCHAR(8) PRIMARY KEY,
+			original    TEXT NOT NULL,
+			created_at  TIMESTAMPTZ DEFAULT NOW()
+		);
+	`)
+	return err
+}
+
+func (db *DB) ListCodes(ctx context.Context, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := db.pool.Query(ctx, `SELECT code FROM urls ORDER BY code LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var codes []string
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err != nil {
+			return nil, err
+		}
+		codes = append(codes, code)
+	}
+	return codes, rows.Err()
 }
 
 func getURLQuery(tokenExpr string) string {
@@ -131,9 +160,9 @@ func (db *DB) InsertURL(ctx context.Context, code, original string) (inserted bo
 	return inserted, err
 }
 
-func (db *DB) GetURL(ctx context.Context, code string) (URLStats, error) {
+func (db *DB) GetURL(ctx context.Context, code string) (URLRecord, error) {
 	if !routerActive(db.router) {
-		var record URLStats
+		var record URLRecord
 		err := postgres.Observe(ctx, "get_url", "postgres", func() error {
 			var err error
 			record, err = db.getURLLeader(ctx, code)
@@ -143,7 +172,7 @@ func (db *DB) GetURL(ctx context.Context, code string) (URLStats, error) {
 	}
 
 	clientID := trace.ClientID(ctx)
-	var record URLStats
+	var record URLRecord
 	err := postgres.ObserveTarget(ctx, "get_url", func() (string, error) {
 		_, target, err := db.router.QueryRead(ctx, clientID,
 			func(tokenExpr string) (string, []any) {
@@ -159,16 +188,16 @@ func (db *DB) GetURL(ctx context.Context, code string) (URLStats, error) {
 		return target, err
 	})
 	if err != nil {
-		return URLStats{}, err
+		return URLRecord{}, err
 	}
 	return record, nil
 }
 
-func (db *DB) getURLLeader(ctx context.Context, code string) (URLStats, error) {
+func (db *DB) getURLLeader(ctx context.Context, code string) (URLRecord, error) {
 	row := db.pool.QueryRow(ctx, getURLQuery(""), code)
-	var record URLStats
+	var record URLRecord
 	if err := row.Scan(&record.Code, &record.Original, &record.CreatedAt); err != nil {
-		return URLStats{}, err
+		return URLRecord{}, err
 	}
 	return record, nil
 }
