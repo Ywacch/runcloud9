@@ -178,6 +178,11 @@ func validateDBReplicaApplyDelay(design DeploymentDesign, _ *templates.TemplateS
 		if err := ValidateReplicaApplyDelay(node.Config, delays); err != nil {
 			return fmt.Errorf("database %q: %w", node.Name, err)
 		}
+		if configKeyPresent(node.Config, "replicaApplyDelayMs") {
+			if _, err := LookupReplicaDelayer(dbEngineFromConfig(node.Config)); err != nil {
+				return fmt.Errorf("database %q: %w", node.Name, err)
+			}
+		}
 	}
 	return nil
 }

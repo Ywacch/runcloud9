@@ -2,6 +2,7 @@
   label: PostgreSQL
   family: relational
   weight: light
+  replicaApplyDelay: true
   minShape:
     pods: 1
     cpuMilli: 125

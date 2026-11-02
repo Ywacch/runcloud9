@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"strings"
 	"sync"
 
 	"gopkg.in/yaml.v3"
@@ -38,6 +39,25 @@ func (c *Catalog) Pair(job, engine string) (Pair, bool) {
 		}
 	}
 	return Pair{}, false
+}
+
+// EngineByID returns the engine entry, or false.
+func (c *Catalog) EngineByID(id string) (Engine, bool) {
+	for _, e := range c.Engines {
+		if e.ID == id {
+			return e, true
+		}
+	}
+	return Engine{}, false
+}
+
+// SupportsReplicaApplyDelay reports whether the catalog lists lag-dial support for engine id.
+func SupportsReplicaApplyDelay(engineID string) bool {
+	e, ok := Default().EngineByID(strings.ToLower(strings.TrimSpace(engineID)))
+	if !ok && engineID == "" {
+		e, ok = Default().EngineByID("postgresql")
+	}
+	return ok && e.ReplicaApplyDelay
 }
 
 func load(fsys fs.FS) (*Catalog, error) {

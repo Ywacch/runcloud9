@@ -385,6 +385,22 @@ func TestValidateRuntimeContract_Table(t *testing.T) {
 			},
 			wantErr: "replicaApplyDelayMs cannot be set with syncCommitLevel remote_apply",
 		},
+		{
+			name:       "unsupported engine rejects replica apply delay key",
+			templateID: "url-shortener",
+			design: DeploymentDesign{
+				Template: "url-shortener",
+				Nodes: []DeploymentNode{
+					{ID: "app1", Type: "app-server", Name: "App"},
+					{ID: "db1", Type: "db", Name: "DB", Config: map[string]interface{}{
+						"engine":              "mysql",
+						"replicaApplyDelayMs": 500,
+					}},
+				},
+				Connections: []DeploymentConn{{SourceID: "app1", TargetID: "db1"}},
+			},
+			wantErr: "not supported for db engine",
+		},
 	}
 
 	for _, tc := range tests {
