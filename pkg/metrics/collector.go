@@ -1087,6 +1087,9 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		}
 	}
 
+	if strings.EqualFold(topo.CacheEngine, "memcached") {
+		c.applyMemcachedCacheMetrics(ctx, ns, &cmCache)
+	}
 	annotateCacheForTemplate(&cmCache, template)
 	if topo.CacheStrategy != "" {
 		cmCache.CacheStrategy = topo.CacheStrategy

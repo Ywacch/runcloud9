@@ -71,7 +71,8 @@ func connectTailLines(needTail bool) *int64 {
 
 // componentLogTargets maps each logical component to one or more pod/container
 // targets. Cache intentionally supports multiple topologies:
-// - cache-aside: app=redis
+// - cache-aside Redis: app=redis
+// - cache-aside Memcached: app=memcached
 // - proxy modes: app=cache-proxy + app=redis-internal
 var componentLogTargets = map[string][]componentLogTarget{
 	"db": {
@@ -80,6 +81,7 @@ var componentLogTargets = map[string][]componentLogTarget{
 	},
 	"cache": {
 		{labelSelector: "app=redis", containerName: "redis"},
+		{labelSelector: "app=memcached", containerName: "memcached"},
 		{labelSelector: "app=cache-proxy", containerName: "cache-proxy"},
 		{labelSelector: "app=redis-internal", containerName: "redis"},
 	},
