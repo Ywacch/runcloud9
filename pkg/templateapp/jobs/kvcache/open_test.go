@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/bradfitz/gomemcache/memcache"
 	"github.com/redis/go-redis/v9"
 	"github.com/ywacch/cloud9/pkg/templateapp/jobs/kvcache"
 )
@@ -35,11 +36,27 @@ func TestOpen_Redis(t *testing.T) {
 func TestOpen_UnsupportedEngine(t *testing.T) {
 	t.Parallel()
 	_, err := kvcache.Open(kvcache.Config{
-		EngineEnv: "memcached",
+		EngineEnv: "kafka",
 		HostEnv:   "cache",
-		PortEnv:   "11211",
+		PortEnv:   "9092",
 	})
 	if err == nil {
-		t.Fatal("expected error for memcached in PR1")
+		t.Fatal("expected error for unknown engine")
+	}
+}
+
+func TestOpen_Memcached(t *testing.T) {
+	t.Parallel()
+	c, err := kvcache.Open(kvcache.Config{
+		EngineEnv:       "memcached",
+		HostEnv:         "127.0.0.1",
+		PortEnv:         "11211",
+		MemcachedClient: memcache.New("127.0.0.1:11211"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Engine() != "memcached" {
+		t.Fatalf("engine: %q", c.Engine())
 	}
 }

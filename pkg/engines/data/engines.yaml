@@ -19,6 +19,16 @@
     memoryMi: 256
   exporter: redis-exporter
   nativeSignals: []
+- id: memcached
+  label: Memcached
+  family: kv
+  weight: light
+  minShape:
+    pods: 1
+    cpuMilli: 125
+    memoryMi: 256
+  exporter: memcached-exporter
+  nativeSignals: []
 - id: rabbitmq
   label: RabbitMQ
   family: broker

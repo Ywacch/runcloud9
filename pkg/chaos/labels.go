@@ -48,7 +48,12 @@ func resolveTarget(targetComponent string, design deployer.DeploymentDesign) (Re
 		if deployer.RequiresProxy(*matched) {
 			return ResolvedTarget{AppLabel: "redis-internal", Container: "redis"}, nil
 		}
-		return ResolvedTarget{AppLabel: "redis", Container: "redis"}, nil
+		switch deployer.CacheEngineFromNode(*matched) {
+		case "memcached":
+			return ResolvedTarget{AppLabel: "memcached", Container: "memcached"}, nil
+		default:
+			return ResolvedTarget{AppLabel: "redis", Container: "redis"}, nil
+		}
 	case "app-server":
 		return ResolvedTarget{AppLabel: "app-server", Container: "app-server"}, nil
 	case "db":

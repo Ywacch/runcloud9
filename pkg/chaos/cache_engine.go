@@ -12,7 +12,7 @@ func cacheFlushCommand(engine string) ([]string, error) {
 	case "redis":
 		return []string{"redis-cli", "FLUSHALL"}, nil
 	case "memcached":
-		return nil, fmt.Errorf("chaos: cache_flush unsupported for engine memcached (not yet implemented)")
+		return []string{"sh", "-c", "printf 'flush_all\\r\\n' | nc -q 1 127.0.0.1 11211"}, nil
 	default:
 		if engine == "" {
 			engine = "(unknown)"

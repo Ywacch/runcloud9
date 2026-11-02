@@ -112,13 +112,18 @@ func TestValidateJobBindings(t *testing.T) {
 			}(),
 			catalog: func() *engines.Catalog {
 				c := *engines.Default()
-				c.Engines = append(append([]engines.Engine(nil), c.Engines...), engines.Engine{
-					ID: "memcached", Label: "Memcached", Family: "kv", Weight: "light",
-				})
-				c.Pairs = append(append([]engines.Pair(nil), c.Pairs...), engines.Pair{
+				pairs := make([]engines.Pair, 0, len(c.Pairs))
+				for _, p := range c.Pairs {
+					if p.Job == "hot_cache" && p.Engine == "memcached" {
+						continue
+					}
+					pairs = append(pairs, p)
+				}
+				pairs = append(pairs, engines.Pair{
 					Job: "hot_cache", Engine: "memcached", Fit: engines.FitImpossible,
 					Build: engines.BuildAvailable, Reason: "no keyed point read", Fidelity: engines.FidelityReal,
 				})
+				c.Pairs = pairs
 				return &c
 			}(),
 			wantErr: ErrImpossiblePair,

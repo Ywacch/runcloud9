@@ -9,6 +9,7 @@ import (
 var defaultPortsByEngine = map[string]string{
 	"postgresql": "5432",
 	"redis":      "6379",
+	"memcached":  "11211",
 	"rabbitmq":   "5672",
 }
 

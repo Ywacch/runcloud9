@@ -14,7 +14,7 @@ func TestCacheFlushCommand(t *testing.T) {
 	}{
 		{engine: "redis", want: []string{"redis-cli", "FLUSHALL"}},
 		{engine: "Redis", want: []string{"redis-cli", "FLUSHALL"}},
-		{engine: "memcached", wantErr: true, errSubstr: "not yet implemented"},
+		{engine: "memcached", want: []string{"sh", "-c", "printf 'flush_all\\r\\n' | nc -q 1 127.0.0.1 11211"}},
 		{engine: "scylla", wantErr: true, errSubstr: "supported: redis"},
 	}
 

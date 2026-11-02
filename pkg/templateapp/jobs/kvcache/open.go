@@ -5,15 +5,17 @@ import (
 	"os"
 	"strings"
 
+	"github.com/bradfitz/gomemcache/memcache"
 	"github.com/redis/go-redis/v9"
 )
 
 // Config selects a cache implementation from deployer job env vars.
 type Config struct {
-	EngineEnv   string
-	HostEnv     string
-	PortEnv     string
-	RedisClient redis.UniversalClient
+	EngineEnv       string
+	HostEnv         string
+	PortEnv         string
+	RedisClient     redis.UniversalClient
+	MemcachedClient *memcache.Client
 }
 
 // Open returns a Cache from HOT_CACHE_* (or legacy CACHE_HOST) configuration.
@@ -34,6 +36,12 @@ func Open(cfg Config) (Cache, error) {
 			client = redis.NewClient(&redis.Options{Addr: fmt.Sprintf("%s:%s", host, port)})
 		}
 		return NewRedis(client)
+	case "memcached":
+		client := cfg.MemcachedClient
+		if client == nil {
+			client = memcache.New(fmt.Sprintf("%s:%s", host, port))
+		}
+		return NewMemcached(client)
 	default:
 		return nil, fmt.Errorf("kvcache: unsupported HOT_CACHE_ENGINE %q", engine)
 	}

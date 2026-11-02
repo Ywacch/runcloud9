@@ -62,7 +62,7 @@ func StorytellingTopologyFromDesign(d *DeploymentDesign, template string) Storyt
 			t.DBRole = "primary"
 		case "cache":
 			t.HasCache = true
-			t.CacheEngine = "redis"
+			t.CacheEngine = CacheEngineFromNode(n)
 			if RequiresProxy(n) {
 				t.HasProxyCache = true
 			}

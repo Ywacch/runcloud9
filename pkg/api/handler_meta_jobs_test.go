@@ -35,7 +35,7 @@ func TestHandleMetaJobs_ETag(t *testing.T) {
 	if resp.Version != engines.CatalogVersion {
 		t.Fatalf("catalogVersion: want %q, got %q", engines.CatalogVersion, resp.Version)
 	}
-	if len(resp.Jobs) != 4 || len(resp.Engines) != 3 || len(resp.Pairs) != 6 {
+	if len(resp.Jobs) != 4 || len(resp.Engines) != 4 || len(resp.Pairs) != 7 {
 		t.Fatalf("counts: jobs=%d engines=%d pairs=%d", len(resp.Jobs), len(resp.Engines), len(resp.Pairs))
 	}
 	for _, e := range resp.Engines {

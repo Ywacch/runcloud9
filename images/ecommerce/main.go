@@ -680,6 +680,8 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 				ping := func(context.Context) error { return nil }
 				if r, ok := kv.(*kvcache.Redis); ok {
 					ping = r.Ping
+				} else if mc, ok := kv.(*kvcache.Memcached); ok {
+					ping = mc.Ping
 				}
 				if err := ping(ctx); err != nil {
 					slog.Warn("cache ping failed; continuing with cache disabled", "error", err)
