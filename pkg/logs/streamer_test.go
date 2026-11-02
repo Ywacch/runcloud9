@@ -42,6 +42,28 @@ func TestDiscoverPodLogStreams_CacheAside(t *testing.T) {
 	}
 }
 
+func TestDiscoverPodLogStreams_Memcached(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "memcached-1",
+				Namespace: "ns1",
+				Labels:    map[string]string{"app": "memcached", "deployment": "ns1"},
+			},
+		},
+	)
+	streams := discoverPodLogStreams(context.Background(), client, "ns1")
+	found := false
+	for _, s := range streams {
+		if s.component == "cache" && s.podName == "memcached-1" && s.containerName == "memcached" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected memcached log stream, got %+v", streams)
+	}
+}
+
 func TestDiscoverPodLogStreams_ProxyCacheTargets(t *testing.T) {
 	client := fake.NewSimpleClientset(
 		&corev1.Pod{
