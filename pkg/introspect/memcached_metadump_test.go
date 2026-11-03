@@ -16,6 +16,23 @@ func TestParseMetadumpLine(t *testing.T) {
 	}
 }
 
+func TestMetadumpKeyVisible(t *testing.T) {
+	t.Parallel()
+	patterns := []string{"product:*", "cart:*", "catalog", "product-pool"}
+	if !metadumpKeyVisible("product:1", patterns) || !metadumpKeyVisible("catalog", patterns) {
+		t.Fatal("whitelist keys should be visible")
+	}
+	if metadumpKeyVisible("secret", patterns) {
+		t.Fatal("key outside the whitelist should be hidden")
+	}
+	if metadumpKeyVisible("catalog", nil) || metadumpKeyVisible("catalog", []string{}) {
+		t.Fatal("empty pattern set should hide every key")
+	}
+	if !metadumpKeyVisible("abc", []string{"*"}) {
+		t.Fatal("star whitelist should show keys")
+	}
+}
+
 func TestMetadumpTTL(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(1_000, 0)

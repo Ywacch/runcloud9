@@ -83,8 +83,10 @@ func fetchMemcachedStats(ctx context.Context, addr string) (map[string]string, e
 }
 
 // ListKeys reads one lru_crawler metadump and returns up to limit matching keys.
+// patterns is the template whitelist, or one allowed pattern.
+// An empty patterns list matches nothing.
 // The connection closes when the read stops, including when the cap is hit.
-func (d *MemcachedDriver) ListKeys(ctx context.Context, pattern string, limit int, now time.Time) (keys []KeyInfo, truncated bool, err error) {
+func (d *MemcachedDriver) ListKeys(ctx context.Context, patterns []string, limit int, now time.Time) (keys []KeyInfo, truncated bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
@@ -123,7 +125,7 @@ func (d *MemcachedDriver) ListKeys(ctx context.Context, pattern string, limit in
 		if !ok {
 			continue
 		}
-		if pattern != "" && !KeyMatchesPatterns(key, []string{pattern}) {
+		if !metadumpKeyVisible(key, patterns) {
 			continue
 		}
 		keys = append(keys, KeyInfo{
@@ -161,6 +163,15 @@ func (d *MemcachedDriver) GetKey(ctx context.Context, key string) (KeyValue, boo
 		return KeyValue{}, false, fmt.Errorf("memcached get: %w", err)
 	}
 	return KeyValue{Key: key, Type: "string", Value: string(item.Value), TTL: -1}, true, nil
+}
+
+// metadumpKeyVisible reports whether key is in the template pattern set.
+// An empty set matches nothing, so a missing whitelist does not dump every key.
+func metadumpKeyVisible(key string, patterns []string) bool {
+	if key == "" || len(patterns) == 0 {
+		return false
+	}
+	return KeyMatchesPatterns(key, patterns)
 }
 
 func parseMetadumpLine(line string) (key string, exp int64, size int, ok bool) {

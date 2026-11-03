@@ -90,6 +90,40 @@ func TestValidateIntrospectAction_StatsNeedsNoPattern(t *testing.T) {
 	}
 }
 
+func TestMemcachedKeyPatterns_EmptyQueryUsesWhitelist(t *testing.T) {
+	t.Parallel()
+	allowed := []string{"product:*", "cart:*", "catalog", "product-pool"}
+	got := memcachedKeyPatterns("", allowed)
+	if len(got) != len(allowed) {
+		t.Fatalf("len = %d", len(got))
+	}
+	for i := range allowed {
+		if got[i] != allowed[i] {
+			t.Fatalf("pattern[%d] = %q", i, got[i])
+		}
+	}
+	allowed[0] = "changed"
+	if got[0] != "product:*" {
+		t.Fatal("result aliases the whitelist slice")
+	}
+	one := memcachedKeyPatterns(" catalog ", allowed)
+	if len(one) != 1 || one[0] != "catalog" {
+		t.Fatalf("query pattern = %#v", one)
+	}
+}
+
+func TestValidateIntrospectAction_MemcachedEmptyPatternAllowed(t *testing.T) {
+	t.Parallel()
+	spec := introspect.ComponentSpec{
+		Engine:      "memcached",
+		KeyPatterns: []string{"product:*", "catalog"},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/keys", nil)
+	if err := validateIntrospectAction("keys", spec, "", req); err != nil {
+		t.Fatalf("empty pattern: %v", err)
+	}
+}
+
 func TestValidateIntrospectAction_KeysStarForbiddenWhenNotWhitelisted(t *testing.T) {
 	t.Parallel()
 	spec := introspect.ComponentSpec{
