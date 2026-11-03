@@ -681,11 +681,20 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 				} else if mc, ok := kv.(*kvcache.Memcached); ok {
 					ping = mc.Ping
 				}
+				s.cache = newCache(kv, cfg.Stampede, ping)
 				if err := ping(ctx); err != nil {
-					slog.Warn("cache ping failed; continuing with cache disabled", "error", err)
+					slog.Warn("cache ping failed; cache stays attached",
+						"engine", kv.Engine(),
+						"host", openCfg.HostEnv,
+						"port", openCfg.PortEnv,
+						"error", err,
+					)
 				} else {
-					s.cache = newCache(kv, cfg.Stampede, ping)
-					slog.Info("cache mode: redis", "host", cfg.CacheHost, "port", cfg.CachePort)
+					slog.Info("cache attached",
+						"engine", kv.Engine(),
+						"host", openCfg.HostEnv,
+						"port", openCfg.PortEnv,
+					)
 				}
 			}
 		}

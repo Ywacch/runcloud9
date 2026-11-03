@@ -100,7 +100,7 @@ func (h *Handler) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 	case "redis":
 		h.handleRedisIntrospect(ctx, w, host, action, param, introSpec, r)
 	case "memcached":
-		h.handleMemcachedIntrospect(ctx, w, host, action, introSpec)
+		h.handleMemcachedIntrospect(ctx, w, host, action, param, introSpec, r)
 	case "rabbitmq":
 		h.handleRabbitMQIntrospect(ctx, w, host, action, param, introSpec)
 	default:
@@ -230,8 +230,8 @@ func introspectAction(path, namespace, component string) string {
 }
 
 func validateIntrospectAction(action string, spec introspect.ComponentSpec, param string, r *http.Request) error {
-	if spec.Engine == "memcached" && action != "stats" && action != "capabilities" {
-		return fmt.Errorf("memcached introspection supports stats only")
+	if spec.Engine == "memcached" && action != "stats" && action != "capabilities" && action != "keys" && action != "key" {
+		return fmt.Errorf("memcached introspection supports stats, keys, and key")
 	}
 	switch action {
 	case "schema", "rows":
@@ -402,7 +402,7 @@ func (h *Handler) handleRedisIntrospect(ctx context.Context, w http.ResponseWrit
 	}
 }
 
-func (h *Handler) handleMemcachedIntrospect(ctx context.Context, w http.ResponseWriter, host, action string, spec introspect.ComponentSpec) {
+func (h *Handler) handleMemcachedIntrospect(ctx context.Context, w http.ResponseWriter, host, action, key string, spec introspect.ComponentSpec, r *http.Request) {
 	driver, err := introspect.NewMemcachedDriver(ctx, host)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("memcached connect failed: %v", err))
@@ -419,6 +419,30 @@ func (h *Handler) handleMemcachedIntrospect(ctx context.Context, w http.Response
 			return
 		}
 		writeIntrospectJSON(w, map[string]any{"stats": stats})
+	case "keys":
+		pattern := r.URL.Query().Get("pattern")
+		limit := queryInt(r, "count", 50)
+		keys, truncated, err := driver.ListKeys(ctx, pattern, limit, time.Now())
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeIntrospectJSON(w, map[string]any{
+			"keys":      keys,
+			"cursor":    0,
+			"truncated": truncated,
+		})
+	case "key":
+		kv, ok, err := driver.GetKey(ctx, key)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusNotFound, "key not found")
+			return
+		}
+		writeIntrospectJSON(w, kv)
 	default:
 		writeError(w, http.StatusNotFound, "unknown memcached action")
 	}

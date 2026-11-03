@@ -215,8 +215,8 @@ func TestPartitionScenario_splitAppStore_cache(t *testing.T) {
 		t.Fatalf("dest app: %v", policy.Spec.PodSelector.MatchLabels)
 	}
 	_, err = client.CoreV1().Pods(ns).Get(context.Background(), appPod.Name, metav1.GetOptions{})
-	if err == nil {
-		t.Fatal("expected app-server pod deleted after split_app_store Apply")
+	if err != nil {
+		t.Fatalf("app-server pod should stay running: %v", err)
 	}
 }
 
@@ -229,11 +229,11 @@ func TestSplitAppStoreDescription(t *testing.T) {
 	}{
 		{
 			target: "cache",
-			want:   "Block app-server from cache (workers still reach cache); restart app pods so pools reconnect",
+			want:   "Block app-server from cache. Workers still reach cache.",
 		},
 		{
 			target: "db",
-			want:   "Block app-server from the db primary (workers and read replicas unaffected); restart app pods so pools reconnect",
+			want:   "Block app-server from the db primary. Workers and read replicas still reach it.",
 		},
 	}
 	for _, tc := range tests {
