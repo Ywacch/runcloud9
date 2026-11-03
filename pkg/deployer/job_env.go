@@ -54,7 +54,7 @@ func jobEnv(node DeploymentNode, design DeploymentDesign, bindings []Binding) ma
 		if bound == nil {
 			continue
 		}
-		host := serviceHostForNodeType(bound.Type)
+		host := jobServiceHost(*bound, design)
 		if host == "" {
 			continue
 		}

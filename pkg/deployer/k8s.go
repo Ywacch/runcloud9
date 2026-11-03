@@ -480,7 +480,8 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 	}
 
 	// Cache-aside: single Redis pod/service + redis_exporter sidecar for Prometheus.
-	labels := map[string]string{"app": "redis", "deployment": cfg.Namespace}
+	depName, svcName, appLabel := redisCacheDeployIdentity(cfg.Node, cfg.Design)
+	labels := map[string]string{"app": appLabel, "deployment": cfg.Namespace}
 
 	redisExporter := corev1.Container{
 		Name:      "redis-exporter",
@@ -491,7 +492,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 	}
 
 	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "redis", Namespace: cfg.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: depName, Namespace: cfg.Namespace},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: ptr(replicas),
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
@@ -509,7 +510,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 						{
 							Name:      "redis",
 							Image:     cacheImage("cache-aside"),
-							Args:      redisServerArgs(cfg.Node.Config, resources),
+							Args:      redisServerArgsForNode(cfg.Node, cfg.Design, resources),
 							Ports:     []corev1.ContainerPort{{ContainerPort: 6379}},
 							Resources: resources,
 							Env:       envMapToK8s(envVars),
@@ -535,7 +536,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 	}
 
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: cfg.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: svcName, Namespace: cfg.Namespace},
 		Spec: corev1.ServiceSpec{
 			Type:     corev1.ServiceTypeClusterIP,
 			Selector: labels,
@@ -548,7 +549,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 		return fmt.Errorf("create service: %w", err)
 	}
 
-	return k.waitForReady(ctx, cfg, "redis", replicas, waitProgressOpts{})
+	return k.waitForReady(ctx, cfg, appLabel, replicas, waitProgressOpts{})
 }
 
 func (k *K8sDeployer) deployMemcachedCacheAside(ctx context.Context, cfg DeployConfig, resources corev1.ResourceRequirements, replicas int32, envVars map[string]string) error {

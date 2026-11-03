@@ -764,10 +764,15 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 	}
 
 	var queueRedis redis.UniversalClient
+	qCfg := queue.EnvConfig("fanout", prometheus.DefaultRegisterer, nil)
 	if s.cache != nil {
-		queueRedis = s.cache.redisClient()
+		cacheHost := strings.TrimSpace(os.Getenv("CACHE_HOST"))
+		queueHost := strings.TrimSpace(qCfg.HostEnv)
+		if queueHost == "" || queueHost == cacheHost {
+			queueRedis = s.cache.redisClient()
+		}
 	}
-	qCfg := queue.EnvConfig("fanout", prometheus.DefaultRegisterer, queueRedis)
+	qCfg.RedisClient = queueRedis
 	if strings.TrimSpace(qCfg.HostEnv) != "" {
 		q, err := queue.Open(qCfg)
 		if err != nil {
