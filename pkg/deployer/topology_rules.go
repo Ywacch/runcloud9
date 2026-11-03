@@ -177,6 +177,9 @@ func validatePlatformSingletons(design DeploymentDesign) error {
 		counts[n.Type]++
 	}
 	for _, s := range platformSingletons {
+		if s.NodeType == "cache" && allowsSplitQueueCaches(design) && counts["cache"] == 2 {
+			continue
+		}
 		if c := counts[s.NodeType]; c > 1 {
 			return fmt.Errorf("%s", singletonMessage(s.NodeType, c))
 		}

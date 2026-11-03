@@ -17,9 +17,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/ywacch/cloud9/pkg/templateapp/consistency"
 	"github.com/ywacch/cloud9/pkg/templateapp/jobs/kvcache"
+	"github.com/ywacch/cloud9/pkg/templateapp/jobs/queue"
 	"github.com/ywacch/cloud9/pkg/templateapp/postgres"
 	"github.com/ywacch/cloud9/pkg/templateapp/readrouter"
 	"github.com/ywacch/cloud9/pkg/templateapp/trace"
@@ -549,7 +551,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	mode := "sync"
 	if s.mq != nil {
 		mode = "async"
-		if err := s.mq.Ping(); err != nil {
+		if err := s.mq.Ping(ctx); err != nil {
 			mqHealth = "error"
 		} else {
 			mqHealth = "ok"
@@ -713,12 +715,13 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 		}
 	}
 
-	if cfg.MQHost != "" {
-		mq, err := NewMQPublisher(cfg.MQHost, cfg.MQPort, "orders")
+	qCfg := queue.EnvConfig("orders", prometheus.DefaultRegisterer, nil)
+	if strings.TrimSpace(qCfg.HostEnv) != "" {
+		q, err := queue.Open(qCfg)
 		if err != nil {
-			slog.Warn("rabbitmq connection failed; falling back to sync mode", "error", err)
+			slog.Warn("work queue connection failed; falling back to sync mode", "error", err)
 		} else {
-			s.mq = mq
+			s.mq = newMQPublisher(q)
 		}
 	}
 

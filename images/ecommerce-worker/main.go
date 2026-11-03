@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,9 +18,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/ywacch/cloud9/pkg/templateapp/jobs/queue"
 	"github.com/ywacch/cloud9/pkg/templateapp/trace"
-	"github.com/ywacch/cloud9/pkg/templateapp/tracemq"
 )
 
 var (
@@ -106,7 +106,7 @@ func processOrder(ctx context.Context, pool *pgxpool.Pool, order orderMessage) e
 	return tx.Commit(ctx)
 }
 
-func healthHandler(pool *pgxpool.Pool, conn *amqp.Connection) http.HandlerFunc {
+func healthHandler(pool *pgxpool.Pool, pingQueue func(context.Context) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -119,7 +119,7 @@ func healthHandler(pool *pgxpool.Pool, conn *amqp.Connection) http.HandlerFunc {
 			db = "error"
 		}
 		mq := "ok"
-		if conn == nil || conn.IsClosed() {
+		if pingQueue == nil || pingQueue(ctx) != nil {
 			mq = "error"
 		}
 		status := http.StatusOK
@@ -136,10 +136,10 @@ func healthHandler(pool *pgxpool.Pool, conn *amqp.Connection) http.HandlerFunc {
 	}
 }
 
-func startMetricsHTTP(pool *pgxpool.Pool, conn *amqp.Connection) *http.Server {
+func startMetricsHTTP(pool *pgxpool.Pool, pingQueue func(context.Context) error) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.Handle("/health", healthHandler(pool, conn))
+	mux.Handle("/health", healthHandler(pool, pingQueue))
 	srv := &http.Server{
 		Addr:    ":8080",
 		Handler: mux,
@@ -166,11 +166,17 @@ func main() {
 	defer stop()
 
 	slog.Info("ecommerce-worker startup begin")
-	mqHost := requiredEnv("MQ_HOST", "MQ_HOST required for worker")
-	mqPort := envOrDefault("MQ_PORT", "5672")
-	slog.Info("startup config resolved", "mqHost", mqHost, "mqPort", mqPort)
+	queueCfg := queue.EnvConfig("orders", prometheus.DefaultRegisterer, nil)
+	if strings.TrimSpace(queueCfg.HostEnv) == "" {
+		slog.Error("WORK_QUEUE_HOST required for worker")
+		os.Exit(1)
+	}
+	slog.Info("startup config resolved",
+		"workQueueEngine", queueCfg.EngineEnv,
+		"workQueueHost", queueCfg.HostEnv,
+		"workQueuePort", queueCfg.PortEnv,
+	)
 
-	// DB connection with retry so worker doesn't crash-loop while dependencies boot.
 	var pool *pgxpool.Pool
 	for attempt := 1; ; attempt++ {
 		var err error
@@ -197,94 +203,75 @@ func main() {
 	}
 	defer pool.Close()
 
-	// AMQP connection with retry for RabbitMQ startup lag.
-	var conn *amqp.Connection
+	var workQ queue.Queue
 	for attempt := 1; ; attempt++ {
 		var err error
-		slog.Info("attempting mq dial", "attempt", attempt, "mqHost", mqHost, "mqPort", mqPort)
-		conn, err = amqp.Dial(fmt.Sprintf("amqp://cloud9:cloud9@%s:%s/", mqHost, mqPort))
+		workQ, err = queue.Open(queueCfg)
 		if err == nil {
-			slog.Info("mq dial established", "attempt", attempt)
+			slog.Info("work queue opened", "engine", workQ.Engine(), "attempt", attempt)
 			break
 		}
 		if attempt >= 30 {
-			slog.Error("mq dial failed after retries", "error", err, "attempts", attempt)
+			slog.Error("work queue open failed after retries", "error", err, "attempts", attempt)
 			os.Exit(1)
 		}
 		delay := time.Duration(attempt) * time.Second
 		if delay > 10*time.Second {
 			delay = 10 * time.Second
 		}
-		slog.Warn("mq dial failed, retrying", "error", err, "attempt", attempt, "retryIn", delay)
+		slog.Warn("work queue open failed, retrying", "error", err, "attempt", attempt, "retryIn", delay)
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
 			os.Exit(0)
 		}
 	}
-	defer conn.Close()
-
-	ch, err := conn.Channel()
-	if err != nil {
-		slog.Error("mq channel failed", "error", err)
-		os.Exit(1)
+	if rmq, ok := workQ.(*queue.RabbitMQ); ok {
+		defer func() { _ = rmq.Close() }()
 	}
-	slog.Info("mq channel opened")
-	defer ch.Close()
 
-	slog.Info("declaring queue", "queue", "orders")
-	if _, err := ch.QueueDeclare("orders", true, false, false, false, nil); err != nil {
-		slog.Error("queue declare failed", "queue", "orders", "error", err)
-		os.Exit(1)
+	pingQueue := func(ctx context.Context) error {
+		switch q := workQ.(type) {
+		case *queue.RabbitMQ:
+			return q.Ping()
+		case *queue.Streams:
+			return q.Ping(ctx)
+		default:
+			return fmt.Errorf("unsupported queue engine %q", workQ.Engine())
+		}
 	}
-	slog.Info("queue declared", "queue", "orders")
 
-	srv := startMetricsHTTP(pool, conn)
+	srv := startMetricsHTTP(pool, pingQueue)
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	msgs, err := ch.Consume("orders", "", false, false, false, false, nil)
-	if err != nil {
-		slog.Error("mq consume failed", "error", err)
-		os.Exit(1)
-	}
-	slog.Info("mq consumer registered", "queue", "orders")
+	slog.Info("ecommerce-worker started", "queue", "orders", "engine", workQ.Engine())
 
-	slog.Info("ecommerce-worker started", "queue", "orders")
-
-	for {
-		select {
-		case <-ctx.Done():
-			slog.Info("ecommerce-worker shutting down")
-			return
-		case msg, ok := <-msgs:
-			if !ok {
-				slog.Error("mq consumer channel closed")
-				return
-			}
-			start := time.Now()
-			var order orderMessage
-			if err := json.Unmarshal(msg.Body, &order); err != nil {
-				workerErrorsTotal.Inc()
-				slog.Error("invalid order message", "error", err)
-				_ = msg.Ack(false)
-				workerProcessingDuration.Observe(time.Since(start).Seconds())
-				continue
-			}
-
-			jobCtx := tracemq.ContextFromDelivery(ctx, msg)
-			if err := processOrder(jobCtx, pool, order); err != nil {
-				workerErrorsTotal.Inc()
-				slog.Error("order processing failed", "order_id", order.OrderID, "error", err, "request_id", trace.RequestID(jobCtx))
-			} else {
-				trace.LogWorker(jobCtx, "process_order", start)
-				workerProcessedTotal.Inc()
-			}
+	err := workQ.Consume(ctx, func(ctx context.Context, body []byte) error {
+		start := time.Now()
+		var order orderMessage
+		if err := json.Unmarshal(body, &order); err != nil {
+			workerErrorsTotal.Inc()
+			slog.Error("invalid order message", "error", err)
 			workerProcessingDuration.Observe(time.Since(start).Seconds())
-			_ = msg.Ack(false)
+			return nil
 		}
+		if err := processOrder(ctx, pool, order); err != nil {
+			workerErrorsTotal.Inc()
+			slog.Error("order processing failed", "order_id", order.OrderID, "error", err, "request_id", trace.RequestID(ctx))
+			workerProcessingDuration.Observe(time.Since(start).Seconds())
+			return err
+		}
+		trace.LogWorker(ctx, "process_order", start)
+		workerProcessedTotal.Inc()
+		workerProcessingDuration.Observe(time.Since(start).Seconds())
+		return nil
+	})
+	if err != nil && ctx.Err() == nil {
+		slog.Error("work queue consume ended", "error", err)
 	}
+	slog.Info("ecommerce-worker shutting down")
 }

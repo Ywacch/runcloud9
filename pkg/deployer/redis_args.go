@@ -32,7 +32,14 @@ func normalizeRedisEvictionPolicy(policy string) string {
 // maxmemory is 90% of the container memory limit so Redis has headroom under the cgroup.
 // Args start with "--" so the official redis image entrypoint prepends redis-server.
 func redisServerArgs(config map[string]interface{}, resources corev1.ResourceRequirements) []string {
-	policy := normalizeRedisEvictionPolicy(configString(config, "evictionPolicy", "allkeys-lru"))
+	return redisServerArgsWithPolicy(normalizeRedisEvictionPolicy(configString(config, "evictionPolicy", "allkeys-lru")), resources)
+}
+
+func redisServerArgsForNode(node DeploymentNode, design DeploymentDesign, resources corev1.ResourceRequirements) []string {
+	return redisServerArgsWithPolicy(redisPolicyForNode(node, design), resources)
+}
+
+func redisServerArgsWithPolicy(policy string, resources corev1.ResourceRequirements) []string {
 	args := []string{"--maxmemory-policy", policy}
 
 	mem := resources.Limits.Memory()

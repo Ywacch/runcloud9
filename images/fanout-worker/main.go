@@ -347,14 +347,16 @@ func main() {
 	}
 
 	// A nil *redis.Client inside the interface compares unequal to nil.
-	if rdb != nil {
+	cacheHost := strings.TrimSpace(os.Getenv("CACHE_HOST"))
+	queueHost := strings.TrimSpace(queueCfg.HostEnv)
+	if rdb != nil && (queueHost == "" || queueHost == cacheHost) {
 		queueCfg.RedisClient = rdb
 	}
+	var queueRdb *redis.Client
 	var workQ queue.Queue
 	for attempt := 1; ; attempt++ {
 		if strings.EqualFold(strings.TrimSpace(queueCfg.EngineEnv), "redis") && queueCfg.RedisClient == nil {
-			cacheHost := strings.TrimSpace(queueCfg.HostEnv)
-			if cacheHost == "" {
+			if queueHost == "" {
 				slog.Error("WORK_QUEUE_HOST required for redis work queue")
 				os.Exit(1)
 			}
@@ -363,10 +365,10 @@ func main() {
 				cachePort = "6379"
 			}
 			client := redis.NewClient(&redis.Options{
-				Addr: fmt.Sprintf("%s:%s", cacheHost, cachePort),
+				Addr: fmt.Sprintf("%s:%s", queueHost, cachePort),
 			})
 			queueCfg.RedisClient = client
-			rdb = client
+			queueRdb = client
 		}
 		var err error
 		workQ, err = queue.Open(queueCfg)
@@ -394,6 +396,9 @@ func main() {
 	}
 	if rdb != nil {
 		defer rdb.Close()
+	}
+	if queueRdb != nil && queueRdb != rdb {
+		defer queueRdb.Close()
 	}
 
 	mqStatus := func(ctx context.Context) string {
