@@ -160,12 +160,14 @@ type ComponentMetrics struct {
 	P99Latency    float64 `json:"p99Latency"` // seconds, 0 if not applicable
 	// AvgLatency is used for components that don't expose histogram buckets (e.g. Redis commands).
 	AvgLatency  float64 `json:"avgLatency,omitempty"` // seconds
-	CacheHits   float64 `json:"cacheHits"`            // hits/sec, 0 if not applicable
-	CacheMisses float64 `json:"cacheMisses"`          // misses/sec, 0 if not applicable
-	// CacheHitsLast9m / CacheMissesLast9m are session sums of cache_hits/misses_total on app-server pods.
+	CacheHits   float64 `json:"cacheHits"`            // hits/sec. The cache answered and the key was present.
+	CacheMisses float64 `json:"cacheMisses"`          // misses/sec. The cache answered and the key was absent.
+	CacheErrors float64 `json:"cacheErrors"`          // errors/sec. The app could not ask the cache.
+	// CacheHitsLast9m / CacheMissesLast9m / CacheErrorsLast9m are session sums on app-server pods.
 	// Survive pod restart; reset when cloud9-api restarts or Cleanup runs. JSON field names kept for the inspector contract.
 	CacheHitsLast9m   float64 `json:"cacheHitsLast9m"`
 	CacheMissesLast9m float64 `json:"cacheMissesLast9m"`
+	CacheErrorsLast9m float64 `json:"cacheErrorsLast9m"`
 	ErrorRate         float64 `json:"errorRate"` // errors/sec (rate over 30s)
 	// TotalErrors9m is the session sum of http_requests_total{status=~"5.."} on app-server pods,
 	// or the session sum of *_worker_errors_total on worker pods. JSON name kept for the inspector contract.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -35,25 +36,33 @@ func (c *Cache) Ping(ctx context.Context) error {
 	return c.ping(ctx)
 }
 
-func (c *Cache) Get(ctx context.Context, key string) (string, bool) {
+// errCacheUnavailable means the app did not get an answer from the cache.
+// A miss is a nil error with ok false.
+var errCacheUnavailable = errors.New("cache unavailable")
+
+func (c *Cache) Get(ctx context.Context, key string) (string, bool, error) {
 	start := time.Now()
 	if c.gate != nil && !c.gate.Allow() {
 		trace.LogCacheGet(ctx, key, false, start)
-		return "", false
+		return "", false, errCacheUnavailable
 	}
 	val, ok, err := c.kv.Get(ctx, key)
 	if err != nil {
-		c.gate.Fail()
+		if c.gate != nil {
+			c.gate.Fail()
+		}
 		trace.LogCacheGet(ctx, key, false, start)
-		return "", false
+		return "", false, err
 	}
-	c.gate.OK()
+	if c.gate != nil {
+		c.gate.OK()
+	}
 	if !ok {
 		trace.LogCacheGet(ctx, key, false, start)
-		return "", false
+		return "", false, nil
 	}
 	trace.LogCacheGet(ctx, key, true, start)
-	return string(val), true
+	return string(val), true, nil
 }
 
 func (c *Cache) Set(ctx context.Context, key string, value string, ttl time.Duration) error {
@@ -96,8 +105,8 @@ func (c *Cache) Delete(ctx context.Context, keys ...string) error {
 
 func (c *Cache) GetProtected(ctx context.Context, key string, fetchFn func() (string, error)) (string, error) {
 	if !c.stampedeProtection {
-		val, ok := c.Get(ctx, key)
-		if ok {
+		val, ok, err := c.Get(ctx, key)
+		if err == nil && ok {
 			return val, nil
 		}
 		return fetchFn()
@@ -109,7 +118,7 @@ func (c *Cache) GetProtected(ctx context.Context, key string, fetchFn func() (st
 	mu.Lock()
 	defer mu.Unlock()
 
-	if val, ok := c.Get(ctx, key); ok {
+	if val, ok, err := c.Get(ctx, key); err == nil && ok {
 		return val, nil
 	}
 	return fetchFn()

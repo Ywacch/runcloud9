@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -35,25 +36,33 @@ func (c *Cache) Ping(ctx context.Context) error {
 	return c.ping(ctx)
 }
 
-func (c *Cache) Get(ctx context.Context, code string) (string, bool) {
+// errCacheUnavailable means the app did not get an answer from the cache.
+// A miss is a nil error with ok false.
+var errCacheUnavailable = errors.New("cache unavailable")
+
+func (c *Cache) Get(ctx context.Context, code string) (string, bool, error) {
 	start := time.Now()
 	if c.gate != nil && !c.gate.Allow() {
 		trace.LogCacheGet(ctx, code, false, start)
-		return "", false
+		return "", false, errCacheUnavailable
 	}
 	val, ok, err := c.kv.Get(ctx, code)
 	if err != nil {
-		c.gate.Fail()
+		if c.gate != nil {
+			c.gate.Fail()
+		}
 		trace.LogCacheGet(ctx, code, false, start)
-		return "", false
+		return "", false, err
 	}
-	c.gate.OK()
+	if c.gate != nil {
+		c.gate.OK()
+	}
 	if !ok {
 		trace.LogCacheGet(ctx, code, false, start)
-		return "", false
+		return "", false, nil
 	}
 	trace.LogCacheGet(ctx, code, true, start)
-	return string(val), true
+	return string(val), true, nil
 }
 
 func (c *Cache) Set(ctx context.Context, code string, url string, ttl time.Duration) error {
@@ -75,8 +84,8 @@ func (c *Cache) Set(ctx context.Context, code string, url string, ttl time.Durat
 // If stampede protection is disabled, it falls through to a plain Get.
 func (c *Cache) GetProtected(ctx context.Context, code string, fetchFn func() (string, error)) (string, error) {
 	if !c.stampedeProtection {
-		val, ok := c.Get(ctx, code)
-		if ok {
+		val, ok, err := c.Get(ctx, code)
+		if err == nil && ok {
 			return val, nil
 		}
 		return fetchFn()
@@ -90,7 +99,7 @@ func (c *Cache) GetProtected(ctx context.Context, code string, fetchFn func() (s
 	defer mu.Unlock()
 
 	// Another goroutine may have populated the cache while we were waiting.
-	if val, ok := c.Get(ctx, code); ok {
+	if val, ok, err := c.Get(ctx, code); err == nil && ok {
 		return val, nil
 	}
 	return fetchFn()

@@ -63,6 +63,7 @@ type Server struct {
 
 	cacheHits   atomic.Int64
 	cacheMisses atomic.Int64
+	cacheErrors atomic.Int64
 }
 
 type checkoutRequest struct {
@@ -181,6 +182,22 @@ func (s *Server) routes() *http.ServeMux {
 	return mux
 }
 
+func (s *Server) recordCacheLookup(ok bool, err error) bool {
+	if err != nil {
+		s.cacheErrors.Add(1)
+		cacheErrorsTotal.Inc()
+		return false
+	}
+	if ok {
+		s.cacheHits.Add(1)
+		cacheHitsTotal.Inc()
+		return true
+	}
+	s.cacheMisses.Add(1)
+	cacheMissesTotal.Inc()
+	return false
+}
+
 func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -213,15 +230,12 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.cache != nil {
-		if cached, ok := s.cache.Get(ctx, key); ok {
-			s.cacheHits.Add(1)
-			cacheHitsTotal.Inc()
+		cached, ok, getErr := s.cache.Get(ctx, key)
+		if s.recordCacheLookup(ok, getErr) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(cached))
 			return
 		}
-		s.cacheMisses.Add(1)
-		cacheMissesTotal.Inc()
 
 		fetchFn := func() (string, error) {
 			products, err := s.db.ListProducts(ctx)
@@ -293,16 +307,13 @@ func (s *Server) handleProduct(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.cache != nil {
-		if cached, ok := s.cache.Get(ctx, cacheKey); ok {
-			s.cacheHits.Add(1)
-			cacheHitsTotal.Inc()
+		cached, ok, getErr := s.cache.Get(ctx, cacheKey)
+		if s.recordCacheLookup(ok, getErr) {
 			s.observeCacheHit(ctx, cacheKey, cached)
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(cached))
 			return
 		}
-		s.cacheMisses.Add(1)
-		cacheMissesTotal.Inc()
 		fetchFn := func() (string, error) {
 			p, err := s.db.GetProduct(ctx, id)
 			if errors.Is(err, ErrNotFound) {
@@ -590,6 +601,7 @@ func (s *Server) handleCacheStats(w http.ResponseWriter, r *http.Request) {
 	}
 	hits := s.cacheHits.Load()
 	misses := s.cacheMisses.Load()
+	cacheErrs := s.cacheErrors.Load()
 	total := hits + misses
 	hitRate := 0.0
 	if total > 0 {
@@ -598,6 +610,7 @@ func (s *Server) handleCacheStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cache_hits":          hits,
 		"cache_misses":        misses,
+		"cache_errors":        cacheErrs,
 		"hit_rate":            hitRate,
 		"strategy":            s.cfg.CacheStrategy,
 		"cache_mode":          s.cfg.CacheMode,

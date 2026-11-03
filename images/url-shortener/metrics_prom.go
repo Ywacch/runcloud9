@@ -34,12 +34,17 @@ var (
 
 	cacheHitsTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "cache_hits_total",
-		Help: "Total cache hits",
+		Help: "Cache lookups where the key was present",
 	})
 
 	cacheMissesTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "cache_misses_total",
-		Help: "Total cache misses",
+		Help: "Cache lookups where the server answered and the key was absent",
+	})
+
+	cacheErrorsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "cache_errors_total",
+		Help: "Cache lookups the app could not complete",
 	})
 
 	shortenerCodeCollisionsTotal = promauto.NewCounter(prometheus.CounterOpts{

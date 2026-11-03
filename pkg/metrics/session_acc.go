@@ -14,6 +14,7 @@ const (
 	seriesSQL                = "sql"
 	seriesCacheHits          = "cache_hits"
 	seriesCacheMisses        = "cache_misses"
+	seriesCacheErrors        = "cache_errors"
 	seriesRedisRead          = "redis_read"
 	seriesRedisWrite         = "redis_write"
 	seriesRedisEvicted       = "redis_evicted"
