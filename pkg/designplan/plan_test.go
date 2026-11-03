@@ -1,6 +1,7 @@
 package designplan
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ywacch/cloud9/pkg/admission"
@@ -158,6 +159,16 @@ func TestBuild_consolidation_workQueueToRedis(t *testing.T) {
 	}
 	if move.To != "cache-1/redis" {
 		t.Fatalf("to: %q", move.To)
+	}
+	var warned bool
+	for _, w := range plan.Warnings {
+		if strings.Contains(w, "work_queue cannot use redis") {
+			warned = true
+			break
+		}
+	}
+	if !warned {
+		t.Fatalf("warnings: %+v", plan.Warnings)
 	}
 }
 

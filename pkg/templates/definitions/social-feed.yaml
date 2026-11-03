@@ -124,7 +124,9 @@ jobs:
     defaultNodeType: cache
   - id: work_queue
     required: false
-    allowedEngines: [rabbitmq, redis]
+    # Redis Streams need a second process with noeviction. This template has one
+    # cache, and that cache evicts timeline keys. RabbitMQ is the separate broker.
+    allowedEngines: [rabbitmq]
     defaultNodeType: mq
 prometheusMetrics:
   # Metric key convention (neutral, OSS-facing):

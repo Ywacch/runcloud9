@@ -104,21 +104,26 @@ func TestHotCacheAllowsMemcached(t *testing.T) {
 	}
 }
 
-func TestSocialFeedWorkQueueAllowsRedis(t *testing.T) {
+func TestWorkQueueIsRabbitMQOnly(t *testing.T) {
 	t.Parallel()
-	spec := GetTemplate("social-feed")
-	if spec == nil {
-		t.Fatal("social-feed template missing")
-	}
-	var allowed []string
-	for _, job := range spec.Jobs {
-		if job.ID == "work_queue" {
-			allowed = job.AllowedEngines
-			break
-		}
-	}
-	if !slices.Contains(allowed, "redis") || !slices.Contains(allowed, "rabbitmq") {
-		t.Fatalf("work_queue allowedEngines: %v", allowed)
+	for _, id := range []string{"social-feed", "ecommerce"} {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+			spec := GetTemplate(id)
+			if spec == nil {
+				t.Fatalf("template %q missing", id)
+			}
+			var allowed []string
+			for _, job := range spec.Jobs {
+				if job.ID == "work_queue" {
+					allowed = job.AllowedEngines
+					break
+				}
+			}
+			if len(allowed) != 1 || allowed[0] != "rabbitmq" {
+				t.Fatalf("work_queue allowedEngines: %v", allowed)
+			}
+		})
 	}
 }
 

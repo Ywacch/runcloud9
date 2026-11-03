@@ -71,6 +71,8 @@ jobs:
     defaultNodeType: cache
   - id: work_queue
     required: false
+    # Same constraint as social-feed: one cache cannot be both an LRU catalog
+    # and a durable queue. RabbitMQ is the separate broker.
     allowedEngines: [rabbitmq]
     defaultNodeType: mq
 prometheusMetrics:
