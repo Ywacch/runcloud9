@@ -54,6 +54,7 @@ type Server struct {
 
 	cacheHits   atomic.Int64
 	cacheMisses atomic.Int64
+	cacheErrors atomic.Int64
 }
 
 func envOrDefault(key, defaultVal string) string {
@@ -255,6 +256,22 @@ func (s *Server) handleShorten(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) recordCacheLookup(ok bool, err error) bool {
+	if err != nil {
+		s.cacheErrors.Add(1)
+		cacheErrorsTotal.Inc()
+		return false
+	}
+	if ok {
+		s.cacheHits.Add(1)
+		cacheHitsTotal.Inc()
+		return true
+	}
+	s.cacheMisses.Add(1)
+	cacheMissesTotal.Inc()
+	return false
+}
+
 func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -300,9 +317,7 @@ func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 	// Cache enabled?
 	if s.cache != nil {
 		// Fast-path: plain Get to differentiate hit vs miss.
-		if val, ok := s.cache.Get(ctx, code); ok {
-			s.cacheHits.Add(1)
-			cacheHitsTotal.Inc()
+		if val, ok, getErr := s.cache.Get(ctx, code); s.recordCacheLookup(ok, getErr) {
 			writeJSON(w, http.StatusOK, map[string]string{
 				"code":         code,
 				"original_url": val,
@@ -310,8 +325,6 @@ func (s *Server) handleRedirect(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		s.cacheMisses.Add(1)
-		cacheMissesTotal.Inc()
 		fetchFn := func() (string, error) {
 			rec, err := s.store.GetURL(ctx, code)
 			if err != nil {
@@ -539,6 +552,7 @@ func (s *Server) handleCacheStats(w http.ResponseWriter, r *http.Request) {
 
 	hits := s.cacheHits.Load()
 	misses := s.cacheMisses.Load()
+	cacheErrs := s.cacheErrors.Load()
 	total := hits + misses
 
 	hitRate := float64(0)
@@ -553,6 +567,7 @@ func (s *Server) handleCacheStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cache_hits":          hits,
 		"cache_misses":        misses,
+		"cache_errors":        cacheErrs,
 		"hit_rate":            hitRate,
 		"strategy":            strategy,
 		"stampede_protection": s.cfg.Stampede,

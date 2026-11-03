@@ -922,6 +922,12 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	))
 	cmApp.CacheMisses = misses
 
+	cacheErrs, _ := c.query(ctx, fmt.Sprintf(
+		`sum(rate(cache_errors_total{%s}%s))`,
+		nsSel, promRateRange(),
+	))
+	cmApp.CacheErrors = cacheErrs
+
 	errRate, _ := c.query(ctx, fmt.Sprintf(
 		`sum(rate(http_requests_total{%s,status=~"5.."}%s))`,
 		nsSel, promRateRange(),
@@ -959,10 +965,15 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		`sum by (pod) (cache_misses_total{%s})`,
 		appServerSel,
 	), "pod")
+	errorsByPod := c.queryMultiResult(ctx, fmt.Sprintf(
+		`sum by (pod) (cache_errors_total{%s})`,
+		appServerSel,
+	), "pod")
 	cmApp.TotalRequests = c.sessionAcc.Observe(ns, seriesHTTP, totalReqsByPod)
 	cmApp.TotalErrors9m = c.sessionAcc.Observe(ns, seriesHTTP5xx, httpErrByPod)
 	cmApp.CacheHitsLast9m = c.sessionAcc.Observe(ns, seriesCacheHits, hitsByPod)
 	cmApp.CacheMissesLast9m = c.sessionAcc.Observe(ns, seriesCacheMisses, missesByPod)
+	cmApp.CacheErrorsLast9m = c.sessionAcc.Observe(ns, seriesCacheErrors, errorsByPod)
 	if db, ok := dm.Components["db"]; ok {
 		db.DbTotalQueries = c.sessionAcc.Observe(ns, seriesSQL, sqlByPod)
 		dm.Components["db"] = db
@@ -991,8 +1002,10 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	// We mirror them onto the cache component so the frontend doesn't need to cross-reference.
 	cmCache.CacheHits = cmApp.CacheHits
 	cmCache.CacheMisses = cmApp.CacheMisses
+	cmCache.CacheErrors = cmApp.CacheErrors
 	cmCache.CacheHitsLast9m = cmApp.CacheHitsLast9m
 	cmCache.CacheMissesLast9m = cmApp.CacheMissesLast9m
+	cmCache.CacheErrorsLast9m = cmApp.CacheErrorsLast9m
 	if template == "social-feed" {
 		timelineKeys, _ := c.query(ctx, fmt.Sprintf(`max(social_timeline_keys{%s})`, nsSel))
 		cmCache.TimelineKeyCount = timelineKeys
@@ -1026,9 +1039,9 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	if redisOps > 0 {
 		cmCache.RequestRate = redisOps
 	} else {
-		cmCache.RequestRate = cmApp.CacheHits + cmApp.CacheMisses
+		cmCache.RequestRate = cmApp.CacheHits + cmApp.CacheMisses + cmApp.CacheErrors
 	}
-	c.debugCompare("cache", "rps", redisOps, cmApp.CacheHits+cmApp.CacheMisses, "redis_commands_total", "app cache_hits+misses")
+	c.debugCompare("cache", "rps", redisOps, cmApp.CacheHits+cmApp.CacheMisses+cmApp.CacheErrors, "redis_commands_total", "app cache_hits+misses+errors")
 
 	if v, _ := c.query(ctx, fmt.Sprintf(`sum(redis_memory_used_bytes{namespace=%q})`, ns)); v > 0 {
 		cmCache.MemoryBytes = int64(v)

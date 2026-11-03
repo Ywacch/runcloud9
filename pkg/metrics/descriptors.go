@@ -38,7 +38,7 @@ var signalDescriptorCatalog = map[string]signalMeta{
 		freshnessGroup: SignalThroughput,
 	},
 	"cacheHits": {
-		unit: "rps", semantic: "rate", meaning: "cache hits per second",
+		unit: "rps", semantic: "rate", meaning: "cache lookups per second where the key was present",
 		freshnessGroup: SignalThroughput,
 	},
 	"cacheHitsLast9m": {
@@ -46,11 +46,19 @@ var signalDescriptorCatalog = map[string]signalMeta{
 		freshnessGroup: SignalThroughput,
 	},
 	"cacheMisses": {
-		unit: "rps", semantic: "rate", meaning: "cache misses per second",
+		unit: "rps", semantic: "rate", meaning: "cache lookups per second where the key was absent",
 		freshnessGroup: SignalThroughput,
 	},
 	"cacheMissesLast9m": {
 		unit: "count", semantic: "counter", meaning: "session total cache misses",
+		freshnessGroup: SignalThroughput,
+	},
+	"cacheErrors": {
+		unit: "rps", semantic: "rate", meaning: "cache lookups per second the app could not complete",
+		freshnessGroup: SignalThroughput,
+	},
+	"cacheErrorsLast9m": {
+		unit: "count", semantic: "counter", meaning: "session total cache lookups the app could not complete",
 		freshnessGroup: SignalThroughput,
 	},
 	"consumeRate": {

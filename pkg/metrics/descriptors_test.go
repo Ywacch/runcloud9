@@ -136,6 +136,7 @@ func maximalDeploymentMetricsForDescriptors() *DeploymentMetrics {
 				MemoryBytes:       2048,
 				CacheHits:         50,
 				CacheMisses:       5,
+				CacheErrors:       2,
 				EvictionsPerSec:   1,
 				ExpirationsPerSec: 0.5,
 				AvgLatency:        0.001,
@@ -160,6 +161,7 @@ func maximalDeploymentMetricsForDescriptors() *DeploymentMetrics {
 				P99Latency9m:      0.1,
 				CacheHitsLast9m:   500,
 				CacheMissesLast9m: 50,
+				CacheErrorsLast9m: 7,
 				DbQueryRate:       20,
 				Replicas: []ReplicaMetrics{
 					{Name: "app-1", RequestRate: 50, P99Latency: 0.08, CPUUsage: 0.3, MemoryBytes: 512, Ready: true},
