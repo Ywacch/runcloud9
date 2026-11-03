@@ -43,13 +43,17 @@ func (m *Memcached) Get(ctx context.Context, key string) ([]byte, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
+	start := time.Now()
 	item, err := m.client.Get(key)
 	if errors.Is(err, memcache.ErrCacheMiss) {
+		observeCacheOp(m.Engine(), "get", "miss", start)
 		return nil, false, nil
 	}
 	if err != nil {
+		observeCacheOp(m.Engine(), "get", cacheOpResult("get", false, err), start)
 		return nil, false, fmt.Errorf("kvcache: memcached get: %w", err)
 	}
+	observeCacheOp(m.Engine(), "get", "hit", start)
 	return item.Value, true, nil
 }
 
@@ -66,7 +70,9 @@ func (m *Memcached) Set(ctx context.Context, key string, value []byte, ttl time.
 		}
 		exp = sec
 	}
+	start := time.Now()
 	err := m.client.Set(&memcache.Item{Key: key, Value: value, Expiration: exp})
+	observeCacheOp(m.Engine(), "set", cacheOpResult("set", false, err), start)
 	if err != nil {
 		return fmt.Errorf("kvcache: memcached set: %w", err)
 	}
@@ -78,10 +84,13 @@ func (m *Memcached) Delete(ctx context.Context, key string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	start := time.Now()
 	err := m.client.Delete(key)
 	if errors.Is(err, memcache.ErrCacheMiss) {
+		observeCacheOp(m.Engine(), "delete", "ok", start)
 		return nil
 	}
+	observeCacheOp(m.Engine(), "delete", cacheOpResult("delete", false, err), start)
 	if err != nil {
 		return fmt.Errorf("kvcache: memcached delete: %w", err)
 	}

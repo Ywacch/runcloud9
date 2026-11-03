@@ -701,10 +701,20 @@ func newServer(ctx context.Context, cfg Config) (*Server, error) {
 				ping = mc.Ping
 			}
 			// Best-effort ping: cache errors are never fatal.
+			s.cache = newCache(kv, cfg.Stampede, ping)
 			if err := ping(ctx); err != nil {
-				slog.Warn("cache ping failed; continuing with cache disabled", "error", err)
+				slog.Warn("cache ping failed; cache stays attached",
+					"engine", kv.Engine(),
+					"host", openCfg.HostEnv,
+					"port", openCfg.PortEnv,
+					"error", err,
+				)
 			} else {
-				s.cache = newCache(kv, cfg.Stampede, ping)
+				slog.Info("cache attached",
+					"engine", kv.Engine(),
+					"host", openCfg.HostEnv,
+					"port", openCfg.PortEnv,
+				)
 			}
 		}
 	}

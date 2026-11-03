@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/bradfitz/gomemcache/memcache"
 	"github.com/redis/go-redis/v9"
@@ -40,6 +41,7 @@ func Open(cfg Config) (Cache, error) {
 		client := cfg.MemcachedClient
 		if client == nil {
 			client = memcache.New(fmt.Sprintf("%s:%s", host, port))
+			client.Timeout = 100 * time.Millisecond
 		}
 		return NewMemcached(client)
 	default:

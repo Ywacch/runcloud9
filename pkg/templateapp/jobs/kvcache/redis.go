@@ -38,19 +38,26 @@ func (r *Redis) Ping(ctx context.Context) error {
 
 // Get loads key when present.
 func (r *Redis) Get(ctx context.Context, key string) ([]byte, bool, error) {
+	start := time.Now()
 	val, err := r.client.Get(ctx, key).Bytes()
 	if err == redis.Nil {
+		observeCacheOp(r.Engine(), "get", "miss", start)
 		return nil, false, nil
 	}
 	if err != nil {
+		observeCacheOp(r.Engine(), "get", cacheOpResult("get", false, err), start)
 		return nil, false, fmt.Errorf("kvcache: redis get: %w", err)
 	}
+	observeCacheOp(r.Engine(), "get", "hit", start)
 	return val, true, nil
 }
 
 // Set stores value with an optional TTL.
 func (r *Redis) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
-	if err := r.client.Set(ctx, key, value, ttl).Err(); err != nil {
+	start := time.Now()
+	err := r.client.Set(ctx, key, value, ttl).Err()
+	observeCacheOp(r.Engine(), "set", cacheOpResult("set", false, err), start)
+	if err != nil {
 		return fmt.Errorf("kvcache: redis set: %w", err)
 	}
 	return nil
@@ -58,7 +65,10 @@ func (r *Redis) Set(ctx context.Context, key string, value []byte, ttl time.Dura
 
 // Delete removes key.
 func (r *Redis) Delete(ctx context.Context, key string) error {
-	if err := r.client.Del(ctx, key).Err(); err != nil {
+	start := time.Now()
+	err := r.client.Del(ctx, key).Err()
+	observeCacheOp(r.Engine(), "delete", cacheOpResult("delete", false, err), start)
+	if err != nil {
 		return fmt.Errorf("kvcache: redis del: %w", err)
 	}
 	return nil

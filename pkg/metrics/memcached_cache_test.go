@@ -112,3 +112,49 @@ func TestApplyMemcachedCacheMetrics_UsesContainerMetricsNotItemBytes(t *testing.
 		t.Fatalf("MemoryLimit: want container limit, got %d", cm.MemoryLimit)
 	}
 }
+
+func TestApplyMemcachedCacheMetrics_LifecycleAndClientLatency(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "histogram_quantile(0.99") && strings.Contains(q, "cache_op_duration_seconds_bucket"):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.004"))
+		case strings.Contains(q, "histogram_quantile(0.95"):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.002"))
+		case strings.Contains(q, "histogram_quantile(0.50"):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.001"))
+		case strings.Contains(q, "rate(memcached_items_evicted_total"):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("2"))
+		case strings.Contains(q, "rate(memcached_items_reclaimed_total"):
+			_ = json.NewEncoder(w).Encode(promVectorJSON("0.5"))
+		case strings.Contains(q, "memcached_items_evicted_total"):
+			_ = json.NewEncoder(w).Encode(promVectorWithPodJSON("memcached-abc", "10"))
+		case strings.Contains(q, "memcached_items_reclaimed_total"):
+			_ = json.NewEncoder(w).Encode(promVectorWithPodJSON("memcached-abc", "4"))
+		default:
+			_ = json.NewEncoder(w).Encode(promEmptyVectorJSON())
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
+	cm := &ComponentMetrics{P99Latency: 0.04, EvictionsLast9m: 99, ExpirationsLast9m: 99}
+	c.applyMemcachedCacheMetrics(context.Background(), "ns1", cm)
+	if cm.EvictionsPerSec != 2 {
+		t.Fatalf("EvictionsPerSec: got %v", cm.EvictionsPerSec)
+	}
+	if cm.ExpirationsPerSec != 0.5 {
+		t.Fatalf("ExpirationsPerSec: got %v", cm.ExpirationsPerSec)
+	}
+	if cm.EvictionsLast9m != 10 {
+		t.Fatalf("EvictionsLast9m: got %v", cm.EvictionsLast9m)
+	}
+	if cm.ExpirationsLast9m != 4 {
+		t.Fatalf("ExpirationsLast9m: got %v", cm.ExpirationsLast9m)
+	}
+	if cm.P99Latency != 0.004 || cm.P99Latency9m != 0.004 {
+		t.Fatalf("p99 live=%v session=%v", cm.P99Latency, cm.P99Latency9m)
+	}
+}
