@@ -124,6 +124,23 @@ func TestValidateIntrospectAction_MemcachedEmptyPatternAllowed(t *testing.T) {
 	}
 }
 
+func TestEcommerceCacheMemcachedKeepsTemplateKeyPatterns(t *testing.T) {
+	t.Parallel()
+	tmpl := templates.GetTemplate("ecommerce")
+	if tmpl == nil {
+		t.Fatal("ecommerce template missing")
+	}
+	spec := tmpl.Introspection["cache"]
+	spec.Engine = "memcached"
+	if len(spec.KeyPatterns) == 0 {
+		t.Fatal("expected cache keyPatterns on ecommerce template")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/keys", nil)
+	if err := validateIntrospectAction("keys", spec, "", req); err != nil {
+		t.Fatalf("keys list without query: %v", err)
+	}
+}
+
 func TestValidateIntrospectAction_KeysStarForbiddenWhenNotWhitelisted(t *testing.T) {
 	t.Parallel()
 	spec := introspect.ComponentSpec{

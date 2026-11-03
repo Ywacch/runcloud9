@@ -58,7 +58,7 @@ func (h *Handler) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 	if component == "cache" {
 		if eng := cacheEngineFromStoredDesign(row.Design); eng == "memcached" {
 			introSpec.Engine = "memcached"
-			introSpec.KeyPatterns = nil
+			// Keep template keyPatterns for whitelist validation and metadump listing.
 		} else if introSpec.Engine == "redis" {
 			if mq, hasMQ := tmpl.Introspection["mq"]; hasMQ {
 				introSpec.KeyPatterns = introspect.AppendQueueStreamKeys(introSpec.KeyPatterns, mq.Queues)
