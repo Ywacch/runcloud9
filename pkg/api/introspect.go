@@ -402,6 +402,18 @@ func (h *Handler) handleRedisIntrospect(ctx context.Context, w http.ResponseWrit
 	}
 }
 
+// memcachedKeyPatterns picks globs for a Memcached key list.
+// A query pattern is one whitelist entry. An empty query uses every template pattern.
+func memcachedKeyPatterns(query string, allowed []string) []string {
+	query = strings.TrimSpace(query)
+	if query != "" {
+		return []string{query}
+	}
+	out := make([]string, len(allowed))
+	copy(out, allowed)
+	return out
+}
+
 func (h *Handler) handleMemcachedIntrospect(ctx context.Context, w http.ResponseWriter, host, action, key string, spec introspect.ComponentSpec, r *http.Request) {
 	driver, err := introspect.NewMemcachedDriver(ctx, host)
 	if err != nil {
@@ -420,9 +432,9 @@ func (h *Handler) handleMemcachedIntrospect(ctx context.Context, w http.Response
 		}
 		writeIntrospectJSON(w, map[string]any{"stats": stats})
 	case "keys":
-		pattern := r.URL.Query().Get("pattern")
+		patterns := memcachedKeyPatterns(r.URL.Query().Get("pattern"), spec.KeyPatterns)
 		limit := queryInt(r, "count", 50)
-		keys, truncated, err := driver.ListKeys(ctx, pattern, limit, time.Now())
+		keys, truncated, err := driver.ListKeys(ctx, patterns, limit, time.Now())
 		if err != nil {
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
@@ -446,7 +458,6 @@ func (h *Handler) handleMemcachedIntrospect(ctx context.Context, w http.Response
 	default:
 		writeError(w, http.StatusNotFound, "unknown memcached action")
 	}
-	_ = spec
 }
 
 func (h *Handler) handleRabbitMQIntrospect(ctx context.Context, w http.ResponseWriter, host, action, queue string, spec introspect.ComponentSpec) {
