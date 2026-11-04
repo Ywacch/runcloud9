@@ -1,0 +1,5 @@
+{
+  "appRequestRate": 15,
+  "appErrorRate": 0.5,
+  "dbQueryRate": 8
+}

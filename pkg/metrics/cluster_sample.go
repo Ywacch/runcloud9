@@ -350,10 +350,14 @@ func histogramQuantile(phi float64, buckets map[string]float64) float64 {
 		pairs = append(pairs, pair{le: le, cnt: cnt})
 	}
 	sort.Slice(pairs, func(i, j int) bool { return pairs[i].le < pairs[j].le })
-	var total float64
-	for _, p := range pairs {
-		total += p.cnt
+	// rate() of a histogram bucket counter stays cumulative across le.
+	// The +Inf bucket is the total. Summing every le counts the same requests many times.
+	for i := 1; i < len(pairs); i++ {
+		if pairs[i].cnt < pairs[i-1].cnt {
+			pairs[i].cnt = pairs[i-1].cnt
+		}
 	}
+	total := pairs[len(pairs)-1].cnt
 	if total <= 0 {
 		return 0
 	}
@@ -401,11 +405,25 @@ func promQLToClusterScalarKey(promql string) (string, bool) {
 	if parseNamespaceFromPromQL(promql) == "" {
 		return "", false
 	}
-	inner := strings.TrimSpace(stripNamespaceFromPromQL(promql))
-	if inner == "" {
+	stripped := strings.TrimSpace(stripNamespaceFromPromQL(promql))
+	agg, inner, ok := splitOuterAgg(stripped)
+	if !ok {
 		return "", false
 	}
-	return fmt.Sprintf(`sum by (namespace) (%s)`, inner), true
+	// sum(rate(metric{namespace="ns"}[10s])) becomes
+	// sum by (namespace) (rate(metric[10s])).
+	// Wrapping the whole sum() drops the namespace label inside Prometheus.
+	return fmt.Sprintf("%s by (namespace) (%s)", agg, inner), true
+}
+
+func splitOuterAgg(q string) (agg, inner string, ok bool) {
+	for _, name := range []string{"sum", "max", "min", "avg"} {
+		prefix := name + "("
+		if strings.HasPrefix(q, prefix) && strings.HasSuffix(q, ")") {
+			return name, q[len(prefix) : len(q)-1], true
+		}
+	}
+	return "", "", false
 }
 
 func promQLToClusterVectorKey(promql string) (string, bool) {

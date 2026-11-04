@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -36,7 +37,7 @@ func TestClusterSample_TwoNamespacesOneRefresh(t *testing.T) {
 		q := r.URL.Query().Get("query")
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case strings.Contains(q, "sum by (namespace)") && strings.Contains(q, "http_requests_total"):
+		case strings.Contains(q, "sum by (namespace)") && strings.Contains(q, "http_requests_total") && !strings.Contains(q, "status="):
 			_ = json.NewEncoder(w).Encode(promNSValueJSON(map[string]string{
 				"ns-a": "10",
 				"ns-b": "20",
@@ -60,7 +61,12 @@ func TestClusterSample_TwoNamespacesOneRefresh(t *testing.T) {
 	})
 
 	rr := promRateRange()
-	wantHTTP := `sum by (namespace) (sum(rate(http_requests_total` + rr + `)))`
+	wantHTTP := `sum by (namespace) (rate(http_requests_total` + rr + `))`
+	sessionQL := fmt.Sprintf(`sum(rate(http_requests_total{namespace=%q}%s))`, "ns-a", rr)
+	gotKey, okKey := promQLToClusterScalarKey(sessionQL)
+	if !okKey || gotKey != wantHTTP {
+		t.Fatalf("session query key: ok=%v got %q want %q", okKey, gotKey, wantHTTP)
+	}
 
 	_, _ = c.Collect(context.Background(), "ns-a", "", TopologyFlags{})
 	firstCalls := promCalls.Load()
@@ -91,6 +97,86 @@ func TestClusterSample_TwoNamespacesOneRefresh(t *testing.T) {
 	}
 	if app, ok := dm.Components["app-server"]; !ok || app.RequestRate != 10 {
 		t.Fatalf("app-server request rate: %+v", dm.Components["app-server"])
+	}
+}
+
+func TestIngestPromVector_SkipsUnlabeledNamespace(t *testing.T) {
+	t.Parallel()
+
+	q := `sum by (namespace) (rate(http_requests_total` + promRateRange() + `))`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "success",
+			"data": map[string]any{
+				"resultType": "vector",
+				"result": []map[string]any{
+					{"metric": map[string]string{}, "value": []any{float64(1), "99"}},
+				},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
+	sample := &clusterSample{
+		scalars: make(map[string]map[string]float64),
+	}
+	c.ingestPromVector(context.Background(), sample, q, false, "")
+	if len(sample.scalars[q]) != 0 {
+		t.Fatalf("unlabeled series must not populate namespace map: %+v", sample.scalars[q])
+	}
+}
+
+func TestClusterSample_AppP99FromClusterBuckets(t *testing.T) {
+	t.Parallel()
+
+	rr := promRateRange()
+	bucketQL := `sum by (namespace, le) (rate(http_request_duration_seconds_bucket` + rr + `))`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		if q == bucketQL {
+			_ = json.NewEncoder(w).Encode(promNSBucketJSON("ns-p99", map[string]string{
+				"0.05": "10",
+				"0.1":  "50",
+				"0.25": "100",
+				"+Inf": "100",
+			}))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(promEmptyJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
+	c.SetClusterSampleEnabled(true)
+	nsSel := fmt.Sprintf(`namespace=%q`, "ns-p99")
+	inner := fmt.Sprintf(`sum(rate(http_request_duration_seconds_bucket{%s}%s)) by (le)`, nsSel, rr)
+	p99QL := fmt.Sprintf(`histogram_quantile(0.99, %s)`, inner)
+	p99, err := c.query(context.Background(), p99QL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p99 <= 0 {
+		t.Fatalf("expected p99 from cluster buckets, got %v", p99)
+	}
+}
+
+func promNSBucketJSON(ns string, leToVal map[string]string) map[string]any {
+	result := make([]map[string]any, 0, len(leToVal))
+	for le, val := range leToVal {
+		result = append(result, map[string]any{
+			"metric": map[string]string{"namespace": ns, "le": le},
+			"value":  []any{float64(1), val},
+		})
+	}
+	return map[string]any{
+		"status": "success",
+		"data": map[string]any{
+			"resultType": "vector",
+			"result":     result,
+		},
 	}
 }
 
