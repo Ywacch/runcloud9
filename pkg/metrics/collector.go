@@ -82,6 +82,12 @@ type MetricsCollector struct {
 	replSQLCache            map[string]replSQLCacheEntry // key = namespace
 	replSQLFlight           singleflight.Group
 	replicationAdminForTest func(namespace, pod, container string) deployer.PostgresAdmin // tests only
+
+	clusterSampleEnabled bool
+	sampleMu             sync.RWMutex
+	clusterSample        *clusterSample
+	sampleFlight         singleflight.Group
+	metricsQueryObserver MetricsQueryObserver
 }
 
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
@@ -89,21 +95,22 @@ type MetricsCollector struct {
 func NewMetricsCollector(prometheusURL string, lg loadgen.LoadGenerator, clientset kubernetes.Interface, metricsClient PodMetricsProvider, eventBus *EventBus) *MetricsCollector {
 	observer := probes.NewObserver(probes.WithKubeClient(clientset))
 	return &MetricsCollector{
-		prometheusURL: prometheusURL,
-		httpClient:    &http.Client{Timeout: 5 * time.Second},
-		scrapeClient:  &http.Client{Timeout: 2 * time.Second},
-		loadgen:       lg,
-		clientset:     clientset,
-		metricsClient: metricsClient,
-		eventBus:      eventBus,
-		thresholds:    NewThresholdDetector(),
-		cascade:       NewCascadeDetector(),
-		invariants:    NewInvariantChecker(),
-		observer:      observer,
-		consistency:   NewConsistencyDetector(observer),
-		mqRates:       make(map[string]rabbitCounterSnapshot),
-		sessionAcc:    newSessionAccumulator(),
-		pgHold:        make(map[string]bool),
+		prometheusURL:        prometheusURL,
+		httpClient:           &http.Client{Timeout: 5 * time.Second},
+		scrapeClient:         &http.Client{Timeout: 2 * time.Second},
+		loadgen:              lg,
+		clientset:            clientset,
+		metricsClient:        metricsClient,
+		eventBus:             eventBus,
+		thresholds:           NewThresholdDetector(),
+		cascade:              NewCascadeDetector(),
+		invariants:           NewInvariantChecker(),
+		observer:             observer,
+		consistency:          NewConsistencyDetector(observer),
+		mqRates:              make(map[string]rabbitCounterSnapshot),
+		sessionAcc:           newSessionAccumulator(),
+		pgHold:               make(map[string]bool),
+		clusterSampleEnabled: false,
 	}
 }
 
@@ -318,43 +325,65 @@ type prometheusResponse struct {
 // queryScalar runs an instant PromQL query. present is false when the result vector is empty
 // (no matching series). A scalar 0 with matching series sets present=true — distinct from “no data”.
 func (c *MetricsCollector) queryScalar(ctx context.Context, promql string) (val float64, present bool, err error) {
+	if c.clusterSampleEnabled && c.prometheusURL != "" {
+		sample := c.ensureClusterSample(ctx)
+		if sample != nil {
+			if v, okPresent, ok := c.lookupSampleScalar(sample, ctx, promql); ok {
+				return v, okPresent, nil
+			}
+			if time.Since(sample.fetchedAt) < clusterSampleTick {
+				return 0, false, nil
+			}
+		}
+	}
+	return c.queryScalarDirect(ctx, promql)
+}
+
+func (c *MetricsCollector) queryScalarDirect(ctx context.Context, promql string) (val float64, present bool, err error) {
 	if c.prometheusURL == "" {
 		return 0, false, nil
+	}
+	pr, err := c.executePromInstant(ctx, promql)
+	if err != nil {
+		return 0, false, err
+	}
+	if pr.Status != "success" || len(pr.Data.Result) == 0 {
+		return 0, false, nil
+	}
+	valStr, ok := pr.Data.Result[0].Value[1].(string)
+	if !ok {
+		return 0, true, nil
+	}
+	_, _ = fmt.Sscanf(valStr, "%f", &val)
+	if math.IsNaN(val) || math.IsInf(val, 0) {
+		val = 0
+	}
+	return val, true, nil
+}
+
+func (c *MetricsCollector) executePromInstant(ctx context.Context, promql string) (prometheusResponse, error) {
+	var pr prometheusResponse
+	if c.prometheusURL == "" {
+		return pr, nil
 	}
 	endpoint := fmt.Sprintf("%s/api/v1/query", c.prometheusURL)
 	params := url.Values{"query": {promql}}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?"+params.Encode(), nil)
 	if err != nil {
-		return 0, false, err
+		return pr, err
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return 0, false, fmt.Errorf("prometheus query: %w", err)
+		return pr, fmt.Errorf("prometheus query: %w", err)
 	}
 	defer resp.Body.Close()
 
-	var pr prometheusResponse
 	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
-		return 0, false, fmt.Errorf("decode prometheus response: %w", err)
+		return pr, fmt.Errorf("decode prometheus response: %w", err)
 	}
-
-	if pr.Status != "success" || len(pr.Data.Result) == 0 {
-		return 0, false, nil
-	}
-
-	valStr, ok := pr.Data.Result[0].Value[1].(string)
-	if !ok {
-		return 0, true, nil
-	}
-
-	_, _ = fmt.Sscanf(valStr, "%f", &val)
-	// encoding/json can't encode NaN/Inf; sanitize so the WS stream never dies.
-	if math.IsNaN(val) || math.IsInf(val, 0) {
-		val = 0
-	}
-	return val, true, nil
+	return pr, nil
 }
 
 // query executes a PromQL instant query and returns the first result value.
@@ -366,24 +395,23 @@ func (c *MetricsCollector) query(ctx context.Context, promql string) (float64, e
 
 // queryMultiResult runs a PromQL instant query and returns one float per series, keyed by labelKey (e.g. "pod").
 func (c *MetricsCollector) queryMultiResult(ctx context.Context, promql, labelKey string) map[string]float64 {
+	if c.clusterSampleEnabled && c.prometheusURL != "" {
+		sample := c.ensureClusterSample(ctx)
+		if sample != nil {
+			if out, ok := c.lookupSampleMulti(sample, ctx, promql, labelKey); ok {
+				return out
+			}
+			if time.Since(sample.fetchedAt) < clusterSampleTick {
+				return map[string]float64{}
+			}
+		}
+	}
 	out := make(map[string]float64)
 	if c.prometheusURL == "" || labelKey == "" {
 		return out
 	}
-	endpoint := fmt.Sprintf("%s/api/v1/query", c.prometheusURL)
-	params := url.Values{"query": {promql}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?"+params.Encode(), nil)
+	pr, err := c.executePromInstant(ctx, promql)
 	if err != nil {
-		return out
-	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return out
-	}
-	defer resp.Body.Close()
-
-	var pr prometheusResponse
-	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
 		return out
 	}
 	if pr.Status != "success" {
@@ -395,16 +423,7 @@ func (c *MetricsCollector) queryMultiResult(ctx context.Context, promql, labelKe
 		if key == "" && labelKey != "target" {
 			continue
 		}
-		valStr, ok := r.Value[1].(string)
-		if !ok {
-			continue
-		}
-		var val float64
-		_, _ = fmt.Sscanf(valStr, "%f", &val)
-		if math.IsNaN(val) || math.IsInf(val, 0) {
-			continue
-		}
-		out[key] = val
+		out[key] = parsePromValue(r.Value[1])
 	}
 	return out
 }
@@ -744,6 +763,9 @@ func (c *MetricsCollector) noteActiveChaosPartition(ctx context.Context, namespa
 // template is the deployment template id (e.g. social-feed); empty skips template-specific PromQL.
 // topo is derived from the saved deployment design (may be zero); used for narratives and cache-strategy overlay.
 func (c *MetricsCollector) Collect(ctx context.Context, namespace, template string, topo TopologyFlags) (*DeploymentMetrics, error) {
+	ctx = withCollectNamespace(ctx, namespace)
+	c.ensureClusterSample(ctx)
+
 	dm := &DeploymentMetrics{
 		Timestamp:  time.Now(),
 		Namespace:  namespace,

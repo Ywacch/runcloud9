@@ -131,7 +131,7 @@ func NewHandler(
 	}
 
 	poolFetcher := &deploymentUserPoolFetcher{store: store, clientset: clientset}
-	return &Handler{
+	h := &Handler{
 		deployers:            deployers,
 		store:                store,
 		scheduler:            scheduler,
@@ -155,6 +155,10 @@ func NewHandler(
 		lbEndpointsWatch:     deployer.NewLBEndpointsWatcher(),
 		cpMetrics:            newControlPlaneMetrics(),
 	}
+	if h.metricsCollector != nil && h.cpMetrics != nil {
+		h.metricsCollector.SetMetricsQueryObserver(h.cpMetrics.observeMetricsQueries)
+	}
+	return h
 }
 
 // RegisterRoutes attaches handlers to the mux.

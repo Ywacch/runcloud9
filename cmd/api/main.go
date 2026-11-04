@@ -341,6 +341,7 @@ func main() {
 	debugMetrics := os.Getenv("CLOUD9_DEBUG_METRICS") == "true"
 	eventBus := metrics.NewEventBus()
 	metricsCollector = metrics.NewMetricsCollector(prometheusURL, lg, clientset, metricsClient, eventBus)
+	metricsCollector.SetClusterSampleEnabled(prometheusURL != "")
 	metricsCollector.SetDebugMetrics(debugMetrics)
 	if clientset != nil {
 		ddcBucket := os.Getenv("DDC_BUCKET")
