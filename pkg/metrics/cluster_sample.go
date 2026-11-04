@@ -55,6 +55,20 @@ func (c *MetricsCollector) SetClusterSampleEnabled(enabled bool) {
 	c.clusterSampleEnabled = enabled
 }
 
+// ClusterSampleEnabled reports whether the shared cluster metrics poll should run.
+// It is on only when prometheusURL is non-empty and rawEnv is "1" or "true" (any case).
+func ClusterSampleEnabled(prometheusURL, rawEnv string) bool {
+	if strings.TrimSpace(prometheusURL) == "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(rawEnv)) {
+	case "1", "true":
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *MetricsCollector) ensureClusterSample(ctx context.Context) *clusterSample {
 	if c == nil || !c.clusterSampleEnabled || c.prometheusURL == "" {
 		return nil
