@@ -146,6 +146,7 @@ func (h *Handler) drainDeployQueue(ctx context.Context) {
 		log.Printf("deploy queue: list queued: %v", err)
 		return
 	}
+	defer h.refreshDeployQueueDepth(ctx)
 	if len(queued) == 0 {
 		return
 	}

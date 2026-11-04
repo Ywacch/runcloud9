@@ -62,6 +62,7 @@ type Handler struct {
 	actAs                *actAsValidator
 	manifestRNG          func() int64
 	lbEndpointsWatch     *deployer.LBEndpointsWatcher
+	cpMetrics            *controlPlaneMetrics
 }
 
 type deploymentStore interface {
@@ -152,6 +153,7 @@ func NewHandler(
 		inferenceTokenBudget: NewSessionTokenBudget(),
 		manifestRNG:          randomManifestRNGSeed,
 		lbEndpointsWatch:     deployer.NewLBEndpointsWatcher(),
+		cpMetrics:            newControlPlaneMetrics(),
 	}
 }
 
@@ -217,6 +219,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /meta/jobs", routePublic(rl, http.HandlerFunc(h.handleGetMetaJobs)))
 	mux.Handle("POST /designs/plan", routeAuth(auth, rl, http.HandlerFunc(h.handleDesignPlan)))
 	mux.Handle("GET /meta/inferred-mechanism-promotions", routePublic(rl, http.HandlerFunc(h.handleListInferredMechanismPromotions)))
+	if h.cpMetrics != nil {
+		mux.Handle("GET /metrics", h.cpMetrics.metricsHandler())
+	}
 }
 
 // handleMetricsStream upgrades the HTTP connection to WebSocket and streams
@@ -243,6 +248,7 @@ func (h *Handler) handleMetricsStream(w http.ResponseWriter, r *http.Request) {
 	design, _ := deployer.DesignFromMap(row.Design)
 	topo := MetricsTopologyFromDeploymentDesign(design, row.Template)
 	metrics.StreamMetrics(ctx, conn, h.metricsCollector, namespace, row.Template, topo)
+	h.refreshWebsocketLiveGauge()
 }
 
 func (h *Handler) handleGetDeployment(w http.ResponseWriter, r *http.Request) {
