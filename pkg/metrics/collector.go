@@ -13,6 +13,7 @@ import (
 
 	"github.com/ywacch/cloud9/pkg/chaos"
 	"github.com/ywacch/cloud9/pkg/deployer"
+	"github.com/ywacch/cloud9/pkg/kubeobs"
 	"github.com/ywacch/cloud9/pkg/loadgen"
 	"github.com/ywacch/cloud9/pkg/probes"
 	"github.com/ywacch/cloud9/pkg/templates"
@@ -764,6 +765,7 @@ func (c *MetricsCollector) noteActiveChaosPartition(ctx context.Context, namespa
 // topo is derived from the saved deployment design (may be zero); used for narratives and cache-strategy overlay.
 func (c *MetricsCollector) Collect(ctx context.Context, namespace, template string, topo TopologyFlags) (*DeploymentMetrics, error) {
 	ctx = withCollectNamespace(ctx, namespace)
+	ctx = kubeobs.WithCaller(ctx, "metrics")
 	c.ensureClusterSample(ctx)
 
 	dm := &DeploymentMetrics{

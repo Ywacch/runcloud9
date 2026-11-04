@@ -13,6 +13,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/ywacch/cloud9/pkg/kubeobs"
 )
 
 const (
@@ -113,6 +115,7 @@ func FindLBNode(design DeploymentDesign) (DeploymentNode, bool) {
 // ReconcileLBUpstream re-resolves app-server pod IPs after the full deploy wave and
 // updates lb-config so nginx balances per pod instead of a single service upstream.
 func ReconcileLBUpstream(ctx context.Context, clientset kubernetes.Interface, namespace string, design DeploymentDesign) error {
+	ctx = kubeobs.WithCaller(ctx, "lb")
 	lbNode, ok := FindLBNode(design)
 	if !ok {
 		return nil
@@ -215,6 +218,7 @@ func isUpstreamServiceFallback(hosts []string, endpoints []LBEndpointSnapshot) b
 }
 
 func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources corev1.ResourceRequirements, replicas int32) error {
+	ctx = kubeobs.WithCaller(ctx, "lb")
 	spec := DefaultLBSpec()
 	spec.Resources = resources
 	algo := normalizeLBAlgorithm(configString(cfg.Node.Config, "lbAlgorithm", lbAlgoRoundRobin))

@@ -91,6 +91,21 @@ func TestControlPlaneMetrics_ProvisionHistogram(t *testing.T) {
 	}
 }
 
+func TestControlPlaneMetrics_KubeRequestCounter(t *testing.T) {
+	t.Parallel()
+	m := newControlPlaneMetrics()
+	m.ObserveRequest("list", "pods", "metrics", 0.01)
+
+	got := counterValue(t, m, "cloud9_k8s_requests_total", map[string]string{
+		"verb":     "list",
+		"resource": "pods",
+		"caller":   "metrics",
+	})
+	if got != 1 {
+		t.Fatalf("k8s requests: want 1, got %v", got)
+	}
+}
+
 func TestControlPlaneMetrics_GETMetrics(t *testing.T) {
 	t.Parallel()
 	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -106,6 +121,13 @@ func TestControlPlaneMetrics_GETMetrics(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "cloud9_admit_total") {
 		t.Fatalf("body missing cloud9_admit_total: %s", rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "cloud9_k8s_requests_total") {
+		t.Fatalf("body missing cloud9_k8s_requests_total: %s", body)
+	}
+	if !strings.Contains(body, "cloud9_k8s_throttle_waits_total") {
+		t.Fatalf("body missing cloud9_k8s_throttle_waits_total: %s", body)
 	}
 }
 

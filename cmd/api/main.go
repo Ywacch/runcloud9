@@ -14,6 +14,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/api"
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/diagnostics"
+	"github.com/ywacch/cloud9/pkg/kubeobs"
 	"github.com/ywacch/cloud9/pkg/loadgen"
 	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/seeder"
@@ -23,6 +24,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/flowcontrol"
 	"k8s.io/client-go/util/homedir"
 	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 )
@@ -33,7 +35,7 @@ var version = "dev"
 // buildDeployers returns the deployer map, k8s clientset, and optional metrics clientset.
 // os.Getenv returns empty string if var not set.
 // Default to local so tests and local dev without minikube still work.
-func buildDeployers() (map[string]deployer.ComponentDeployer, kubernetes.Interface, metrics.PodMetricsProvider) {
+func buildDeployers(kubeObs kubeobs.RequestObserver) (map[string]deployer.ComponentDeployer, kubernetes.Interface, metrics.PodMetricsProvider) {
 	if os.Getenv("DEPLOYER") != "k8s" {
 		log.Println("Using LocalDeployer (set DEPLOYER=k8s for real K8s)")
 		return map[string]deployer.ComponentDeployer{
@@ -77,6 +79,13 @@ func buildDeployers() (map[string]deployer.ComponentDeployer, kubernetes.Interfa
 	// Default (5 QPS, 10 burst) causes 10-16s delays at 20+ concurrent deploys.
 	config.QPS = 50
 	config.Burst = 100
+	if kubeObs != nil {
+		config.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
+			return kubeobs.Wrap(rt, kubeObs)
+		}
+		inner := flowcontrol.NewTokenBucketRateLimiter(config.QPS, config.Burst)
+		config.RateLimiter = kubeobs.CountingLimiter(inner, kubeObs)
+	}
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		log.Fatalf("build clientset: %v", err)
@@ -177,7 +186,7 @@ func main() {
 		}
 	}
 
-	deployers, clientset, metricsClient := buildDeployers()
+	deployers, clientset, metricsClient := buildDeployers(api.BootstrapControlPlaneMetrics())
 
 	seedBucketName := os.Getenv("SEED_BUCKET_NAME")
 	if seedBucketName == "" {
