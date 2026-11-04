@@ -19,6 +19,7 @@ type CacheStoreTelemetry struct {
 // fillRedisCacheStoreTelemetry reads redis_exporter series into normalized fields.
 // Metric names stay inside this Redis filler; callers consume CacheStoreTelemetry only.
 func (c *MetricsCollector) fillRedisCacheStoreTelemetry(ctx context.Context, ns string) CacheStoreTelemetry {
+	ctx = withPromCaller(ctx, "cache")
 	if c == nil || ns == "" {
 		return CacheStoreTelemetry{}
 	}

@@ -357,6 +357,7 @@ func redisStorageWriteLatencyQuery(ns, template string) string {
 // collectStorageIO runs registry PromQL and returns engine-native storage metrics.
 // template adjusts Redis read/write command filters (e.g. social-feed sorted-set ops).
 func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel string, engine StorageEngineID, template string) *StorageIO {
+	ctx = withPromCaller(ctx, "storage")
 	prov, ok := LookupStorageProvider(engine)
 	if !ok || c == nil || c.prometheusURL == "" {
 		return nil

@@ -48,6 +48,7 @@ func (c *MetricsCollector) appServerReplicaSeries(ctx context.Context, ns string
 	cpu, errRate, totalReqs, totalErrs5xx map[string]float64,
 	memBytes map[string]int64,
 ) {
+	ctx = withPromCaller(ctx, "replica")
 	nsSel := fmt.Sprintf(`namespace=%q`, ns)
 	podSel := fmt.Sprintf(`namespace=%q,pod=~"app-server.*"`, ns)
 	podRe := "app-server.*"
@@ -147,6 +148,7 @@ func (c *MetricsCollector) workerReplicaSeries(ctx context.Context, ns string) (
 	cpu, errRate, totalProcessed, totalErrors map[string]float64,
 	memBytes map[string]int64,
 ) {
+	ctx = withPromCaller(ctx, "replica")
 	podRe := "worker.*"
 	liveRange := promRateRange()
 

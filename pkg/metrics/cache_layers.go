@@ -24,6 +24,7 @@ type cacheLayerSplit struct {
 
 // collectCacheLayerSplit queries redis-internal and cache-proxy metrics separately.
 func (c *MetricsCollector) collectCacheLayerSplit(ctx context.Context, ns string) cacheLayerSplit {
+	ctx = withPromCaller(ctx, "cache")
 	if c == nil {
 		return cacheLayerSplit{}
 	}

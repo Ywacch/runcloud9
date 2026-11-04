@@ -93,6 +93,7 @@ func applyAppSQLMetricsToLayer(
 }
 
 func (c *MetricsCollector) enrichDBLayerAppSQL(ctx context.Context, ns string, split *dbReplicaLayerSplit) {
+	ctx = withPromCaller(ctx, "db")
 	if c == nil || split == nil || (split.writerPod == "" && len(split.replicaPods) == 0) {
 		return
 	}

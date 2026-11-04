@@ -163,6 +163,7 @@ type consistencySamplesPayload struct {
 
 // scrapeConsistencySamples returns cache and replica violation rows from app-server.
 func (c *MetricsCollector) scrapeConsistencySamples(ctx context.Context, namespace string) (cacheStaleSample, []replicaViolationSample) {
+	ctx = withPromCaller(ctx, "scrape")
 	if c == nil || c.scrapeClient == nil || namespace == "" {
 		return cacheStaleSample{}, nil
 	}
@@ -229,6 +230,7 @@ func parseConsistencySamplesJSON(body []byte) (cacheStaleSample, []replicaViolat
 // scrapeAppTrafficConsistency reads cumulative readrouter counters from Prometheus for student RYW/monotonic.
 // CacheDbStale stays on consistency_read_stale_total (E4); this scrapes replica consistency only.
 func (c *MetricsCollector) scrapeAppTrafficConsistency(ctx context.Context, nsSel string) appTrafficConsistency {
+	ctx = withPromCaller(ctx, "scrape")
 	out := appTrafficConsistency{}
 	if c == nil || nsSel == "" {
 		return out
