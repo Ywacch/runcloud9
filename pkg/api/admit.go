@@ -83,6 +83,13 @@ func (h *Handler) admitAndCreate(
 		return statusProvisioning, nil
 	}
 
+	var err error
+	defer func() {
+		if err != nil {
+			h.observeAdmitResult(ctx, "", err)
+		}
+	}()
+
 	active, err := h.store.ListActiveDeployments(ctx, userID)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", errListActive, err)
@@ -177,6 +184,7 @@ func (h *Handler) admitAndCreate(
 			Paid:          h.admissionPaid(ctx, userID),
 		})
 	}
+	h.observeAdmitResult(ctx, status, nil)
 	return status, nil
 }
 

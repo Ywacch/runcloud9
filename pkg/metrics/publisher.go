@@ -50,6 +50,16 @@ func (c *MetricsCollector) EnsurePublisher(namespace, template string, topo Topo
 	go pub.loop(ctx, c, namespace)
 }
 
+// PublisherCount returns the number of active session publisher loops.
+func (c *MetricsCollector) PublisherCount() int {
+	if c == nil {
+		return 0
+	}
+	c.publishersMu.Lock()
+	defer c.publishersMu.Unlock()
+	return len(c.publishers)
+}
+
 // Latest returns the most recent snapshot for a namespace, or a pending skeleton
 // before the first Collect completes. Returns nil when no publisher exists.
 func (c *MetricsCollector) Latest(namespace string) *DeploymentMetrics {

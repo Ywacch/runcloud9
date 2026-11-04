@@ -61,6 +61,7 @@ func (h *Handler) runBackgroundProvision(
 
 	start := time.Now()
 	var doorWaited bool
+	var doorWait time.Duration
 	workCtx, cancel, release, err := beginProvisionWork(
 		lifeCtx,
 		h.door,
@@ -112,6 +113,18 @@ func (h *Handler) runBackgroundProvision(
 			Paid:      paid,
 		})
 	}
+	if err == nil {
+		waitSec := 0.0
+		if doorWaited {
+			doorWait = time.Since(start)
+			waitSec = doorWait.Seconds()
+		}
+		if h.cpMetrics != nil {
+			h.cpMetrics.observeDoorWait(waitSec)
+		}
+	} else if doorWaited && h.cpMetrics != nil {
+		h.cpMetrics.observeDoorWait(time.Since(start).Seconds())
+	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) || h.isDeploymentStatus(namespace, "terminated") {
 			log.Printf("orchestration canceled for namespace=%s", namespace)
@@ -135,6 +148,7 @@ func (h *Handler) runBackgroundProvision(
 			h.wakeDeployQueue()
 			return
 		}
+		h.recordProvisionTimings(context.Background(), namespace, holdStart, doorWait)
 		h.failProvision(design, namespace, userID, err)
 		return
 	}
@@ -142,6 +156,7 @@ func (h *Handler) runBackgroundProvision(
 	runExpiresAt := time.Now().Add(time.Duration(sessionMins) * time.Minute)
 	if h.isDeploymentStatus(namespace, "terminated") {
 		log.Printf("skip final running status for terminated namespace=%s", namespace)
+		h.recordProvisionTimings(context.Background(), namespace, holdStart, doorWait)
 		h.provisionETA.Observe(time.Since(start))
 		h.wakeDeployQueue()
 		return
@@ -173,7 +188,9 @@ func (h *Handler) runBackgroundProvision(
 			}
 		}
 		h.metricsCollector.EnsurePublisher(namespace, design.Template, topo)
+		h.refreshWebsocketLiveGauge()
 	}
+	h.recordProvisionTimings(context.Background(), namespace, holdStart, doorWait)
 	h.provisionETA.Observe(time.Since(start))
 	h.wakeDeployQueue()
 }

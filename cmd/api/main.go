@@ -208,18 +208,23 @@ func main() {
 	var enrichTeardownSummary func(context.Context, string, store.DeploymentRow, map[string]any, []metrics.DeploymentMetrics, *metrics.DeploymentMetrics)
 	var schedulePostmortem func(string)
 	var stopLBEndpointsWatch func(string)
+	var observeTeardownLag func(time.Time)
+	var refreshWebsocketLive func()
 
 	// teardownFn uses context.Background() so cleanup is never cut short by request cancel or timeout.
 	teardownFn := func(namespace string) {
 		if forgetActAsCache != nil {
 			forgetActAsCache(namespace)
 		}
-		// Stop load generator first — prevents requests to a dying namespace
-		_ = lg.Stop(context.Background(), namespace)
 		ctx := context.Background()
 		tpl := ""
 		var row store.DeploymentRow
 		row, rowErr := deploymentStore.GetDeployment(ctx, namespace)
+		if observeTeardownLag != nil && rowErr == nil {
+			observeTeardownLag(row.ExpiresAt)
+		}
+		// Stop load generator first — prevents requests to a dying namespace
+		_ = lg.Stop(context.Background(), namespace)
 		if rowErr == nil {
 			tpl = row.Template
 		}
@@ -318,6 +323,9 @@ func main() {
 		if metricsCollector != nil {
 			metricsCollector.Cleanup(namespace)
 		}
+		if refreshWebsocketLive != nil {
+			refreshWebsocketLive()
+		}
 		log.Printf("auto-teardown complete: %s", namespace)
 	}
 
@@ -351,6 +359,8 @@ func main() {
 	enrichTeardownSummary = handler.EnrichTeardownSummary
 	schedulePostmortem = handler.SchedulePostmortemAfterTeardown
 	stopLBEndpointsWatch = handler.StopLBEndpointsWatch
+	observeTeardownLag = handler.ObserveTeardownLag
+	refreshWebsocketLive = handler.RefreshWebsocketLiveGauge
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
