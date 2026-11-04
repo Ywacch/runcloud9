@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/ywacch/cloud9/pkg/kubeobs"
 	"github.com/ywacch/cloud9/pkg/templates"
 	"gopkg.in/yaml.v3"
 )
@@ -86,6 +87,7 @@ func NewK8sDeployer(clientset kubernetes.Interface, nodeType string) *K8sDeploye
 }
 
 func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
+	ctx = kubeobs.WithCaller(ctx, "deployer")
 
 	// namespace creation is idempotent-ish. each deployment gets a unique namespace from the timestamp
 	_, err := k.clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
@@ -945,6 +947,7 @@ func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, 
 }
 
 func (k *K8sDeployer) Teardown(ctx context.Context, namespace string) error {
+	ctx = kubeobs.WithCaller(ctx, "teardown")
 	// UNDERSTAND: deleting the namespace cascades — K8s garbage collects everything
 	// inside it (Deployments, Pods, Services, PVCs). We never enumerate and delete
 	// individual resources. This is why namespace-per-deployment is the right isolation unit.

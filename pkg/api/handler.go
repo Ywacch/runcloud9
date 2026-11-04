@@ -153,7 +153,7 @@ func NewHandler(
 		inferenceTokenBudget: NewSessionTokenBudget(),
 		manifestRNG:          randomManifestRNGSeed,
 		lbEndpointsWatch:     deployer.NewLBEndpointsWatcher(),
-		cpMetrics:            newControlPlaneMetrics(),
+		cpMetrics:            controlPlaneMetricsForHandler(),
 	}
 	if h.metricsCollector != nil && h.cpMetrics != nil {
 		h.metricsCollector.SetMetricsQueryObserver(h.cpMetrics.observeMetricsQueries)
