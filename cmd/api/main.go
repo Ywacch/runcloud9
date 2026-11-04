@@ -341,7 +341,13 @@ func main() {
 	debugMetrics := os.Getenv("CLOUD9_DEBUG_METRICS") == "true"
 	eventBus := metrics.NewEventBus()
 	metricsCollector = metrics.NewMetricsCollector(prometheusURL, lg, clientset, metricsClient, eventBus)
-	metricsCollector.SetClusterSampleEnabled(prometheusURL != "")
+	sampleOn := metrics.ClusterSampleEnabled(prometheusURL, os.Getenv("METRICS_CLUSTER_SAMPLE"))
+	metricsCollector.SetClusterSampleEnabled(sampleOn)
+	if sampleOn {
+		log.Printf("cluster metrics sample: on")
+	} else {
+		log.Printf("cluster metrics sample: off")
+	}
 	metricsCollector.SetDebugMetrics(debugMetrics)
 	if clientset != nil {
 		ddcBucket := os.Getenv("DDC_BUCKET")

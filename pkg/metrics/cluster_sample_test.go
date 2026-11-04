@@ -103,34 +103,6 @@ func TestClusterSample_TwoNamespacesOneRefresh(t *testing.T) {
 func TestIngestPromVector_SkipsUnlabeledNamespace(t *testing.T) {
 	t.Parallel()
 
-	q := `sum by (namespace) (rate(http_requests_total` + promRateRange() + `))`
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status": "success",
-			"data": map[string]any{
-				"resultType": "vector",
-				"result": []map[string]any{
-					{"metric": map[string]string{}, "value": []any{float64(1), "99"}},
-				},
-			},
-		})
-	}))
-	t.Cleanup(srv.Close)
-
-	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
-	sample := &clusterSample{
-		scalars: make(map[string]map[string]float64),
-	}
-	c.ingestPromVector(context.Background(), sample, q, false, "")
-	if len(sample.scalars[q]) != 0 {
-		t.Fatalf("unlabeled series must not populate namespace map: %+v", sample.scalars[q])
-	}
-}
-
-func TestClusterSample_AppP99FromClusterBuckets(t *testing.T) {
-	t.Parallel()
-
 	rr := promRateRange()
 	bucketQL := `sum by (namespace, le) (rate(http_request_duration_seconds_bucket` + rr + `))`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -197,5 +169,59 @@ func TestClusterSample_MissingSeriesAbsent(t *testing.T) {
 	}
 	if dm.Components["app-server"].RequestRate != 0 {
 		t.Fatalf("missing series should leave request rate unset/zero, got %v", dm.Components["app-server"].RequestRate)
+	}
+}
+
+func TestClusterSampleEnabled(t *testing.T) {
+	t.Parallel()
+	const url = "http://prom.example:9090"
+	tests := []struct {
+		env  string
+		prom string
+		want bool
+	}{
+		{"", url, false},
+		{"true", url, true},
+		{"TRUE", url, true},
+		{"1", url, true},
+		{"false", url, false},
+		{"0", url, false},
+		{"yes", url, false},
+		{"true", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.env+"_"+tc.prom, func(t *testing.T) {
+			got := ClusterSampleEnabled(tc.prom, tc.env)
+			if got != tc.want {
+				t.Fatalf("ClusterSampleEnabled(%q, %q) = %v, want %v", tc.prom, tc.env, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestQueryScalar_SampleOffHitsPrometheus(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "success",
+			"data": map[string]any{
+				"resultType": "vector",
+				"result": []map[string]any{
+					{"metric": map[string]string{}, "value": []any{float64(1), "4"}},
+				},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
+	val, present, err := c.queryScalar(context.Background(), `sum(up)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !present || val != 4 {
+		t.Fatalf("queryScalar: present=%v val=%v, want present true val 4", present, val)
 	}
 }
