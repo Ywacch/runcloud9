@@ -13,6 +13,7 @@ import (
 // memcached_current_bytes is cached item payload. A quiet cache is a few KiB,
 // so that gauge makes the memory tile look empty.
 func (c *MetricsCollector) applyMemcachedCacheMetrics(ctx context.Context, ns string, cm *ComponentMetrics) {
+	ctx = withPromCaller(ctx, "cache")
 	if c == nil || cm == nil || ns == "" {
 		return
 	}

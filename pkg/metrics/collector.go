@@ -89,6 +89,7 @@ type MetricsCollector struct {
 	clusterSample        *clusterSample
 	sampleFlight         singleflight.Group
 	metricsQueryObserver MetricsQueryObserver
+	promQueryObserver    PromQueryObserver
 }
 
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
@@ -375,6 +376,8 @@ func (c *MetricsCollector) executePromInstant(ctx context.Context, promql string
 		return pr, err
 	}
 
+	c.notifyPromQuery(ctx)
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return pr, fmt.Errorf("prometheus query: %w", err)
@@ -385,6 +388,25 @@ func (c *MetricsCollector) executePromInstant(ctx context.Context, promql string
 		return pr, fmt.Errorf("decode prometheus response: %w", err)
 	}
 	return pr, nil
+}
+
+func (c *MetricsCollector) notifyPromQuery(ctx context.Context) {
+	if c == nil || c.promQueryObserver == nil {
+		return
+	}
+	meta := promMetaFrom(ctx)
+	if meta.path == "" {
+		return
+	}
+	template := meta.template
+	if template == "" {
+		template = "none"
+	}
+	caller := meta.caller
+	if caller == "" {
+		caller = "collect"
+	}
+	c.promQueryObserver(meta.path, caller, template)
 }
 
 // query executes a PromQL instant query and returns the first result value.
@@ -765,6 +787,7 @@ func (c *MetricsCollector) noteActiveChaosPartition(ctx context.Context, namespa
 // topo is derived from the saved deployment design (may be zero); used for narratives and cache-strategy overlay.
 func (c *MetricsCollector) Collect(ctx context.Context, namespace, template string, topo TopologyFlags) (*DeploymentMetrics, error) {
 	ctx = withCollectNamespace(ctx, namespace)
+	ctx = WithPromMeta(ctx, template, "collect", "direct")
 	ctx = kubeobs.WithCaller(ctx, "metrics")
 	c.ensureClusterSample(ctx)
 

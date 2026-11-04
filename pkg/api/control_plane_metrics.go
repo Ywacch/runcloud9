@@ -29,6 +29,7 @@ type controlPlaneMetrics struct {
 	k8sRequestsTotal      *prometheus.CounterVec
 	k8sRequestSeconds     *prometheus.HistogramVec
 	k8sThrottleWaitsTotal prometheus.Counter
+	promQueriesTotal      *prometheus.CounterVec
 }
 
 func newControlPlaneMetrics() *controlPlaneMetrics {
@@ -88,6 +89,10 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		Name: "cloud9_k8s_throttle_waits_total",
 		Help: "Client-side rate limiter waits longer than 1ms.",
 	})
+	m.promQueriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloud9_prom_queries_total",
+		Help: "Prometheus instant queries by path, logical caller, and deployment template.",
+	}, []string{"path", "caller", "template"})
 
 	reg.MustRegister(
 		m.admitTotal,
@@ -102,6 +107,7 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		m.k8sRequestsTotal,
 		m.k8sRequestSeconds,
 		m.k8sThrottleWaitsTotal,
+		m.promQueriesTotal,
 	)
 	m.informerQueueDepth.WithLabelValues("pod").Set(0)
 	// CounterVec omits a series until the label exists. Publish the known results at 0
@@ -142,6 +148,19 @@ func (m *controlPlaneMetrics) observeMetricsQueries(source string, count int) {
 		return
 	}
 	m.metricsQueriesTotal.WithLabelValues(source).Add(float64(count))
+}
+
+func (m *controlPlaneMetrics) observePromQuery(path, caller, template string) {
+	if m == nil || path == "" {
+		return
+	}
+	if template == "" {
+		template = "none"
+	}
+	if caller == "" {
+		caller = "collect"
+	}
+	m.promQueriesTotal.WithLabelValues(path, caller, template).Inc()
 }
 
 func (m *controlPlaneMetrics) ObserveRequest(verb, resource, caller string, seconds float64) {

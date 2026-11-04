@@ -67,6 +67,7 @@ func (c *MetricsCollector) postgresSessionHeld(namespace string) bool {
 }
 
 func (c *MetricsCollector) queryPostgresEngineTotals(ctx context.Context, ns string) pgEngineTotals {
+	ctx = withPromCaller(ctx, "db")
 	var t pgEngineTotals
 	if c == nil {
 		return t

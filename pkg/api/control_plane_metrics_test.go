@@ -106,6 +106,21 @@ func TestControlPlaneMetrics_KubeRequestCounter(t *testing.T) {
 	}
 }
 
+func TestControlPlaneMetrics_PromQueryCounter(t *testing.T) {
+	t.Parallel()
+	m := newControlPlaneMetrics()
+	m.observePromQuery("direct", "collect", "url-shortener-small")
+
+	got := counterValue(t, m, "cloud9_prom_queries_total", map[string]string{
+		"path":     "direct",
+		"caller":   "collect",
+		"template": "url-shortener-small",
+	})
+	if got != 1 {
+		t.Fatalf("prom queries: want 1, got %v", got)
+	}
+}
+
 func TestControlPlaneMetrics_GETMetrics(t *testing.T) {
 	t.Parallel()
 	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)

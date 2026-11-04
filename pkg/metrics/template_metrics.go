@@ -10,6 +10,7 @@ import (
 // collectTemplateMetrics queries Prometheus using the deployment template's YAML metrics profile.
 // Keys use category.metric_name for frontend grouping. Missing series return 0 via query().
 func (c *MetricsCollector) collectTemplateMetrics(ctx context.Context, nsSel, template string) map[string]float64 {
+	ctx = withPromCaller(ctx, "template_metrics")
 	out := make(map[string]float64)
 	tmpl := templates.GetTemplate(template)
 	if tmpl == nil || tmpl.PrometheusMetrics == nil {

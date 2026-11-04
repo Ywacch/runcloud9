@@ -734,6 +734,7 @@ func (c *MetricsCollector) buildDBReplicaLayer(ctx context.Context, ns, podName 
 
 // collectDBReplicaLayers builds primary + per-standby instance layers from live write routing.
 func (c *MetricsCollector) collectDBReplicaLayers(ctx context.Context, ns string, clusterStorageIO *StorageIO) dbReplicaLayerSplit {
+	ctx = withPromCaller(ctx, "db")
 	out := dbReplicaLayerSplit{ready: make(map[string]bool)}
 	if c == nil {
 		return out

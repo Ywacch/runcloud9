@@ -157,6 +157,7 @@ func NewHandler(
 	}
 	if h.metricsCollector != nil && h.cpMetrics != nil {
 		h.metricsCollector.SetMetricsQueryObserver(h.cpMetrics.observeMetricsQueries)
+		h.metricsCollector.SetPromQueryObserver(h.cpMetrics.observePromQuery)
 	}
 	return h
 }

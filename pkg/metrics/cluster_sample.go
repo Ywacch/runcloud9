@@ -25,6 +25,17 @@ type clusterSample struct {
 
 type collectContextKey struct{}
 
+type promMetaKey struct{}
+
+type promMeta struct {
+	template string
+	caller   string
+	path     string
+}
+
+// PromQueryObserver is invoked once per Prometheus HTTP instant query in executePromInstant.
+type PromQueryObserver func(path, caller, template string)
+
 func withCollectNamespace(ctx context.Context, namespace string) context.Context {
 	return context.WithValue(ctx, collectContextKey{}, namespace)
 }
@@ -32,6 +43,25 @@ func withCollectNamespace(ctx context.Context, namespace string) context.Context
 func collectNamespaceFrom(ctx context.Context) string {
 	ns, _ := ctx.Value(collectContextKey{}).(string)
 	return ns
+}
+
+// WithPromMeta attaches Prometheus query counter labels to ctx for executePromInstant.
+func WithPromMeta(ctx context.Context, template, caller, path string) context.Context {
+	return context.WithValue(ctx, promMetaKey{}, promMeta{
+		template: template,
+		caller:   caller,
+		path:     path,
+	})
+}
+
+func promMetaFrom(ctx context.Context) promMeta {
+	m, _ := ctx.Value(promMetaKey{}).(promMeta)
+	return m
+}
+
+func withPromCaller(ctx context.Context, caller string) context.Context {
+	m := promMetaFrom(ctx)
+	return WithPromMeta(ctx, m.template, caller, m.path)
 }
 
 var (
@@ -46,6 +76,13 @@ func (c *MetricsCollector) SetMetricsQueryObserver(fn MetricsQueryObserver) {
 		return
 	}
 	c.metricsQueryObserver = fn
+}
+
+func (c *MetricsCollector) SetPromQueryObserver(fn PromQueryObserver) {
+	if c == nil {
+		return
+	}
+	c.promQueryObserver = fn
 }
 
 func (c *MetricsCollector) SetClusterSampleEnabled(enabled bool) {
@@ -104,6 +141,8 @@ func (c *MetricsCollector) ensureClusterSample(ctx context.Context) *clusterSamp
 }
 
 func (c *MetricsCollector) refreshClusterSample(ctx context.Context) *clusterSample {
+	meta := promMetaFrom(ctx)
+	ctx = WithPromMeta(ctx, meta.template, meta.caller, "cluster_sample")
 	sample := &clusterSample{
 		scalars:        make(map[string]map[string]float64),
 		vectors:        make(map[string]map[string]map[string]float64),

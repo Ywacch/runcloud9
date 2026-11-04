@@ -21,6 +21,7 @@ func templateHasTimelineJob(tmpl *templates.TemplateSpec) bool {
 }
 
 func (c *MetricsCollector) collectTimelineOps(ctx context.Context, nsSel, template string) *TimelineOps {
+	ctx = withPromCaller(ctx, "timeline")
 	tmpl := templates.GetTemplate(template)
 	if !templateHasTimelineJob(tmpl) {
 		return nil

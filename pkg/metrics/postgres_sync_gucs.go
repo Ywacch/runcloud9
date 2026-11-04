@@ -28,6 +28,7 @@ func promQLStringLiteral(s string) string {
 
 // postgresSyncGUCsActive checks live pg_settings from postgres_exporter against the design.
 func (c *MetricsCollector) postgresSyncGUCsActive(ctx context.Context, ns string, topo TopologyFlags) bool {
+	ctx = withPromCaller(ctx, "db")
 	if c == nil || !topologyRequiresPostgresSyncGUCs(topo) {
 		return false
 	}
