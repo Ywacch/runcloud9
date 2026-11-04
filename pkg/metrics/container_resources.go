@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+
+	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
 // Resource usage source identifiers for ComponentMetrics cpuSource/memSource.
@@ -206,8 +208,14 @@ func (c *MetricsCollector) sumMetricsAPIContainerExcluding(ctx context.Context, 
 	if err != nil {
 		return 0, 0, false
 	}
-	list, err := c.metricsClient.ListPodMetrics(ctx, ns)
-	if err != nil {
+	var list *metricsv1beta1.PodMetricsList
+	var errList error
+	if sampleList, ok := c.podMetricsListFromSample(ctx, ns); ok {
+		list = sampleList
+	} else {
+		list, errList = c.metricsClient.ListPodMetrics(ctx, ns)
+	}
+	if errList != nil {
 		return 0, 0, false
 	}
 	var cpuMilli int64

@@ -23,6 +23,7 @@ type controlPlaneMetrics struct {
 	teardownLagSeconds   prometheus.Histogram
 	websocketLive        prometheus.Gauge
 	informerQueueDepth   *prometheus.GaugeVec
+	metricsQueriesTotal  *prometheus.CounterVec
 }
 
 func newControlPlaneMetrics() *controlPlaneMetrics {
@@ -65,6 +66,10 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		Name: "cloud9_informer_queue_depth",
 		Help: "Shared informer workqueue depth (0 until informer path is enabled).",
 	}, []string{"informer"})
+	m.metricsQueriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloud9_metrics_queries_total",
+		Help: "Cluster-wide metrics poll queries per refresh (not per session).",
+	}, []string{"source"})
 
 	reg.MustRegister(
 		m.admitTotal,
@@ -75,6 +80,7 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		m.teardownLagSeconds,
 		m.websocketLive,
 		m.informerQueueDepth,
+		m.metricsQueriesTotal,
 	)
 	m.informerQueueDepth.WithLabelValues("pod").Set(0)
 	// CounterVec omits a series until the label exists. Publish the known results at 0
@@ -105,6 +111,13 @@ func (m *controlPlaneMetrics) gather() (string, error) {
 		out += mf.String()
 	}
 	return out, nil
+}
+
+func (m *controlPlaneMetrics) observeMetricsQueries(source string, count int) {
+	if m == nil || count <= 0 {
+		return
+	}
+	m.metricsQueriesTotal.WithLabelValues(source).Add(float64(count))
 }
 
 func (m *controlPlaneMetrics) incAdmit(result string) {
