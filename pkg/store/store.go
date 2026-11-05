@@ -21,7 +21,10 @@ type DeploymentStore struct {
 }
 
 // SetRequestObserver registers a callback for Supabase-bound store methods.
-func (s *DeploymentStore) SetRequestObserver(fn RequestObserver) {
+// The parameter is an unnamed function type so a caller in another package can
+// require this method on an interface. A defined type such as RequestObserver
+// does not match func(string) in a method set.
+func (s *DeploymentStore) SetRequestObserver(fn func(string)) {
 	if s == nil {
 		return
 	}

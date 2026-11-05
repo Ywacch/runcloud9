@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,7 +10,15 @@ import (
 	"time"
 
 	dto "github.com/prometheus/client_model/go"
+	"github.com/ywacch/cloud9/pkg/store"
 )
+
+// NewHandler attaches the store counter through an interface that names
+// SetRequestObserver(func(string)). A defined function type on the method
+// would fail this assignment.
+var _ interface {
+	SetRequestObserver(func(string))
+} = (*store.DeploymentStore)(nil)
 
 func TestControlPlaneMetrics_AdmitCounter(t *testing.T) {
 	t.Parallel()
@@ -118,6 +127,33 @@ func TestControlPlaneMetrics_PromQueryCounter(t *testing.T) {
 	})
 	if got != 1 {
 		t.Fatalf("prom queries: want 1, got %v", got)
+	}
+}
+
+func TestNewHandler_ObservesStoreGetDeployment(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]store.DeploymentRow{{
+			ID:        "dep-1",
+			Namespace: "ns-1",
+			Status:    "running",
+		}})
+	}))
+	t.Cleanup(server.Close)
+
+	st, err := store.NewDeploymentStore(server.URL, "service-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := NewHandler(nil, st, nil, nil, nil, nil, nil, nil, nil)
+	if _, err := h.store.GetDeployment(context.Background(), "ns-1"); err != nil {
+		t.Fatal(err)
+	}
+	got := counterValue(t, h.cpMetrics, "cloud9_store_requests_total", map[string]string{"op": "get_deployment"})
+	if got != 1 {
+		t.Fatalf("store requests: want 1, got %v", got)
 	}
 }
 
