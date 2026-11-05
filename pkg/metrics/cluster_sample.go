@@ -36,6 +36,12 @@ type promMeta struct {
 // PromQueryObserver is invoked once per Prometheus HTTP instant query in executePromInstant.
 type PromQueryObserver func(path, caller, template string)
 
+// CollectObserver is invoked once per session publisher Collect (or test hook), success or error.
+type CollectObserver func(template string, seconds float64)
+
+// FrameBytesObserver is invoked once per metrics WebSocket frame written.
+type FrameBytesObserver func(n int)
+
 func withCollectNamespace(ctx context.Context, namespace string) context.Context {
 	return context.WithValue(ctx, collectContextKey{}, namespace)
 }
@@ -83,6 +89,27 @@ func (c *MetricsCollector) SetPromQueryObserver(fn PromQueryObserver) {
 		return
 	}
 	c.promQueryObserver = fn
+}
+
+func (c *MetricsCollector) SetCollectObserver(fn CollectObserver) {
+	if c == nil {
+		return
+	}
+	c.collectObserver = fn
+}
+
+func (c *MetricsCollector) SetFrameBytesObserver(fn FrameBytesObserver) {
+	if c == nil {
+		return
+	}
+	c.frameBytesObserver = fn
+}
+
+func (c *MetricsCollector) observeFrameBytes(n int) {
+	if c == nil || c.frameBytesObserver == nil {
+		return
+	}
+	c.frameBytesObserver(n)
 }
 
 func (c *MetricsCollector) SetClusterSampleEnabled(enabled bool) {

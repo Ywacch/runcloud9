@@ -104,6 +104,44 @@ func TestListUserDeploymentHistory_requiresUser(t *testing.T) {
 	}
 }
 
+func TestStore_ObservesGetDeployment(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/v1/cloud_deployments" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]DeploymentRow{
+			{
+				ID:        "dep-1",
+				Namespace: "cloud9-user-1",
+				Template:  "url-shortener",
+				Status:    "running",
+			},
+		})
+	}))
+	defer server.Close()
+
+	s, err := NewDeploymentStore(server.URL, "service-key")
+	if err != nil {
+		t.Fatalf("NewDeploymentStore: %v", err)
+	}
+
+	var ops []string
+	s.SetRequestObserver(func(op string) {
+		ops = append(ops, op)
+	})
+
+	_, err = s.GetDeployment(context.Background(), "cloud9-user-1")
+	if err != nil {
+		t.Fatalf("GetDeployment: %v", err)
+	}
+	if len(ops) != 1 || ops[0] != "get_deployment" {
+		t.Fatalf("observer ops = %v, want [get_deployment]", ops)
+	}
+}
+
 func TestListUserDeploymentHistory(t *testing.T) {
 	t.Parallel()
 

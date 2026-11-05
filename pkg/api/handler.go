@@ -158,6 +158,17 @@ func NewHandler(
 	if h.metricsCollector != nil && h.cpMetrics != nil {
 		h.metricsCollector.SetMetricsQueryObserver(h.cpMetrics.observeMetricsQueries)
 		h.metricsCollector.SetPromQueryObserver(h.cpMetrics.observePromQuery)
+		h.metricsCollector.SetCollectObserver(h.cpMetrics.observeCollectSeconds)
+		h.metricsCollector.SetFrameBytesObserver(h.cpMetrics.observeFrameBytes)
+		h.cpMetrics.RegisterRingGauge(func() float64 {
+			return float64(h.metricsCollector.RingBytes())
+		})
+	}
+	type storeRequestObserver interface {
+		SetRequestObserver(func(string))
+	}
+	if sh, ok := store.(storeRequestObserver); ok && h.cpMetrics != nil {
+		sh.SetRequestObserver(h.cpMetrics.observeStoreRequest)
 	}
 	return h
 }

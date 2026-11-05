@@ -119,12 +119,16 @@ func (pub *sessionPublisher) loop(ctx context.Context, c *MetricsCollector, name
 		topo := pub.topo
 		pub.mu.Unlock()
 
+		collectStart := time.Now()
 		var dm *DeploymentMetrics
 		var err error
 		if hook := c.publisherCollectHook; hook != nil {
 			dm, err = hook(ctx, namespace, template, topo)
 		} else {
 			dm, err = c.Collect(ctx, namespace, template, topo)
+		}
+		if c != nil && c.collectObserver != nil {
+			c.collectObserver(template, time.Since(collectStart).Seconds())
 		}
 		if dm != nil {
 			pub.mu.Lock()

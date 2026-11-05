@@ -90,6 +90,8 @@ type MetricsCollector struct {
 	sampleFlight         singleflight.Group
 	metricsQueryObserver MetricsQueryObserver
 	promQueryObserver    PromQueryObserver
+	collectObserver      CollectObserver
+	frameBytesObserver   FrameBytesObserver
 }
 
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
@@ -135,6 +137,29 @@ func (c *MetricsCollector) debugCompare(component, metric string, primary, fallb
 	}
 	fmt.Printf("DEBUG metrics %s.%s: primary=%.4f [%s] fallback=%.4f [%s]%s\n",
 		component, metric, primary, primarySource, fallback, fallbackSource, diff)
+}
+
+// RingBytes returns the sum of JSON-marshaled sizes of every snapshot in every session ring.
+func (c *MetricsCollector) RingBytes() int {
+	if c == nil {
+		return 0
+	}
+	c.historyMu.Lock()
+	defer c.historyMu.Unlock()
+	if len(c.history) == 0 {
+		return 0
+	}
+	var total int
+	for _, rb := range c.history {
+		for _, snap := range rb.All() {
+			b, err := json.Marshal(snap)
+			if err != nil {
+				continue
+			}
+			total += len(b)
+		}
+	}
+	return total
 }
 
 // Cleanup removes per-namespace event, threshold, cascade, and invariant state (call when a deployment ends).

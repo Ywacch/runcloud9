@@ -66,6 +66,7 @@ func (s *DeploymentStore) InsertInferredMechanismPromotion(ctx context.Context, 
 	if row.UserID != "" {
 		payload["user_id"] = row.UserID
 	}
+	s.observe("insert_inferred_mechanism_promotion")
 	_, _, err := s.client.From("inferred_mechanism_promotions").Insert([]map[string]any{payload}, false, "", "", "").Execute()
 	if err != nil {
 		return fmt.Errorf("store.InsertInferredMechanismPromotion: %w", err)
@@ -85,6 +86,7 @@ func (s *DeploymentStore) ListInferredMechanismPromotionSummaries(ctx context.Co
 	if limit <= 0 {
 		limit = 2000
 	}
+	s.observe("list_inferred_mechanism_promotion_summaries")
 	data, _, err := s.client.From("inferred_mechanism_promotions").
 		Select("signature,trigger_rule,config_precondition,fact_kinds,proposed_mechanism,claim_text,created_at", "exact", false).
 		Limit(limit, "").

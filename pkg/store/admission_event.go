@@ -75,6 +75,7 @@ func (s *DeploymentStore) InsertAdmissionEvent(ctx context.Context, ev Admission
 	if ev.Detail != nil {
 		row["detail"] = ev.Detail
 	}
+	s.observe("insert_admission_event")
 	_, _, err := s.client.From("admission_events").Insert([]map[string]any{row}, false, "", "", "").Execute()
 	if err != nil {
 		return fmt.Errorf("store.InsertAdmissionEvent: %w", err)
