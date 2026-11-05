@@ -53,7 +53,7 @@ Copy the **mean** row `series` and `objects` into your rung 0 per-template basel
 - **url-shortener-small** — run while a batch of url-shortener sessions is up
 - **social-feed** — one live session is enough; note in your run log if it was a single session
 
-Keep raw command output in your own run notes (for example next to `capacity-probe-results/`).
+Use `capacity-probe-results/rung-0.md` as the checklist for the full rung 0 run (gitignored; local only).
 
 ## Example output (fake numbers)
 
