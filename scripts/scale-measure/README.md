@@ -38,6 +38,14 @@ Series count per namespace (one query for all namespaces):
 count by (namespace) ({deployment!=""})
 ```
 
+On PowerShell, build the query parameter with `[uri]::EscapeDataString` (Windows `curl --data-urlencode` breaks on `=""` in this PromQL):
+
+```powershell
+$q = 'count({namespace="YOUR-NS",deployment!=""})'
+$u = 'http://127.0.0.1:9090/api/v1/query?query=' + [uri]::EscapeDataString($q)
+curl.exe -sS $u
+```
+
 ## Results
 
 Copy the **mean** row `series` and `objects` into your rung 0 per-template baseline table:

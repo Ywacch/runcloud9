@@ -24,11 +24,26 @@ function Invoke-Kubectl {
         $all += '--context', $KubeContext
     }
     $all += $KubectlArgs
-    $out = & kubectl @all 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "kubectl failed (exit $LASTEXITCODE): $out"
+
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $raw = & kubectl @all 2>&1
+    } finally {
+        $ErrorActionPreference = $prevEAP
     }
-    return ($out | Out-String)
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "kubectl failed (exit $LASTEXITCODE): $(($raw | Out-String).Trim())"
+    }
+
+    # kubectl prints deprecation notices on stderr; with 2>&1 those become ErrorRecords and
+    # would abort the script when ErrorActionPreference is Stop.
+    $lines = @($raw | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
+    if ($lines.Count -eq 0) {
+        return ($raw | ForEach-Object { "$_" }) -join "`n"
+    }
+    return ($lines -join "`n")
 }
 
 function Test-NamespacePrefix {
@@ -47,10 +62,18 @@ function Get-SeriesByNamespace {
     $base = $BaseURL.TrimEnd('/')
     # Single-quoted PromQL so PowerShell does not expand $ in {deployment!=""}.
     $promQuery = 'count by (namespace) ({deployment!=""})'
-
-    $response = curl.exe -sG "${base}/api/v1/query" --data-urlencode "query=$promQuery"
+    # curl.exe --data-urlencode on Windows mishandles "=" inside the PromQL value.
+    $encodedQuery = [uri]::EscapeDataString($promQuery)
+    $endpoint = "${base}/api/v1/query?query=${encodedQuery}"
+    $response = curl.exe -sS $endpoint 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0) {
-        throw "curl.exe failed querying Prometheus at $base"
+        $hint = @(
+            "Prometheus at $base is not reachable (curl exit $LASTEXITCODE)."
+            'Start port-forward in another terminal and leave it running:'
+            '  kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:9090'
+            "curl said: $($response.Trim())"
+        ) -join "`n"
+        throw $hint
     }
 
     $parsed = $response | ConvertFrom-Json
