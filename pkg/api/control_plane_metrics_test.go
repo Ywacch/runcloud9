@@ -121,6 +121,20 @@ func TestControlPlaneMetrics_PromQueryCounter(t *testing.T) {
 	}
 }
 
+func TestControlPlaneMetrics_CollectHistogram(t *testing.T) {
+	t.Parallel()
+	m := newControlPlaneMetrics()
+	m.observeCollectSeconds("url-shortener", 0.12)
+
+	text, err := m.gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, "cloud9_collect_seconds") {
+		t.Fatalf("missing collect histogram in exposition:\n%s", text)
+	}
+}
+
 func TestControlPlaneMetrics_GETMetrics(t *testing.T) {
 	t.Parallel()
 	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)

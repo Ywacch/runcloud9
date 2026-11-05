@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"time"
 
@@ -37,10 +38,10 @@ func StreamMetrics(ctx context.Context, conn *websocket.Conn, collector *Metrics
 			return nil
 		}
 		return collector.Latest(namespace)
-	}, streamConfig{emitInterval: collectInterval})
+	}, streamConfig{emitInterval: collectInterval}, collector)
 }
 
-func streamMetrics(ctx context.Context, conn *websocket.Conn, namespace string, latest func() *DeploymentMetrics, cfg streamConfig) {
+func streamMetrics(ctx context.Context, conn *websocket.Conn, namespace string, latest func() *DeploymentMetrics, cfg streamConfig, mc *MetricsCollector) {
 	if cfg.emitInterval <= 0 {
 		cfg.emitInterval = collectInterval
 	}
@@ -73,7 +74,15 @@ func streamMetrics(ctx context.Context, conn *websocket.Conn, namespace string, 
 					continue
 				}
 				_ = conn.SetWriteDeadline(time.Now().Add(wskeepalive.WriteWait))
-				if err := conn.WriteJSON(metrics); err != nil {
+				payload, err := json.Marshal(metrics)
+				if err != nil {
+					slog.Warn("metrics ws marshal failed", "namespace", namespace, "error", err)
+					continue
+				}
+				if mc != nil {
+					mc.observeFrameBytes(len(payload))
+				}
+				if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
 					slog.Warn("metrics ws write failed", "namespace", namespace, "error", err)
 					return
 				}

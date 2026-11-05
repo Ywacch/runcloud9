@@ -13,6 +13,10 @@ var controlPlaneDurationBuckets = []float64{1, 5, 15, 30, 60, 120, 300, 600, 120
 
 var k8sRequestDurationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}
 
+var collectDurationBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30}
+
+var wsFrameBytesBuckets = []float64{1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288}
+
 // controlPlaneMetrics holds Prometheus collectors for cloud9-api provision timing.
 // It uses a private registry so this process does not register app-side metrics.
 type controlPlaneMetrics struct {
@@ -30,6 +34,9 @@ type controlPlaneMetrics struct {
 	k8sRequestSeconds     *prometheus.HistogramVec
 	k8sThrottleWaitsTotal prometheus.Counter
 	promQueriesTotal      *prometheus.CounterVec
+	collectSeconds        *prometheus.HistogramVec
+	wsFrameBytes          prometheus.Histogram
+	storeRequestsTotal    *prometheus.CounterVec
 }
 
 func newControlPlaneMetrics() *controlPlaneMetrics {
@@ -93,6 +100,20 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		Name: "cloud9_prom_queries_total",
 		Help: "Prometheus instant queries by path, logical caller, and deployment template.",
 	}, []string{"path", "caller", "template"})
+	m.collectSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "cloud9_collect_seconds",
+		Help:    "Per-session metrics Collect duration by deployment template.",
+		Buckets: collectDurationBuckets,
+	}, []string{"template"})
+	m.wsFrameBytes = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "cloud9_ws_frame_bytes",
+		Help:    "Serialized metrics WebSocket frame size in bytes.",
+		Buckets: wsFrameBytesBuckets,
+	})
+	m.storeRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloud9_store_requests_total",
+		Help: "Supabase PostgREST requests by store operation.",
+	}, []string{"op"})
 
 	reg.MustRegister(
 		m.admitTotal,
@@ -108,6 +129,9 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		m.k8sRequestSeconds,
 		m.k8sThrottleWaitsTotal,
 		m.promQueriesTotal,
+		m.collectSeconds,
+		m.wsFrameBytes,
+		m.storeRequestsTotal,
 	)
 	m.informerQueueDepth.WithLabelValues("pod").Set(0)
 	// CounterVec omits a series until the label exists. Publish the known results at 0
@@ -148,6 +172,43 @@ func (m *controlPlaneMetrics) observeMetricsQueries(source string, count int) {
 		return
 	}
 	m.metricsQueriesTotal.WithLabelValues(source).Add(float64(count))
+}
+
+// RegisterRingGauge registers cloud9_metrics_ring_bytes on the private registry.
+// reader is evaluated on each /metrics scrape; call after the metrics collector exists.
+func (m *controlPlaneMetrics) RegisterRingGauge(reader func() float64) {
+	if m == nil || reader == nil {
+		return
+	}
+	g := prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "cloud9_metrics_ring_bytes",
+		Help: "Bytes of JSON-marshaled snapshot rings across all live sessions.",
+	}, reader)
+	m.registry.MustRegister(g)
+}
+
+func (m *controlPlaneMetrics) observeCollectSeconds(template string, seconds float64) {
+	if m == nil {
+		return
+	}
+	if template == "" {
+		template = "none"
+	}
+	m.collectSeconds.WithLabelValues(template).Observe(seconds)
+}
+
+func (m *controlPlaneMetrics) observeFrameBytes(n int) {
+	if m == nil || n < 0 {
+		return
+	}
+	m.wsFrameBytes.Observe(float64(n))
+}
+
+func (m *controlPlaneMetrics) observeStoreRequest(op string) {
+	if m == nil || op == "" {
+		return
+	}
+	m.storeRequestsTotal.WithLabelValues(op).Inc()
 }
 
 func (m *controlPlaneMetrics) observePromQuery(path, caller, template string) {

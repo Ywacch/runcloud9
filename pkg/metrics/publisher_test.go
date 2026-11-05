@@ -7,6 +7,48 @@ import (
 	"time"
 )
 
+func TestPublisherLoop_ObservesCollectSeconds(t *testing.T) {
+	t.Parallel()
+
+	const wantTemplate = "url-shortener"
+	observed := make(chan struct{}, 1)
+	var gotTemplate string
+	var gotSeconds float64
+
+	c := &MetricsCollector{
+		collectObserver: func(template string, seconds float64) {
+			gotTemplate = template
+			gotSeconds = seconds
+			select {
+			case observed <- struct{}{}:
+			default:
+			}
+		},
+		publisherCollectHook: func(ctx context.Context, namespace, template string, topo TopologyFlags) (*DeploymentMetrics, error) {
+			return &DeploymentMetrics{
+				Timestamp:  time.Now(),
+				Namespace:  namespace,
+				Components: map[string]ComponentMetrics{},
+			}, nil
+		},
+	}
+
+	c.EnsurePublisher("ns-observe", wantTemplate, TopologyFlags{})
+
+	select {
+	case <-observed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("collect observer was not invoked")
+	}
+	if gotTemplate != wantTemplate {
+		t.Fatalf("template: want %q, got %q", wantTemplate, gotTemplate)
+	}
+	if gotSeconds < 0 {
+		t.Fatalf("seconds: want non-negative, got %v", gotSeconds)
+	}
+	c.StopPublisher("ns-observe")
+}
+
 func TestEnsurePublisher_SecondCallDoesNotStartSecondLoop(t *testing.T) {
 	t.Parallel()
 

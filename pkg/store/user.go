@@ -10,11 +10,11 @@ import (
 )
 
 type userRow struct {
-	IsInternal           bool       `json:"is_internal"`
-	IsPremium            bool       `json:"is_premium"`
-	PremiumExpiresAt     *time.Time `json:"premium_expires_at"`
-	SubscriptionTier     *string    `json:"subscription_tier"`
-	SubscriptionStatus   *string    `json:"subscription_status"`
+	IsInternal         bool       `json:"is_internal"`
+	IsPremium          bool       `json:"is_premium"`
+	PremiumExpiresAt   *time.Time `json:"premium_expires_at"`
+	SubscriptionTier   *string    `json:"subscription_tier"`
+	SubscriptionStatus *string    `json:"subscription_status"`
 }
 
 // GetUser loads billing and admin fields for a Supabase auth user ID.
@@ -27,6 +27,7 @@ func (s *DeploymentStore) GetUser(ctx context.Context, userID string) (UserRecor
 		return UserRecord{}, fmt.Errorf("store.GetUser: %w", ErrUserNotFound)
 	}
 
+	s.observe("get_user")
 	data, _, err := s.client.From("users").
 		Select("is_internal,is_premium,premium_expires_at,subscription_tier,subscription_status", "exact", false).
 		Eq("id", userID).

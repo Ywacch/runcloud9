@@ -13,6 +13,54 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func TestStreamMetrics_ObservesFrameBytes(t *testing.T) {
+	t.Parallel()
+
+	dm := &DeploymentMetrics{
+		Timestamp:  time.Now(),
+		Namespace:  "test-ns",
+		Components: map[string]ComponentMetrics{},
+	}
+	payload, err := json.Marshal(dm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLen := len(payload)
+
+	var got int
+	mc := &MetricsCollector{
+		frameBytesObserver: func(n int) {
+			got = n
+		},
+	}
+
+	latest := func() *DeploymentMetrics { return dm }
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	srv, url := newMetricsWSServer(t, func(conn *websocket.Conn) {
+		streamMetrics(ctx, conn, "test-ns", latest, streamConfig{
+			emitInterval: time.Second,
+		}, mc)
+	})
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := conn.ReadMessage(); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got != wantLen {
+		t.Fatalf("frame bytes: want %d, got %d", wantLen, got)
+	}
+}
+
 func TestStreamMetrics_AsyncCollect_SteadyCadence(t *testing.T) {
 	t.Parallel()
 
@@ -75,7 +123,7 @@ func TestStreamMetrics_ClientClose_DoesNotRequireCollect(t *testing.T) {
 		defer close(streamDone)
 		streamMetrics(parent, conn, "test-ns", latest, streamConfig{
 			emitInterval: 50 * time.Millisecond,
-		})
+		}, nil)
 	})
 	defer srv.Close()
 
@@ -125,7 +173,7 @@ func TestStreamMetrics_EmitsPendingBeforeCollect(t *testing.T) {
 	srv, url := newMetricsWSServer(t, func(conn *websocket.Conn) {
 		streamMetrics(ctx, conn, "test-ns", latest, streamConfig{
 			emitInterval: 100 * time.Millisecond,
-		})
+		}, nil)
 	})
 	defer srv.Close()
 
@@ -169,7 +217,7 @@ func TestStreamMetrics_ContextCancel_CleanShutdown(t *testing.T) {
 		srv, url := newMetricsWSServer(t, func(conn *websocket.Conn) {
 			streamMetrics(ctx, conn, "test-ns", latest, streamConfig{
 				emitInterval: 100 * time.Millisecond,
-			})
+			}, nil)
 		})
 		defer srv.Close()
 
@@ -209,7 +257,7 @@ func runStreamMetricsWS(t *testing.T, latest func() *DeploymentMetrics, cfg stre
 	defer cancel()
 
 	srv, url := newMetricsWSServer(t, func(conn *websocket.Conn) {
-		streamMetrics(ctx, conn, "test-ns", latest, cfg)
+		streamMetrics(ctx, conn, "test-ns", latest, cfg, nil)
 	})
 	defer srv.Close()
 
@@ -246,7 +294,7 @@ func runStreamMetricsWSCount(t *testing.T, latest func() *DeploymentMetrics, cfg
 	defer cancel()
 
 	srv, url := newMetricsWSServer(t, func(conn *websocket.Conn) {
-		streamMetrics(ctx, conn, "test-ns", latest, cfg)
+		streamMetrics(ctx, conn, "test-ns", latest, cfg, nil)
 	})
 	defer srv.Close()
 
