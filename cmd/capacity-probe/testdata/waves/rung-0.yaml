@@ -1,0 +1,11 @@
+# Rung 0 baseline: 20 url-shortener-small sessions, one burst wave.
+# See ganymede/capacity-probe-results/rung-0.md for the measurement checklist.
+name: rung-0
+tier: internal
+cooldown_seconds: 0
+waves:
+  - name: rung-0
+    mode: burst
+    groups:
+      - count: 20
+        design: url-shortener-small
