@@ -185,18 +185,20 @@ type k8sPostgresAdmin struct {
 	namespace string
 	podName   string // if empty, resolve via primaryPodName
 	container string // if empty, use postgresPrimaryContainer
+	podLister PodLister
 }
 
 func (k *K8sDeployer) newPostgresAdmin(namespace string) PostgresAdmin {
-	return NewPostgresPrimaryAdmin(k.clientset, namespace)
+	return NewPostgresPrimaryAdmin(k.clientset, namespace, k.podLister)
 }
 
 // NewPostgresPrimaryAdmin targets the postgres primary Deployment pod.
-func NewPostgresPrimaryAdmin(client kubernetes.Interface, namespace string) PostgresAdmin {
+func NewPostgresPrimaryAdmin(client kubernetes.Interface, namespace string, podLister PodLister) PostgresAdmin {
 	return &k8sPostgresAdmin{
 		client:    client,
 		namespace: namespace,
 		container: postgresPrimaryContainer,
+		podLister: podLister,
 	}
 }
 
@@ -236,12 +238,26 @@ func (a *k8sPostgresAdmin) ExecSQL(ctx context.Context, query string) (string, e
 
 func (a *k8sPostgresAdmin) primaryPodName(ctx context.Context) (string, error) {
 	labelSelector := "deployment=" + a.namespace + ",app=" + postgresPrimaryAppLabel
-	pods, err := a.client.CoreV1().Pods(a.namespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
-	if err != nil {
-		return "", fmt.Errorf("list postgres pods: %w", err)
+	var items []corev1.Pod
+	var err error
+	if a.podLister != nil {
+		ptrs, listErr := a.podLister(a.namespace)
+		if listErr != nil {
+			return "", fmt.Errorf("list postgres pods: %w", listErr)
+		}
+		items, err = podsMatchingEqualSelector(ptrs, labelSelector)
+		if err != nil {
+			return "", fmt.Errorf("list postgres pods: %w", err)
+		}
+	} else {
+		pods, listErr := a.client.CoreV1().Pods(a.namespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+		if listErr != nil {
+			return "", fmt.Errorf("list postgres pods: %w", listErr)
+		}
+		items = pods.Items
 	}
-	for i := range pods.Items {
-		pod := &pods.Items[i]
+	for i := range items {
+		pod := &items[i]
 		if pod.DeletionTimestamp != nil {
 			continue
 		}

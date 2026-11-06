@@ -12,3 +12,8 @@ func Enabled(rawEnv string) bool {
 		return false
 	}
 }
+
+// ReadinessEnabled reports whether waitForReady should read pods from the informer cache.
+func ReadinessEnabled(rawEnv string) bool {
+	return Enabled(rawEnv)
+}

@@ -80,6 +80,7 @@ func templateLiveProbe(port int32) *corev1.Probe {
 type K8sDeployer struct {
 	clientset kubernetes.Interface // Interface not *kubernetes.Clientset — allows test mocks
 	nodeType  string
+	podLister PodLister
 }
 
 func NewK8sDeployer(clientset kubernetes.Interface, nodeType string) *K8sDeployer {
@@ -254,14 +255,14 @@ func (k *K8sDeployer) waitForReady(ctx context.Context, cfg DeployConfig, appLab
 	}
 
 	check := func() error {
-		list, err := k.clientset.CoreV1().Pods(cfg.Namespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+		items, err := k.listPodsForReadiness(ctx, cfg.Namespace, labelSelector)
 		if err != nil {
 			return fmt.Errorf("list pods for %s: %w", appLabel, err)
 		}
 		readyPods := make(map[types.UID]struct{})
-		seen := make(map[types.UID]struct{}, len(list.Items))
-		for i := range list.Items {
-			pod := &list.Items[i]
+		seen := make(map[types.UID]struct{}, len(items))
+		for i := range items {
+			pod := &items[i]
 			seen[pod.UID] = struct{}{}
 			if pod.DeletionTimestamp != nil {
 				continue
@@ -279,7 +280,7 @@ func (k *K8sDeployer) waitForReady(ctx context.Context, cfg DeployConfig, appLab
 			}
 		}
 		readyCount = len(readyPods)
-		lastListed = list.Items
+		lastListed = items
 		emitProgress()
 		return nil
 	}

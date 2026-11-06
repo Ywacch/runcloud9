@@ -39,7 +39,7 @@ func defaultDropReplication(ctx context.Context, client kubernetes.Interface, na
 	if err := validateReplicaPodName(applicationName); err != nil {
 		return err
 	}
-	admin := deployer.NewPostgresPrimaryAdmin(client, namespace)
+	admin := deployer.NewPostgresPrimaryAdmin(client, namespace, nil)
 	query := fmt.Sprintf(
 		"SELECT pg_terminate_backend(pid) FROM pg_stat_replication WHERE application_name = '%s'",
 		applicationName,
