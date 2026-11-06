@@ -223,7 +223,7 @@ func TestLBEndpointsWatcher_unchangedReadySetNoConfigWrite(t *testing.T) {
 
 	w := NewLBEndpointsWatcher()
 	w.SetDebounce(20 * time.Millisecond)
-	w.Start(client, ns, design)
+	w.Start(client, ns, design, nil)
 	t.Cleanup(func() { w.Stop(ns) })
 
 	state, ok := w.watches[ns]
@@ -263,7 +263,7 @@ func TestLBEndpointsWatcher_stopPreventsFurtherReconcile(t *testing.T) {
 
 	w := NewLBEndpointsWatcher()
 	w.SetDebounce(20 * time.Millisecond)
-	w.Start(client, ns, design)
+	w.Start(client, ns, design, nil)
 	w.Stop(ns)
 	if _, ok := w.watches[ns]; ok {
 		t.Fatal("watch still registered after stop")
@@ -287,6 +287,6 @@ func TestLBEndpointsWatcher_noLBNodeIsNoOp(t *testing.T) {
 	}
 	client := fake.NewSimpleClientset()
 	w := NewLBEndpointsWatcher()
-	w.Start(client, ns, design)
+	w.Start(client, ns, design, nil)
 	w.Stop(ns)
 }

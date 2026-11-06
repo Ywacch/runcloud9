@@ -81,10 +81,20 @@ type K8sDeployer struct {
 	clientset kubernetes.Interface // Interface not *kubernetes.Clientset — allows test mocks
 	nodeType  string
 	podLister PodLister
+	endView   EndpointView
 }
 
 func NewK8sDeployer(clientset kubernetes.Interface, nodeType string) *K8sDeployer {
 	return &K8sDeployer{clientset: clientset, nodeType: nodeType}
+}
+
+// SetEndpointView installs a cache-backed read path for LB upstream and weights.
+// Nil restores API Get/Watch/List behavior.
+func (k *K8sDeployer) SetEndpointView(view EndpointView) {
+	if k == nil {
+		return
+	}
+	k.endView = view
 }
 
 func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {

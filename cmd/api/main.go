@@ -126,6 +126,17 @@ func wireClusterStateReadiness(deployers map[string]deployer.ComponentDeployer, 
 	}
 }
 
+func wireClusterStateLB(deployers map[string]deployer.ComponentDeployer, cache *clusterstate.Cache) {
+	if cache == nil || !clusterstate.LBEnabled(os.Getenv("CLUSTERSTATE_LB")) {
+		return
+	}
+	k, ok := deployers["lb"].(*deployer.K8sDeployer)
+	if !ok {
+		return
+	}
+	k.SetEndpointView(cache)
+}
+
 func wireClusterStateMetrics(col *metrics.MetricsCollector, cache *clusterstate.Cache) {
 	if col == nil {
 		return
@@ -250,6 +261,7 @@ func main() {
 		log.Println("clusterstate: off")
 	}
 	wireClusterStateReadiness(deployers, clusterCache)
+	wireClusterStateLB(deployers, clusterCache)
 
 	seedBucketName := os.Getenv("SEED_BUCKET_NAME")
 	if seedBucketName == "" {

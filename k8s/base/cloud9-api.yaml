@@ -109,6 +109,12 @@ spec:
               value: "k8s"
             - name: CLUSTERSTATE
               value: "1"
+            - name: CLUSTERSTATE_READINESS
+              value: "1"
+            - name: CLUSTERSTATE_METRICS
+              value: "1"
+            - name: CLUSTERSTATE_LB
+              value: "1"
             - name: SUPABASE_URL
               valueFrom:
                 secretKeyRef:

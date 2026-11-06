@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/kubeobs"
@@ -57,7 +58,34 @@ type Cache struct {
 
 	metrics InformerMetrics
 
+	lbNotifyMu sync.Mutex
+	lbNotify   func(any)
+
 	cancel context.CancelFunc
+}
+
+// SetLBEndpointsNotify registers a callback invoked after Endpoints or EndpointSlice
+// informer events (Add/Update/Delete). Used by the LB watcher when CLUSTERSTATE_LB is on.
+// Pass nil to clear. Safe to call before Start; handlers attach in newCacheFromClient.
+func (c *Cache) SetLBEndpointsNotify(fn func(any)) {
+	if c == nil {
+		return
+	}
+	c.lbNotifyMu.Lock()
+	c.lbNotify = fn
+	c.lbNotifyMu.Unlock()
+}
+
+func (c *Cache) invokeLBNotify(obj any) {
+	if c == nil {
+		return
+	}
+	c.lbNotifyMu.Lock()
+	fn := c.lbNotify
+	c.lbNotifyMu.Unlock()
+	if fn != nil {
+		fn(obj)
+	}
 }
 
 // New builds informers. It does not start them.
@@ -117,11 +145,11 @@ func newCacheFromClient(client kubernetes.Interface, metrics InformerMetrics) *C
 
 	c.endpointsInformer = c.factory.Core().V1().Endpoints().Informer()
 	_ = c.endpointsInformer.SetTransform(transformEndpoints)
-	c.attachMetricsHandler("endpoints", c.endpointsInformer)
+	c.attachMetricsHandlerWithLB("endpoints", c.endpointsInformer)
 
 	c.endpointSliceInformer = c.factory.Discovery().V1().EndpointSlices().Informer()
 	_ = c.endpointSliceInformer.SetTransform(transformEndpointSlice)
-	c.attachMetricsHandler("endpointslice", c.endpointSliceInformer)
+	c.attachMetricsHandlerWithLB("endpointslice", c.endpointSliceInformer)
 
 	return c
 }
@@ -134,6 +162,29 @@ func (c *Cache) attachMetricsHandler(name string, inf cache.SharedIndexInformer)
 		AddFunc:    func(_ any) { c.metrics.NoteInformerEvent(name) },
 		UpdateFunc: func(_, _ any) { c.metrics.NoteInformerEvent(name) },
 		DeleteFunc: func(_ any) { c.metrics.NoteInformerEvent(name) },
+	})
+}
+
+func (c *Cache) attachMetricsHandlerWithLB(name string, inf cache.SharedIndexInformer) {
+	inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj any) {
+			if c.metrics != nil {
+				c.metrics.NoteInformerEvent(name)
+			}
+			c.invokeLBNotify(obj)
+		},
+		UpdateFunc: func(_, obj any) {
+			if c.metrics != nil {
+				c.metrics.NoteInformerEvent(name)
+			}
+			c.invokeLBNotify(obj)
+		},
+		DeleteFunc: func(obj any) {
+			if c.metrics != nil {
+				c.metrics.NoteInformerEvent(name)
+			}
+			c.invokeLBNotify(obj)
+		},
 	})
 }
 

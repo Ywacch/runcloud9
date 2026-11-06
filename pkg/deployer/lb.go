@@ -112,9 +112,15 @@ func FindLBNode(design DeploymentDesign) (DeploymentNode, bool) {
 	return DeploymentNode{}, false
 }
 
+// ReconcileLBUpstreamOptions holds optional read paths for reconcile.
+type ReconcileLBUpstreamOptions struct {
+	// EndpointView is non-nil when CLUSTERSTATE_LB uses the informer cache for upstream and weights.
+	EndpointView EndpointView
+}
+
 // ReconcileLBUpstream re-resolves app-server pod IPs after the full deploy wave and
 // updates lb-config so nginx balances per pod instead of a single service upstream.
-func ReconcileLBUpstream(ctx context.Context, clientset kubernetes.Interface, namespace string, design DeploymentDesign) error {
+func ReconcileLBUpstream(ctx context.Context, clientset kubernetes.Interface, namespace string, design DeploymentDesign, opts *ReconcileLBUpstreamOptions) error {
 	ctx = kubeobs.WithCaller(ctx, "lb")
 	lbNode, ok := FindLBNode(design)
 	if !ok {
@@ -122,6 +128,9 @@ func ReconcileLBUpstream(ctx context.Context, clientset kubernetes.Interface, na
 	}
 
 	k := NewK8sDeployer(clientset, "lb")
+	if opts != nil && opts.EndpointView != nil {
+		k.SetEndpointView(opts.EndpointView)
+	}
 	spec := DefaultLBSpec()
 	appReplicas := appServerDesiredReplicas(lbNode, design)
 	upstreamHosts, endpointSnap := waitResolveAppServerUpstream(
@@ -145,7 +154,7 @@ func ReconcileLBUpstream(ctx context.Context, clientset kubernetes.Interface, na
 	weighted := configBool(lbNode.Config, "weightByInstanceSize")
 	var weights []int
 	if weighted {
-		weights = nginxWeightsForHosts(ctx, clientset, namespace, upstreamHosts)
+		weights = nginxWeightsForHosts(ctx, clientset, namespace, upstreamHosts, k.endView)
 	}
 	rate := rateLimitPerIP(lbNode.Config)
 	nginxConf := spec.nginxConf(upstreamHosts, algo, weights, rate)
@@ -232,7 +241,7 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 	weighted := configBool(cfg.Node.Config, "weightByInstanceSize")
 	var weights []int
 	if weighted {
-		weights = nginxWeightsForHosts(ctx, k.clientset, cfg.Namespace, upstreamHosts)
+		weights = nginxWeightsForHosts(ctx, k.clientset, cfg.Namespace, upstreamHosts, k.endView)
 	}
 	rate := rateLimitPerIP(cfg.Node.Config)
 	nginxConf := spec.nginxConf(upstreamHosts, algo, weights, rate)
@@ -379,18 +388,33 @@ http {
 }
 
 // nginxWeightsForHosts maps upstream pod IPs to nginx weights from instance-size labels.
-func nginxWeightsForHosts(ctx context.Context, clientset kubernetes.Interface, namespace string, upstreamHosts []string) []int {
+func nginxWeightsForHosts(ctx context.Context, clientset kubernetes.Interface, namespace string, upstreamHosts []string, view EndpointView) []int {
 	if len(upstreamHosts) == 0 {
 		return nil
 	}
-	list, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app=app-server,deployment=%s", namespace),
-	})
-	if err != nil {
-		return nil
+	var items []corev1.Pod
+	if view != nil {
+		ptrs, err := view.Pods(namespace)
+		if err != nil {
+			return nil
+		}
+		sel := fmt.Sprintf("app=app-server,deployment=%s", namespace)
+		filtered, err := podsMatchingEqualSelector(ptrs, sel)
+		if err != nil {
+			return nil
+		}
+		items = filtered
+	} else {
+		list, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: fmt.Sprintf("app=app-server,deployment=%s", namespace),
+		})
+		if err != nil {
+			return nil
+		}
+		items = list.Items
 	}
-	ipToWeight := make(map[string]int, len(list.Items))
-	for _, p := range list.Items {
+	ipToWeight := make(map[string]int, len(items))
+	for _, p := range items {
 		if p.Status.PodIP == "" {
 			continue
 		}
@@ -415,31 +439,18 @@ func nginxWeightsForHosts(ctx context.Context, clientset kubernetes.Interface, n
 // Requires cloud9-api ClusterRole get/list on core Endpoints; without it Get fails and callers
 // receive the app-server service fallback.
 func (k *K8sDeployer) resolveAppServerUpstream(ctx context.Context, namespace string) (hosts []string, endpoints []LBEndpointSnapshot) {
+	if k.endView != nil {
+		return resolveAppServerUpstreamFromView(k.endView, namespace)
+	}
 	ep, err := k.clientset.CoreV1().Endpoints(namespace).Get(ctx, "app-server", metav1.GetOptions{})
 	if err != nil || len(ep.Subsets) == 0 {
 		return []string{"app-server"}, nil
 	}
-	for _, subset := range ep.Subsets {
-		for _, addr := range subset.Addresses {
-			if addr.IP == "" {
-				continue
-			}
-			hosts = append(hosts, addr.IP)
-			name := ""
-			if addr.TargetRef != nil {
-				name = addr.TargetRef.Name
-			}
-			endpoints = append(endpoints, LBEndpointSnapshot{
-				PodName: name,
-				PodIP:   addr.IP,
-				Ready:   true,
-			})
-		}
-	}
-	if len(hosts) == 0 {
+	h, snap := hostsFromEndpoints(ep)
+	if len(h) == 0 {
 		return []string{"app-server"}, nil
 	}
-	return hosts, endpoints
+	return h, snap
 }
 
 // waitResolveAppServerUpstream retries until app-server Endpoints publish ready pod IPs.

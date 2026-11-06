@@ -65,6 +65,8 @@ type Handler struct {
 	lbEndpointsWatch     *deployer.LBEndpointsWatcher
 	cpMetrics            *controlPlaneMetrics
 	clusterState         *clusterstate.Cache
+	lbEndpointView       deployer.EndpointView
+	reconcileLBOpts      *deployer.ReconcileLBUpstreamOptions
 }
 
 type deploymentStore interface {
@@ -181,7 +183,27 @@ func (h *Handler) SetClusterState(c *clusterstate.Cache) {
 	if h == nil {
 		return
 	}
+	if h.clusterState != nil && h.clusterState != c {
+		h.clusterState.SetLBEndpointsNotify(nil)
+	}
 	h.clusterState = c
+	if c != nil && clusterstate.LBEnabled(os.Getenv("CLUSTERSTATE_LB")) {
+		h.lbEndpointView = c
+		h.reconcileLBOpts = &deployer.ReconcileLBUpstreamOptions{EndpointView: c}
+		c.SetLBEndpointsNotify(func(obj any) {
+			if h.lbEndpointsWatch != nil {
+				h.lbEndpointsWatch.HandleClusterEndpointsObject(obj)
+			}
+		})
+		log.Println("clusterstate lb: on")
+	} else {
+		h.lbEndpointView = nil
+		h.reconcileLBOpts = nil
+		if c != nil {
+			c.SetLBEndpointsNotify(nil)
+		}
+		log.Println("clusterstate lb: off")
+	}
 }
 
 // RegisterRoutes attaches handlers to the mux.
@@ -782,10 +804,14 @@ func (h *Handler) orchestrate(
 	}
 
 	if h.clientset != nil {
-		if err := deployer.ReconcileLBUpstream(ctx, h.clientset, namespace, design); err != nil {
+		if err := deployer.ReconcileLBUpstream(ctx, h.clientset, namespace, design, h.reconcileLBOpts); err != nil {
 			log.Printf("lb upstream reconcile failed namespace=%s: %v", namespace, err)
 		}
-		h.lbEndpointsWatch.Start(h.clientset, namespace, design)
+		var epView deployer.EndpointView
+		if h.lbEndpointView != nil {
+			epView = h.lbEndpointView
+		}
+		h.lbEndpointsWatch.Start(h.clientset, namespace, design, epView)
 	}
 
 	if h.clientset != nil {
