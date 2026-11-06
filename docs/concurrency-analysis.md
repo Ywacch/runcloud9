@@ -98,6 +98,8 @@ and quota; rerun after material quota changes or account migration.
 
 ### Prerequisites
 
+Rung 1 fires 50 `url-shortener-small` deployments in one burst (`testdata/waves/rung-1.yaml`). Use the operator checklist that comes with that ladder: temporary doorway width, room budget, and expensive-route rate limits scaled for 50 sessions, plus a long-lived `CAPACITY_PROBE_TOKEN`. The API logs `kube client limiter: qps=… burst=…` at startup (defaults 200 / 400 unless `K8S_CLIENT_QPS` / `K8S_CLIENT_BURST` override).
+
 1. Deploy an API build where the internal tier allows enough concurrent deployments
    (currently 40).
 2. Temporarily raise expensive-route rate limits so the create burst is not rejected
@@ -130,6 +132,7 @@ go run ./cmd/capacity-probe \
 
 Other fixtures:
 
+- `testdata/waves/rung-1.yaml` — 50 × `url-shortener-small` burst (rung 1 ladder)
 - `testdata/waves/engineer-launch.yaml` — launch probe: paced large room, burst large door, burst small-db door, mixed
 - `testdata/waves/mixed-sizes.yaml` — lean vs fat deployments
 - `testdata/waves/paced-vs-burst.yaml` — same count, burst vs paced admission
