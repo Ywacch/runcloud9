@@ -12,6 +12,7 @@ import (
 	"github.com/getsentry/sentry-go"
 	sentryhttp "github.com/getsentry/sentry-go/http"
 	"github.com/ywacch/cloud9/pkg/api"
+	"github.com/ywacch/cloud9/pkg/clusterstate"
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/diagnostics"
 	"github.com/ywacch/cloud9/pkg/kubeobs"
@@ -35,7 +36,7 @@ var version = "dev"
 // buildDeployers returns the deployer map, k8s clientset, and optional metrics clientset.
 // os.Getenv returns empty string if var not set.
 // Default to local so tests and local dev without minikube still work.
-func buildDeployers(kubeObs kubeobs.RequestObserver) (map[string]deployer.ComponentDeployer, kubernetes.Interface, metrics.PodMetricsProvider) {
+func buildDeployers(kubeObs kubeobs.RequestObserver) (map[string]deployer.ComponentDeployer, kubernetes.Interface, metrics.PodMetricsProvider, *rest.Config) {
 	if os.Getenv("DEPLOYER") != "k8s" {
 		log.Println("Using LocalDeployer (set DEPLOYER=k8s for real K8s)")
 		return map[string]deployer.ComponentDeployer{
@@ -45,7 +46,7 @@ func buildDeployers(kubeObs kubeobs.RequestObserver) (map[string]deployer.Compon
 			"lb":         &deployer.LocalDeployer{NodeType: "lb"},
 			"mq":         &deployer.LocalDeployer{NodeType: "mq"},
 			"worker":     &deployer.LocalDeployer{NodeType: "worker"},
-		}, nil, nil
+		}, nil, nil, nil
 	}
 
 	// KUBECONFIG env var lets you point at a specific config file.
@@ -105,7 +106,7 @@ func buildDeployers(kubeObs kubeobs.RequestObserver) (map[string]deployer.Compon
 		"lb":         deployer.NewK8sDeployer(clientset, "lb"),
 		"mq":         deployer.NewK8sDeployer(clientset, "mq"),
 		"worker":     deployer.NewK8sDeployer(clientset, "worker"),
-	}, clientset, metricsClient
+	}, clientset, metricsClient, config
 }
 
 // recoverDeployments re-registers teardown timers for active deployments on startup.
@@ -186,7 +187,39 @@ func main() {
 		}
 	}
 
-	deployers, clientset, metricsClient := buildDeployers(api.BootstrapControlPlaneMetrics())
+	kubeObs := api.BootstrapControlPlaneMetrics()
+	deployers, clientset, metricsClient, kubeConfig := buildDeployers(kubeObs)
+
+	clusterCtx, clusterCancel := context.WithCancel(context.Background())
+	defer clusterCancel()
+	var clusterCache *clusterstate.Cache
+	if clusterstate.Enabled(os.Getenv("CLUSTERSTATE")) {
+		if kubeConfig == nil {
+			log.Println("clusterstate: off")
+		} else {
+			var im clusterstate.InformerMetrics
+			if m, ok := kubeObs.(clusterstate.InformerMetrics); ok {
+				im = m
+			}
+			c, err := clusterstate.New(kubeConfig, kubeObs, im)
+			if err != nil {
+				log.Printf("clusterstate: init failed: %v", err)
+			} else {
+				clusterCache = c
+				clusterCache.Start(clusterCtx)
+				syncCtx, syncCancel := context.WithTimeout(context.Background(), 45*time.Second)
+				err := clusterCache.WaitForSync(syncCtx)
+				syncCancel()
+				if err != nil {
+					log.Printf("clusterstate: sync timeout")
+				} else {
+					log.Println("clusterstate: on")
+				}
+			}
+		}
+	} else {
+		log.Println("clusterstate: off")
+	}
 
 	seedBucketName := os.Getenv("SEED_BUCKET_NAME")
 	if seedBucketName == "" {
@@ -358,6 +391,9 @@ func main() {
 		log.Printf("cluster metrics sample: off")
 	}
 	metricsCollector.SetDebugMetrics(debugMetrics)
+	if clusterCache != nil {
+		metricsCollector.SetClusterState(clusterCache)
+	}
 	if clientset != nil {
 		ddcBucket := os.Getenv("DDC_BUCKET")
 		if ddcBucket == "" {
@@ -371,6 +407,9 @@ func main() {
 	}
 
 	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed, metricsCollector, diagnosticsCollector, clientset, lg, eventBus)
+	if clusterCache != nil {
+		handler.SetClusterState(clusterCache)
+	}
 	forgetActAsCache = handler.ForgetActAsCache
 	enrichTeardownSummary = handler.EnrichTeardownSummary
 	schedulePostmortem = handler.SchedulePostmortemAfterTeardown

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -29,6 +30,9 @@ type controlPlaneMetrics struct {
 	teardownLagSeconds    prometheus.Histogram
 	websocketLive         prometheus.Gauge
 	informerQueueDepth    *prometheus.GaugeVec
+	informerEventAge      *prometheus.GaugeVec
+	informerEventMu       sync.Mutex
+	informerLastEvent     map[string]time.Time
 	metricsQueriesTotal   *prometheus.CounterVec
 	k8sRequestsTotal      *prometheus.CounterVec
 	k8sRequestSeconds     *prometheus.HistogramVec
@@ -79,6 +83,10 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		Name: "cloud9_informer_queue_depth",
 		Help: "Shared informer workqueue depth (0 until informer path is enabled).",
 	}, []string{"informer"})
+	m.informerEventAge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "cloud9_informer_event_age_seconds",
+		Help: "Seconds since the last shared informer Add, Update, or Delete event.",
+	}, []string{"informer"})
 	m.metricsQueriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "cloud9_metrics_queries_total",
 		Help: "Cluster-wide metrics poll queries per refresh (not per session).",
@@ -124,6 +132,7 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		m.teardownLagSeconds,
 		m.websocketLive,
 		m.informerQueueDepth,
+		m.informerEventAge,
 		m.metricsQueriesTotal,
 		m.k8sRequestsTotal,
 		m.k8sRequestSeconds,
@@ -133,7 +142,9 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		m.wsFrameBytes,
 		m.storeRequestsTotal,
 	)
-	m.informerQueueDepth.WithLabelValues("pod").Set(0)
+	for _, name := range []string{"pod", "deployment", "statefulset", "hpa", "endpoints", "endpointslice"} {
+		m.informerQueueDepth.WithLabelValues(name).Set(1)
+	}
 	// CounterVec omits a series until the label exists. Publish the known results at 0
 	// so GET /metrics lists cloud9_admit_total before the first create.
 	for _, result := range []string{"admitted", "rejected", "queued"} {
@@ -286,6 +297,42 @@ func (m *controlPlaneMetrics) setWebsocketLive(n float64) {
 		return
 	}
 	m.websocketLive.Set(n)
+}
+
+// SetInformerQueueDepth sets cloud9_informer_queue_depth. When FIFO depth is unavailable,
+// depth is 0 after HasSynced and 1 before sync.
+func (m *controlPlaneMetrics) SetInformerQueueDepth(informer string, depth float64) {
+	if m == nil || informer == "" {
+		return
+	}
+	m.informerQueueDepth.WithLabelValues(informer).Set(depth)
+}
+
+// NoteInformerEvent records the time of the latest informer mutation for event-age metrics.
+func (m *controlPlaneMetrics) NoteInformerEvent(informer string) {
+	if m == nil || informer == "" {
+		return
+	}
+	now := time.Now()
+	m.informerEventMu.Lock()
+	if m.informerLastEvent == nil {
+		m.informerLastEvent = make(map[string]time.Time)
+	}
+	m.informerLastEvent[informer] = now
+	m.informerEventMu.Unlock()
+	m.informerEventAge.WithLabelValues(informer).Set(0)
+}
+
+// RefreshInformerEventAges updates cloud9_informer_event_age_seconds from last event times.
+func (m *controlPlaneMetrics) RefreshInformerEventAges() {
+	if m == nil {
+		return
+	}
+	m.informerEventMu.Lock()
+	defer m.informerEventMu.Unlock()
+	for informer, at := range m.informerLastEvent {
+		m.informerEventAge.WithLabelValues(informer).Set(time.Since(at).Seconds())
+	}
 }
 
 func (h *Handler) refreshDeployQueueDepth(ctx context.Context) {

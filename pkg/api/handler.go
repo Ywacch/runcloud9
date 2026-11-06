@@ -17,6 +17,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/ywacch/cloud9/pkg/admission"
+	"github.com/ywacch/cloud9/pkg/clusterstate"
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/diagnostics"
 	"github.com/ywacch/cloud9/pkg/inference"
@@ -63,6 +64,7 @@ type Handler struct {
 	manifestRNG          func() int64
 	lbEndpointsWatch     *deployer.LBEndpointsWatcher
 	cpMetrics            *controlPlaneMetrics
+	clusterState         *clusterstate.Cache
 }
 
 type deploymentStore interface {
@@ -171,6 +173,15 @@ func NewHandler(
 		sh.SetRequestObserver(h.cpMetrics.observeStoreRequest)
 	}
 	return h
+}
+
+// SetClusterState attaches the shared informer cache for later read paths (P2.2+).
+// Nil leaves today's API-server behavior.
+func (h *Handler) SetClusterState(c *clusterstate.Cache) {
+	if h == nil {
+		return
+	}
+	h.clusterState = c
 }
 
 // RegisterRoutes attaches handlers to the mux.

@@ -18,7 +18,7 @@ func CallerFrom(ctx context.Context) string {
 // normalizeCaller maps ctx callers to allowed label values.
 func normalizeCaller(caller string) string {
 	switch caller {
-	case "deployer", "metrics", "lb", "teardown":
+	case "clusterstate", "deployer", "metrics", "lb", "teardown":
 		return caller
 	default:
 		return "unknown"
