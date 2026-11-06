@@ -83,7 +83,7 @@ func TestGetTierLimits(t *testing.T) {
 			wantAllowEngineSwap: true, wantAllowHeavy: false,
 		},
 		{
-			tier: TierInternal, wantConcurrent: 40, wantSessionCap: 30, wantMonthlySessions: 0, wantAllTemplates: true,
+			tier: TierInternal, wantConcurrent: 50, wantSessionCap: 30, wantMonthlySessions: 0, wantAllTemplates: true,
 			wantMaxAppReplicas: 5, wantAllowLB: true, wantAllowMQWorker: true, wantAllowProxyCache: true,
 			wantAllowAutoscale:  true,
 			wantMaxInstanceSize: InstanceSizeLarge, wantMaxLoadgenRPS: LoadgenRPSCapInternal,

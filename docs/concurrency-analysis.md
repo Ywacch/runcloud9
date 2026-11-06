@@ -101,12 +101,12 @@ and quota; rerun after material quota changes or account migration.
 Rung 1 fires 50 `url-shortener-small` deployments in one burst (`testdata/waves/rung-1.yaml`). Use the operator checklist that comes with that ladder: temporary doorway width, room budget, and expensive-route rate limits scaled for 50 sessions, plus a long-lived `CAPACITY_PROBE_TOKEN`. The API logs `kube client limiter: qps=… burst=…` at startup (defaults 200 / 400 unless `K8S_CLIENT_QPS` / `K8S_CLIENT_BURST` override).
 
 1. Deploy an API build where the internal tier allows enough concurrent deployments
-   (currently 40).
+   (currently 50).
 2. Temporarily raise expensive-route rate limits so the create burst is not rejected
    before it reaches the cluster, for example:
    - `API_RATE_LIMIT_EXPENSIVE_BURST=50`
    - `API_RATE_LIMIT_EXPENSIVE_RPM=3000`
-3. Confirm `GET /me` returns `maxConcurrent: 40` for the internal test account.
+3. Confirm `GET /me` returns `maxConcurrent: 50` for the internal test account.
 4. Restore normal rate-limit env values immediately after the campaign.
 
 ### Dry-run (no cluster cost)
