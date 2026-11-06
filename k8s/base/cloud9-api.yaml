@@ -75,6 +75,10 @@ spec:
     metadata:
       labels:
         app: cloud9-api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        # Path defaults to /metrics in kube-prometheus additionalScrapeConfigs (prometheus-values.yaml).
     spec:
       serviceAccountName: cloud9-api
       containers:
