@@ -354,7 +354,7 @@ func TestReconcileLBUpstream_rejectsServiceFallback(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: lbConfigMapName, Namespace: ns},
 		Data:       map[string]string{"nginx.conf": "old"},
 	})
-	err := ReconcileLBUpstream(context.Background(), client, ns, design)
+	err := ReconcileLBUpstream(context.Background(), client, ns, design, nil)
 	if err == nil {
 		t.Fatal("expected error when endpoints unavailable")
 	}
@@ -416,7 +416,7 @@ func TestReconcileLBUpstream_updatesConfigMap(t *testing.T) {
 		},
 	)
 
-	if err := ReconcileLBUpstream(context.Background(), client, ns, design); err != nil {
+	if err := ReconcileLBUpstream(context.Background(), client, ns, design, nil); err != nil {
 		t.Fatalf("ReconcileLBUpstream: %v", err)
 	}
 

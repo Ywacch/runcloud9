@@ -8,6 +8,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
@@ -40,8 +41,25 @@ func (w *LBEndpointsWatcher) SetDebounce(d time.Duration) {
 	w.mu.Unlock()
 }
 
+// HandleClusterEndpointsObject reacts to informer events for app-server Endpoints or EndpointSlices
+// (CLUSTERSTATE_LB on). No-op if there is no active watch for the namespace or the watch uses API Watch.
+func (w *LBEndpointsWatcher) HandleClusterEndpointsObject(obj any) {
+	ns, ok := lbNotifyNamespace(obj)
+	if !ok {
+		return
+	}
+	w.mu.Lock()
+	state := w.watches[ns]
+	w.mu.Unlock()
+	if state == nil || state.endpointView == nil {
+		return
+	}
+	state.onClusterEndpointsChange()
+}
+
 // Start watches app-server Endpoints when the design includes an lb node.
-func (w *LBEndpointsWatcher) Start(clientset kubernetes.Interface, namespace string, design DeploymentDesign) {
+// endpointView non-nil uses the informer cache and skips API Watch; lastSet is derived from cache reads.
+func (w *LBEndpointsWatcher) Start(clientset kubernetes.Interface, namespace string, design DeploymentDesign, endpointView EndpointView) {
 	if clientset == nil || namespace == "" {
 		return
 	}
@@ -55,24 +73,42 @@ func (w *LBEndpointsWatcher) Start(clientset kubernetes.Interface, namespace str
 	debounce := w.debounce
 	w.mu.Unlock()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	state := &lbEndpointsWatch{
-		cancel:    cancel,
-		clientset: clientset,
-		namespace: namespace,
-		design:    design,
-		debounce:  debounce,
+	var lastSet []string
+	if endpointView != nil {
+		lastSet = readyUpstreamIPsFromView(endpointView, namespace)
+	} else {
+		ctx := context.Background()
+		if ep, err := clientset.CoreV1().Endpoints(namespace).Get(ctx, "app-server", metav1.GetOptions{}); err == nil {
+			lastSet = readyAddressSet(ep)
+		}
 	}
 
-	if ep, err := clientset.CoreV1().Endpoints(namespace).Get(ctx, "app-server", metav1.GetOptions{}); err == nil {
-		state.lastSet = readyAddressSet(ep)
+	ctx, cancel := context.WithCancel(context.Background())
+	state := &lbEndpointsWatch{
+		cancel:        cancel,
+		clientset:     clientset,
+		namespace:     namespace,
+		design:        design,
+		debounce:      debounce,
+		lastSet:       lastSet,
+		endpointView:  endpointView,
+		reconcileOpts: reconcileOptsForView(endpointView),
 	}
 
 	w.mu.Lock()
 	w.watches[namespace] = state
 	w.mu.Unlock()
 
-	go state.run(ctx)
+	if endpointView == nil {
+		go state.run(ctx)
+	}
+}
+
+func reconcileOptsForView(v EndpointView) *ReconcileLBUpstreamOptions {
+	if v == nil {
+		return nil
+	}
+	return &ReconcileLBUpstreamOptions{EndpointView: v}
 }
 
 // Stop ends the Endpoints watch for a session namespace.
@@ -93,6 +129,9 @@ type lbEndpointsWatch struct {
 	design    DeploymentDesign
 	debounce  time.Duration
 
+	endpointView  EndpointView
+	reconcileOpts *ReconcileLBUpstreamOptions
+
 	mu            sync.Mutex
 	lastSet       []string
 	debounceMu    sync.Mutex
@@ -100,6 +139,9 @@ type lbEndpointsWatch struct {
 }
 
 func (s *lbEndpointsWatch) run(ctx context.Context) {
+	if s.endpointView != nil {
+		return
+	}
 	watcher, err := s.clientset.CoreV1().Endpoints(s.namespace).Watch(ctx, metav1.ListOptions{})
 	if err != nil {
 		log.Printf("lb endpoints watch %s: start watch: %v", s.namespace, err)
@@ -126,6 +168,20 @@ func (s *lbEndpointsWatch) run(ctx context.Context) {
 			s.onEndpoints(ep)
 		}
 	}
+}
+
+func (s *lbEndpointsWatch) onClusterEndpointsChange() {
+	if s.endpointView == nil {
+		return
+	}
+	set := readyUpstreamIPsFromView(s.endpointView, s.namespace)
+	s.mu.Lock()
+	if addressSetsEqual(set, s.lastSet) {
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+	s.scheduleReconcile(set)
 }
 
 func (s *lbEndpointsWatch) onEndpoints(ep *corev1.Endpoints) {
@@ -156,12 +212,14 @@ func (s *lbEndpointsWatch) scheduleReconcile(pending []string) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		if err := ReconcileLBUpstream(ctx, s.clientset, s.namespace, s.design); err != nil {
+		if err := ReconcileLBUpstream(ctx, s.clientset, s.namespace, s.design, s.reconcileOpts); err != nil {
 			log.Printf("lb endpoints watch reconcile %s: %v", s.namespace, err)
 			return
 		}
 		s.mu.Lock()
-		if ep, err := s.clientset.CoreV1().Endpoints(s.namespace).Get(ctx, "app-server", metav1.GetOptions{}); err == nil {
+		if s.endpointView != nil {
+			s.lastSet = readyUpstreamIPsFromView(s.endpointView, s.namespace)
+		} else if ep, err := s.clientset.CoreV1().Endpoints(s.namespace).Get(ctx, "app-server", metav1.GetOptions{}); err == nil {
 			s.lastSet = readyAddressSet(ep)
 		} else {
 			s.lastSet = pendingCopy
@@ -178,6 +236,23 @@ func (s *lbEndpointsWatch) stop() {
 		s.debounceTimer = nil
 	}
 	s.debounceMu.Unlock()
+}
+
+func lbNotifyNamespace(obj any) (string, bool) {
+	switch x := obj.(type) {
+	case *corev1.Endpoints:
+		if x == nil || x.Name != "app-server" {
+			return "", false
+		}
+		return x.Namespace, true
+	case *discoveryv1.EndpointSlice:
+		if x == nil || x.Labels[discoveryv1.LabelServiceName] != "app-server" {
+			return "", false
+		}
+		return x.Namespace, true
+	default:
+		return "", false
+	}
 }
 
 func readyAddressSet(ep *corev1.Endpoints) []string {

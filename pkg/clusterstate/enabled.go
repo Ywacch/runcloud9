@@ -22,3 +22,8 @@ func ReadinessEnabled(rawEnv string) bool {
 func MetricsEnabled(rawEnv string) bool {
 	return Enabled(rawEnv)
 }
+
+// LBEnabled reports whether LB upstream and the endpoints watch should read from the informer cache.
+func LBEnabled(rawEnv string) bool {
+	return Enabled(rawEnv)
+}
