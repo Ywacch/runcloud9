@@ -94,6 +94,7 @@ type MetricsCollector struct {
 	collectObserver      CollectObserver
 	frameBytesObserver   FrameBytesObserver
 	clusterState         *clusterstate.Cache
+	inv                  inventory
 }
 
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
@@ -839,13 +840,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	appServerSel := appServerPromSelector(ns)
 
 	var sessionHPAs []autoscalingv2.HorizontalPodAutoscaler
-	sessionHPAsOK := false
-	if c.clientset != nil {
-		if hpaList, err := c.clientset.AutoscalingV2().HorizontalPodAutoscalers(ns).List(ctx, metav1.ListOptions{}); err == nil {
-			sessionHPAs = hpaList.Items
-			sessionHPAsOK = true
-		}
-	}
+	var sessionHPAsOK bool
+	sessionHPAs, sessionHPAsOK = c.loadSessionHPAs(ctx, ns)
 
 	// DB (postgres) — CPU/memory: container cAdvisor → Metrics API → kube requests.
 	// Include postgres-replica containers so a promoted writer still contributes

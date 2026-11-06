@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/deployer"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -259,8 +260,37 @@ type dbReplicaLayerSplit struct {
 // listDBReplicaPods returns replica pod names, readiness, and StatefulSet desired/ready counts.
 func (c *MetricsCollector) listDBReplicaPods(ctx context.Context, ns string) (names []string, ready map[string]bool, counts BackendReplicas) {
 	ready = make(map[string]bool)
-	if c == nil || c.clientset == nil {
+	if c == nil {
 		return nil, ready, counts
+	}
+	if c.inv == nil && c.clientset == nil {
+		return nil, ready, counts
+	}
+	if c.inv != nil {
+		if stsList, err := c.inv.StatefulSets(ns); err == nil {
+			for _, sts := range stsList {
+				if sts == nil || sts.Labels["app"] != dbReplicaAppLabel {
+					continue
+				}
+				if sts.Spec.Replicas != nil {
+					counts.Desired += *sts.Spec.Replicas
+				}
+			}
+		}
+		ptrs, err := c.inv.Pods(ns)
+		if err != nil {
+			return nil, ready, counts
+		}
+		for _, p := range copyPodsWithAppAndDeployment(ptrs, dbReplicaAppLabel, ns) {
+			isReady := podReadyStatus(p)
+			ready[p.Name] = isReady
+			names = append(names, p.Name)
+			if isReady {
+				counts.Ready++
+			}
+		}
+		sort.Strings(names)
+		return names, ready, counts
 	}
 	stsList, err := c.clientset.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("app=%s", dbReplicaAppLabel),
@@ -660,11 +690,19 @@ func (c *MetricsCollector) replicaConnectedOnPrimaryByPod(ctx context.Context, n
 }
 
 func (c *MetricsCollector) postgresWriterContainer(ctx context.Context, ns, writerPod string) string {
-	if c == nil || c.clientset == nil || writerPod == "" {
+	if c == nil || writerPod == "" {
 		return dbPrimaryContainerName
 	}
-	pod, err := c.clientset.CoreV1().Pods(ns).Get(ctx, writerPod, metav1.GetOptions{})
-	if err != nil {
+	var pod *corev1.Pod
+	var err error
+	if c.inv != nil {
+		pod, err = c.inv.Pod(ns, writerPod)
+	} else if c.clientset != nil {
+		pod, err = c.clientset.CoreV1().Pods(ns).Get(ctx, writerPod, metav1.GetOptions{})
+	} else {
+		return dbPrimaryContainerName
+	}
+	if err != nil || pod == nil {
 		return dbPrimaryContainerName
 	}
 	if pod.Labels["app"] == dbReplicaAppLabel {

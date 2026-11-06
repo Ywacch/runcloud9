@@ -126,6 +126,18 @@ func wireClusterStateReadiness(deployers map[string]deployer.ComponentDeployer, 
 	}
 }
 
+func wireClusterStateMetrics(col *metrics.MetricsCollector, cache *clusterstate.Cache) {
+	if col == nil {
+		return
+	}
+	if cache != nil && clusterstate.MetricsEnabled(os.Getenv("CLUSTERSTATE_METRICS")) {
+		col.SetInventory(cache)
+		log.Println("clusterstate metrics: on")
+	} else {
+		log.Println("clusterstate metrics: off")
+	}
+}
+
 // recoverDeployments re-registers teardown timers for active deployments on startup.
 // If the server restarts mid-deployment, time.AfterFunc timers are gone.
 // We scan for running/provisioning deployments and either fire teardown now (if expired)
@@ -412,6 +424,7 @@ func main() {
 	if clusterCache != nil {
 		metricsCollector.SetClusterState(clusterCache)
 	}
+	wireClusterStateMetrics(metricsCollector, clusterCache)
 	if clientset != nil {
 		ddcBucket := os.Getenv("DDC_BUCKET")
 		if ddcBucket == "" {
