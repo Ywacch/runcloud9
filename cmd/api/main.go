@@ -109,6 +109,23 @@ func buildDeployers(kubeObs kubeobs.RequestObserver) (map[string]deployer.Compon
 	}, clientset, metricsClient, config
 }
 
+func wireClusterStateReadiness(deployers map[string]deployer.ComponentDeployer, cache *clusterstate.Cache) {
+	var list deployer.PodLister
+	if cache != nil && clusterstate.ReadinessEnabled(os.Getenv("CLUSTERSTATE_READINESS")) {
+		list = cache.Pods
+		log.Println("clusterstate readiness: on")
+	} else {
+		log.Println("clusterstate readiness: off")
+	}
+	for _, d := range deployers {
+		k, ok := d.(*deployer.K8sDeployer)
+		if !ok {
+			continue
+		}
+		k.SetPodLister(list)
+	}
+}
+
 // recoverDeployments re-registers teardown timers for active deployments on startup.
 // If the server restarts mid-deployment, time.AfterFunc timers are gone.
 // We scan for running/provisioning deployments and either fire teardown now (if expired)
@@ -220,6 +237,7 @@ func main() {
 	} else {
 		log.Println("clusterstate: off")
 	}
+	wireClusterStateReadiness(deployers, clusterCache)
 
 	seedBucketName := os.Getenv("SEED_BUCKET_NAME")
 	if seedBucketName == "" {

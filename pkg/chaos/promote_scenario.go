@@ -49,7 +49,7 @@ func (s *PromoteScenario) Apply(ctx context.Context, namespace string, design de
 		return ErrPartitionAlreadyActive
 	}
 
-	primaryAdmin := deployer.NewPostgresPrimaryAdmin(s.Client, namespace)
+	primaryAdmin := deployer.NewPostgresPrimaryAdmin(s.Client, namespace, nil)
 	candidate, err := deployer.SelectPromotionCandidate(ctx, primaryAdmin, s.Prefer)
 	if err != nil {
 		return fmt.Errorf("chaos: select promotion candidate: %w", err)
