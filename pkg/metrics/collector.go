@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/chaos"
+	"github.com/ywacch/cloud9/pkg/clusterstate"
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/kubeobs"
 	"github.com/ywacch/cloud9/pkg/loadgen"
@@ -92,6 +93,7 @@ type MetricsCollector struct {
 	promQueryObserver    PromQueryObserver
 	collectObserver      CollectObserver
 	frameBytesObserver   FrameBytesObserver
+	clusterState         *clusterstate.Cache
 }
 
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
@@ -124,6 +126,14 @@ func (c *MetricsCollector) SetDebugMetrics(enabled bool) {
 		return
 	}
 	c.debugMetrics = enabled
+}
+
+// SetClusterState attaches the shared informer cache for later read paths (P2.2+).
+func (c *MetricsCollector) SetClusterState(cache *clusterstate.Cache) {
+	if c == nil {
+		return
+	}
+	c.clusterState = cache
 }
 
 func (c *MetricsCollector) debugCompare(component, metric string, primary, fallback float64, primarySource, fallbackSource string) {
