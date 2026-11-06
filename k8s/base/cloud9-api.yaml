@@ -23,6 +23,9 @@ rules:
   - apiGroups: [""]
     resources: ["services", "services/proxy", "configmaps", "secrets", "pods", "persistentvolumeclaims", "endpoints"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list"]
@@ -100,6 +103,8 @@ spec:
               value: "production"
             - name: DEPLOYER
               value: "k8s"
+            - name: CLUSTERSTATE
+              value: "1"
             - name: SUPABASE_URL
               valueFrom:
                 secretKeyRef:
