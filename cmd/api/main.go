@@ -77,9 +77,12 @@ func buildDeployers(kubeObs kubeobs.RequestObserver) (map[string]deployer.Compon
 		}
 	}
 	// Raise client-go rate limits for concurrent deployment orchestration.
-	// Default (5 QPS, 10 burst) causes 10-16s delays at 20+ concurrent deploys.
-	config.QPS = 50
-	config.Burst = 100
+	// Default rest.Config (5 QPS, 10 burst) causes 10-16s delays at 20+ concurrent deploys.
+	// Defaults here are 200 QPS / 400 burst; override with K8S_CLIENT_QPS and K8S_CLIENT_BURST.
+	qps, burst := kubeClientLimits(os.Getenv("K8S_CLIENT_QPS"), os.Getenv("K8S_CLIENT_BURST"))
+	config.QPS = qps
+	config.Burst = burst
+	log.Printf("kube client limiter: qps=%g burst=%d", qps, burst)
 	if kubeObs != nil {
 		config.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
 			return kubeobs.Wrap(rt, kubeObs)

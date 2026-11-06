@@ -1,0 +1,11 @@
+# Rung 1 ladder: 50 url-shortener-small sessions, one burst wave.
+# Operator checklist: ganymede/throwaway/tasks/scale-2000-phase-2.md (P2.5).
+name: rung-1
+tier: internal
+cooldown_seconds: 0
+waves:
+  - name: rung-1
+    mode: burst
+    groups:
+      - count: 50
+        design: url-shortener-small
