@@ -108,8 +108,34 @@ func sumNamedDeploymentReplicas(deps []appsv1.Deployment, app string) int32 {
 
 func (c *MetricsCollector) listLabeledLivePods(ctx context.Context, ns, app string) (names []string, ready map[string]bool, counts BackendReplicas) {
 	ready = make(map[string]bool)
-	if c == nil || c.clientset == nil {
+	if c == nil {
 		return nil, ready, counts
+	}
+	if c.inv == nil && c.clientset == nil {
+		return nil, ready, counts
+	}
+	if c.inv != nil {
+		if deps, err := c.inv.Deployments(ns); err == nil {
+			counts.Desired = sumNamedDeploymentReplicas(deploymentItems(deps), app)
+		}
+		ptrs, err := c.inv.Pods(ns)
+		if err != nil {
+			return nil, ready, counts
+		}
+		items := copyPodsWithAppAndDeployment(ptrs, app, ns)
+		names = make([]string, 0, len(items))
+		for _, p := range items {
+			if !isLiveInventoryPod(p) {
+				continue
+			}
+			isReady := podReadyStatus(p)
+			ready[p.Name] = isReady
+			names = append(names, p.Name)
+			if isReady {
+				counts.Ready++
+			}
+		}
+		return names, ready, counts
 	}
 	// Deployer puts app= labels on the pod template only, not Deployment
 	// metadata. Sum spec.replicas by Deployment name so desired stays correct.

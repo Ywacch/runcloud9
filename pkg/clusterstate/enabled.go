@@ -17,3 +17,8 @@ func Enabled(rawEnv string) bool {
 func ReadinessEnabled(rawEnv string) bool {
 	return Enabled(rawEnv)
 }
+
+// MetricsEnabled reports whether metrics Collect inventory should read from the informer cache.
+func MetricsEnabled(rawEnv string) bool {
+	return Enabled(rawEnv)
+}

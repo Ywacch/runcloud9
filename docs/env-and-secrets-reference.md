@@ -15,6 +15,7 @@ Use this doc as the source of truth for required/optional environment variables 
 | `DEPLOYER` | No | `local` | `k8s` enables real cluster deployer; otherwise LocalDeployer. |
 | `CLUSTERSTATE` | No | off | `1` or `true`: start shared Kubernetes informer caches at API startup (`WaitForSync` timeout 45s; process continues on timeout). Requires `DEPLOYER=k8s`. Reader flags are separate env vars. |
 | `CLUSTERSTATE_READINESS` | No | off | `1` or `true`: `waitForReady` and postgres primary pod lookup read pods from the informer cache. Requires non-nil cache (`CLUSTERSTATE` on). |
+| `CLUSTERSTATE_METRICS` | No | off | `1` or `true`: metrics Collect inventory (pods, deployments, statefulsets, HPAs) reads from the informer cache. Requires non-nil cache (`CLUSTERSTATE` on). |
 | `ALLOWED_ORIGINS` | No | `http://localhost:3000` | Comma-separated CORS allow-list. |
 | `PROMETHEUS_URL` | No | Empty | Prometheus base URL for metrics collection. |
 | `SEED_BUCKET_NAME` | No | `cloud9-seed-data` | Bucket used by seeder for prebuilt DB dumps. |

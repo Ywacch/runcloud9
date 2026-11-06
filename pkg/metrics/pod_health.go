@@ -9,9 +9,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/rules"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/kubernetes"
 )
 
 const (
@@ -56,17 +54,11 @@ func componentKeyForAppLabel(app string) string {
 	}
 }
 
-func listDeploymentPods(ctx context.Context, clientset kubernetes.Interface, namespace string) ([]corev1.Pod, error) {
-	if clientset == nil || namespace == "" {
+func listDeploymentPods(ctx context.Context, c *MetricsCollector, namespace string) ([]corev1.Pod, error) {
+	if c == nil {
 		return nil, nil
 	}
-	list, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("deployment=%s", namespace),
-	})
-	if err != nil {
-		return nil, err
-	}
-	return list.Items, nil
+	return c.listDeploymentPods(ctx, namespace)
 }
 
 func groupPodsByComponent(pods []corev1.Pod) map[string][]corev1.Pod {
@@ -220,10 +212,13 @@ func (c *MetricsCollector) attachRuntimeHealth(
 	namespace string,
 	dm *DeploymentMetrics,
 ) []Event {
-	if c == nil || c.clientset == nil || dm == nil || namespace == "" {
+	if c == nil || dm == nil || namespace == "" {
 		return nil
 	}
-	pods, err := listDeploymentPods(ctx, c.clientset, namespace)
+	if c.inv == nil && c.clientset == nil {
+		return nil
+	}
+	pods, err := listDeploymentPods(ctx, c, namespace)
 	if err != nil || len(pods) == 0 {
 		return nil
 	}
