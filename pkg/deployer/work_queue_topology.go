@@ -82,6 +82,9 @@ func redisPolicyForNode(node DeploymentNode, design DeploymentDesign) string {
 	if hasQueue && !hasDataJob {
 		return "noeviction"
 	}
+	if hasQueue && hasDataJob {
+		return "volatile-lru"
+	}
 	return canvas
 }
 

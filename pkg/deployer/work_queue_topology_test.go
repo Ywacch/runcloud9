@@ -210,7 +210,7 @@ func TestRedisPolicyForNode(t *testing.T) {
 		},
 	}
 
-	if got := redisPolicyForNode(timelineOnly, shareDesign); got != "allkeys-lru" {
+	if got := redisPolicyForNode(timelineOnly, shareDesign); got != "volatile-lru" {
 		t.Fatalf("share policy: %q", got)
 	}
 	if got := redisPolicyForNode(queueOnly, splitDesign); got != "noeviction" {

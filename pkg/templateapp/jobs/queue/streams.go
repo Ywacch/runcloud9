@@ -1,3 +1,6 @@
+// The Streams adapter trims acked entries with XTRIM MINID against consumer group
+// cloud9-workers. That assumes a single consumer group; a second group must trim
+// to the minimum id still needed across all groups.
 package queue
 
 import (
@@ -13,6 +16,7 @@ import (
 const (
 	streamsConsumerGroup = "cloud9-workers"
 	streamsAutoClaimMin  = 30 * time.Second
+	defaultTrimInterval  = 10 * time.Second
 )
 
 // StreamsOptions configures a Redis Streams queue adapter.
@@ -21,6 +25,8 @@ type StreamsOptions struct {
 	StreamKey        string
 	Registerer       prometheus.Registerer
 	AutoClaimMinIdle time.Duration
+	TrimInterval     time.Duration
+	Now              func() time.Time
 }
 
 // Streams implements Queue with XADD, XREADGROUP, XACK, and XAUTOCLAIM.
@@ -29,6 +35,9 @@ type Streams struct {
 	stream       string
 	reg          prometheus.Registerer
 	autoClaimMin time.Duration
+	trimInterval time.Duration
+	lastTrim     time.Time
+	now          func() time.Time
 }
 
 // NewStreams prepares the stream and consumer group.
@@ -51,7 +60,22 @@ func NewStreams(opts StreamsOptions) (*Streams, error) {
 	if minIdle <= 0 {
 		minIdle = streamsAutoClaimMin
 	}
-	return &Streams{client: opts.Client, stream: stream, reg: opts.Registerer, autoClaimMin: minIdle}, nil
+	trimEvery := opts.TrimInterval
+	if trimEvery <= 0 {
+		trimEvery = defaultTrimInterval
+	}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
+	return &Streams{
+		client:       opts.Client,
+		stream:       stream,
+		reg:          opts.Registerer,
+		autoClaimMin: minIdle,
+		trimInterval: trimEvery,
+		now:          now,
+	}, nil
 }
 
 // Engine returns "redis".
@@ -153,6 +177,7 @@ func (s *Streams) handleMessage(ctx context.Context, consumer string, msg redis.
 	if !ok {
 		incPoison(s.Engine(), s.stream)
 		_ = s.client.XAck(ctx, s.stream, streamsConsumerGroup, msg.ID).Err()
+		s.maybeTrim(ctx)
 		return
 	}
 	attempts := s.deliveryAttempts(ctx, msg.ID)
@@ -160,10 +185,14 @@ func (s *Streams) handleMessage(ctx context.Context, consumer string, msg redis.
 		if attempts >= maxDeliveryAttempts {
 			incPoison(s.Engine(), s.stream)
 			_ = s.client.XAck(ctx, s.stream, streamsConsumerGroup, msg.ID).Err()
+			s.maybeTrim(ctx)
 		}
 		return
 	}
-	_ = s.client.XAck(ctx, s.stream, streamsConsumerGroup, msg.ID).Err()
+	if err := s.client.XAck(ctx, s.stream, streamsConsumerGroup, msg.ID).Err(); err != nil {
+		return
+	}
+	s.maybeTrim(ctx)
 }
 
 func streamBody(msg redis.XMessage) ([]byte, bool) {
@@ -193,6 +222,49 @@ func (s *Streams) deliveryAttempts(ctx context.Context, msgID string) int {
 		return 1
 	}
 	return int(ext[0].RetryCount) + 1
+}
+
+func (s *Streams) maybeTrim(ctx context.Context) {
+	now := s.now()
+	if !s.lastTrim.IsZero() && now.Sub(s.lastTrim) < s.trimInterval {
+		return
+	}
+	minID, ok := s.trimBoundaryID(ctx)
+	if !ok {
+		return
+	}
+	if _, err := s.client.XTrimMinIDApprox(ctx, s.stream, minID, 0).Result(); err != nil {
+		return
+	}
+	s.lastTrim = now
+}
+
+func (s *Streams) trimBoundaryID(ctx context.Context) (string, bool) {
+	pending, err := s.client.XPending(ctx, s.stream, streamsConsumerGroup).Result()
+	if err == nil && pending.Count > 0 && pending.Lower != "" {
+		return pending.Lower, true
+	}
+	groups, err := s.client.XInfoGroups(ctx, s.stream).Result()
+	if err != nil {
+		return "", false
+	}
+	for _, g := range groups {
+		if g.Name != streamsConsumerGroup {
+			continue
+		}
+		if g.LastDeliveredID != "" {
+			return g.LastDeliveredID, true
+		}
+		return "", false
+	}
+	return "", false
+}
+
+// trimStreamNow runs XTRIM once, ignoring the trim interval. Tests use it to
+// assert trim behavior without waiting for Consume.
+func (s *Streams) trimStreamNow(ctx context.Context) {
+	s.lastTrim = time.Time{}
+	s.maybeTrim(ctx)
 }
 
 func (s *Streams) Ping(ctx context.Context) error {
