@@ -13,6 +13,13 @@ import (
 	"github.com/ywacch/cloud9/pkg/deployer"
 )
 
+const (
+	// apiHTTPTimeout is the whole-request budget for create, poll, and delete.
+	// 60s expired while the edge was still holding DELETE (and slow POST) headers,
+	// which left session namespaces behind after an otherwise successful wave.
+	apiHTTPTimeout = 3 * time.Minute
+)
+
 type apiClient struct {
 	baseURL    string
 	token      string
@@ -21,11 +28,26 @@ type apiClient struct {
 
 func newAPIClient(baseURL, token string) *apiClient {
 	return &apiClient{
-		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
-		token:   strings.TrimSpace(token),
-		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
-		},
+		baseURL:    strings.TrimRight(strings.TrimSpace(baseURL), "/"),
+		token:      strings.TrimSpace(token),
+		httpClient: newAPIHTTPClient(),
+	}
+}
+
+func newAPIHTTPClient() *http.Client {
+	var tr *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		tr = base.Clone()
+	} else {
+		tr = &http.Transport{}
+	}
+	// Default MaxIdleConnsPerHost is 2. A 50-wide burst then opens and drops
+	// connections on every call.
+	tr.MaxIdleConns = 128
+	tr.MaxIdleConnsPerHost = 64
+	return &http.Client{
+		Timeout:   apiHTTPTimeout,
+		Transport: tr,
 	}
 }
 

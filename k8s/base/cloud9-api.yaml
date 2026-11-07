@@ -91,9 +91,9 @@ spec:
             requests:
               cpu: "250m"
               memory: "512Mi"
-              # 100Mi was too small: kubelet evicted cloud9-api with "ephemeral local storage
-              # exceeds the total limit of containers 100Mi" during load spikes (LB 502 HTML).
-              ephemeral-storage: "512Mi"
+              # GKE Autopilot may normalize request/limit to the request value for ephemeral
+              # storage; use 2Gi for both so the live pod does not stay capped at 512Mi (evictions).
+              ephemeral-storage: "2Gi"
             limits:
               cpu: "500m"
               memory: "1Gi"

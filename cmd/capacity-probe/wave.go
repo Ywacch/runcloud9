@@ -242,19 +242,31 @@ func isAuthFailure(status int) bool {
 	return status == http.StatusUnauthorized || status == http.StatusForbidden
 }
 
+// cleanupDeleteParallel keeps teardown from repeating the create burst
+// against the same edge. Deletes are idempotent (204 or 404).
+const cleanupDeleteParallel = 4
+
 func cleanupTracked(ctx context.Context, client *apiClient, tracker *deploymentTracker) {
 	items := tracker.snapshot()
 	if len(items) == 0 {
 		return
 	}
 	log.Printf("cleaning up %d deployments", len(items))
+	sem := make(chan struct{}, cleanupDeleteParallel)
 	var wg sync.WaitGroup
 	for _, item := range items {
 		item := item
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := client.DeleteDeployment(ctx, item.ID); err != nil {
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				log.Printf("delete %s: %v", item.ID, ctx.Err())
+				return
+			}
+			if err := deleteDeploymentRetry(ctx, client, item.ID); err != nil {
 				log.Printf("delete %s: %v", item.ID, err)
 			}
 		}()
@@ -286,6 +298,21 @@ func cleanupTracked(ctx context.Context, client *apiClient, tracker *deploymentT
 		}
 	}
 	log.Printf("cleanup wait timed out; some namespaces may still be terminating")
+}
+
+func deleteDeploymentRetry(ctx context.Context, client *apiClient, id string) error {
+	_, err := client.DeleteDeployment(ctx, id)
+	if err == nil || ctx.Err() != nil {
+		return err
+	}
+	log.Printf("delete %s: %v; retrying once", id, err)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(2 * time.Second):
+	}
+	_, err = client.DeleteDeployment(ctx, id)
+	return err
 }
 
 func phaseList(phases map[string]struct{}) []string {
