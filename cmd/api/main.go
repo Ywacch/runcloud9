@@ -291,129 +291,15 @@ func main() {
 	}
 	var metricsCollector *metrics.MetricsCollector
 	var diagnosticsCollector *diagnostics.Collector
-	var forgetActAsCache func(string)
-	var enrichTeardownSummary func(context.Context, string, store.DeploymentRow, map[string]any, []metrics.DeploymentMetrics, *metrics.DeploymentMetrics)
-	var schedulePostmortem func(string)
-	var stopLBEndpointsWatch func(string)
-	var observeTeardownLag func(time.Time)
-	var refreshWebsocketLive func()
+	var requestTeardown func(string)
 
-	// teardownFn uses context.Background() so cleanup is never cut short by request cancel or timeout.
+	// Expiry only records terminating. The teardown worker deletes the namespace.
 	teardownFn := func(namespace string) {
-		if forgetActAsCache != nil {
-			forgetActAsCache(namespace)
+		if requestTeardown == nil {
+			log.Printf("teardown %s: api handler is not ready", namespace)
+			return
 		}
-		ctx := context.Background()
-		tpl := ""
-		var row store.DeploymentRow
-		row, rowErr := deploymentStore.GetDeployment(ctx, namespace)
-		if observeTeardownLag != nil && rowErr == nil {
-			observeTeardownLag(row.ExpiresAt)
-		}
-		// Stop load generator first — prevents requests to a dying namespace
-		_ = lg.Stop(context.Background(), namespace)
-		if rowErr == nil {
-			tpl = row.Template
-		}
-		summary := make(map[string]any)
-		if rowErr == nil && row.MetricsSummary != nil {
-			for k, v := range row.MetricsSummary {
-				summary[k] = v
-			}
-		}
-		// Collect final metrics snapshot and merge into existing summary (preserves 'seeded' and other fields).
-		if metricsCollector != nil {
-			design, _ := deployer.DesignFromMap(row.Design)
-			topo := api.MetricsTopologyFromDeploymentDesign(design, tpl)
-			dm, err := metricsCollector.Collect(ctx, namespace, tpl, topo)
-			if err == nil && dm != nil {
-				summary = metricsCollector.SessionSummary(namespace, summary, dm)
-				if rowErr == nil && enrichTeardownSummary != nil {
-					hist := metricsCollector.DownsampledSessionHistory(namespace)
-					enrichTeardownSummary(ctx, namespace, row, summary, hist, dm)
-				}
-				summary["terminated_at"] = time.Now().Format(time.RFC3339)
-				if rowErr == nil {
-					summary["actual_duration_seconds"] = int(time.Since(row.CreatedAt).Seconds())
-				}
-			}
-		}
-		if diagnosticsCollector != nil {
-			createdAt := ""
-			runningAt := ""
-			durationSeconds := 0
-			if rowErr == nil {
-				createdAt = row.CreatedAt.UTC().Format(time.RFC3339)
-				durationSeconds = int(time.Since(row.CreatedAt).Seconds())
-				if raw, ok := row.MetricsSummary["running_at"].(string); ok {
-					runningAt = raw
-				}
-			}
-			diagCtx, diagCancel := context.WithTimeout(ctx, 20*time.Second)
-			url, signatures, partial, diagErr := diagnosticsCollector.Collect(diagCtx, diagnostics.CollectParams{
-				Namespace:        namespace,
-				Template:         tpl,
-				Outcome:          "success",
-				CollectionReason: "teardown",
-				CreatedAt:        createdAt,
-				RunningAt:        runningAt,
-				DurationSeconds:  durationSeconds,
-			})
-			diagCancel()
-			signatureCodes := make([]string, 0, len(signatures))
-			for _, sig := range signatures {
-				signatureCodes = append(signatureCodes, sig.Code)
-			}
-			diagSummary := map[string]any{
-				"url":                url,
-				"collected_at":       time.Now().UTC().Format(time.RFC3339),
-				"outcome":            "success",
-				"schema_version":     2,
-				"failure_signatures": signatureCodes,
-				"partial":            partial,
-				"collection_reason":  "teardown",
-			}
-			if createdAt != "" || durationSeconds > 0 {
-				lifecycle := map[string]any{
-					"created_at":       createdAt,
-					"duration_seconds": durationSeconds,
-				}
-				if runningAt != "" {
-					lifecycle["running_at"] = runningAt
-				}
-				diagSummary["lifecycle"] = lifecycle
-			}
-			if diagErr != nil {
-				log.Printf("DDC: teardown collection failed for %s: %v", namespace, diagErr)
-				diagSummary["error"] = diagErr.Error()
-			}
-			summary["diagnostics"] = diagSummary
-		}
-		if len(summary) > 0 {
-			if err := deploymentStore.SetMetricsSummary(ctx, namespace, summary); err != nil {
-				log.Printf("auto-teardown metrics summary update failed for %s: %v", namespace, err)
-			}
-		}
-		d := deployers["db"]
-		if err := d.Teardown(ctx, namespace); err != nil {
-			log.Printf("auto-teardown failed for %s: %v", namespace, err)
-		}
-		if err := deploymentStore.UpdateStatus(ctx, namespace, "terminated"); err != nil {
-			log.Printf("auto-teardown status update failed for %s: %v", namespace, err)
-		}
-		if schedulePostmortem != nil {
-			schedulePostmortem(namespace)
-		}
-		if stopLBEndpointsWatch != nil {
-			stopLBEndpointsWatch(namespace)
-		}
-		if metricsCollector != nil {
-			metricsCollector.Cleanup(namespace)
-		}
-		if refreshWebsocketLive != nil {
-			refreshWebsocketLive()
-		}
-		log.Printf("auto-teardown complete: %s", namespace)
+		requestTeardown(namespace)
 	}
 
 	scheduler := teardown.NewScheduler(teardownFn)
@@ -456,16 +342,12 @@ func main() {
 	if clusterCache != nil {
 		handler.SetClusterState(clusterCache)
 	}
-	forgetActAsCache = handler.ForgetActAsCache
-	enrichTeardownSummary = handler.EnrichTeardownSummary
-	schedulePostmortem = handler.SchedulePostmortemAfterTeardown
-	stopLBEndpointsWatch = handler.StopLBEndpointsWatch
-	observeTeardownLag = handler.ObserveTeardownLag
-	refreshWebsocketLive = handler.RefreshWebsocketLiveGauge
+	requestTeardown = handler.RequestTeardown
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
 	recoverDeployments(context.Background(), deploymentStore, scheduler, metricsCollector)
+	handler.StartTeardownMaintenance(context.Background())
 	handler.StartDeployQueue(context.Background())
 	handler.StartChaosPartitionSweep(context.Background())
 

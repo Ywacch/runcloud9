@@ -126,7 +126,7 @@ func (h *Handler) runBackgroundProvision(
 		h.cpMetrics.observeDoorWait(time.Since(start).Seconds())
 	}
 	if err != nil {
-		if errors.Is(err, context.Canceled) || h.isDeploymentStatus(namespace, "terminated") {
+		if errors.Is(err, context.Canceled) || h.provisionWritesBlocked(namespace) {
 			log.Printf("orchestration canceled for namespace=%s", namespace)
 			h.wakeDeployQueue()
 			return
@@ -143,7 +143,7 @@ func (h *Handler) runBackgroundProvision(
 
 	result, err := h.orchestrate(workCtx, design, namespace, quotaTier)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || h.isDeploymentStatus(namespace, "terminated") {
+		if errors.Is(err, context.Canceled) || h.provisionWritesBlocked(namespace) {
 			log.Printf("orchestration canceled for namespace=%s", namespace)
 			h.wakeDeployQueue()
 			return
@@ -154,7 +154,7 @@ func (h *Handler) runBackgroundProvision(
 	}
 
 	runExpiresAt := time.Now().Add(time.Duration(sessionMins) * time.Minute)
-	if h.isDeploymentStatus(namespace, "terminated") {
+	if h.provisionWritesBlocked(namespace) {
 		log.Printf("skip final running status for terminated namespace=%s", namespace)
 		h.recordProvisionTimings(context.Background(), namespace, holdStart, doorWait)
 		h.provisionETA.Observe(time.Since(start))
@@ -162,7 +162,19 @@ func (h *Handler) runBackgroundProvision(
 		return
 	}
 	if h.store != nil {
-		_ = h.store.UpdateStatus(context.Background(), namespace, "running")
+		claimed, claimErr := h.store.ClaimStatus(context.Background(), namespace, []string{statusProvisioning}, statusRunning)
+		if claimErr != nil {
+			log.Printf("running status claim failed namespace=%s: %v", namespace, claimErr)
+			h.wakeDeployQueue()
+			return
+		}
+		if !claimed {
+			log.Printf("skip final running status for namespace=%s", namespace)
+			h.recordProvisionTimings(context.Background(), namespace, holdStart, doorWait)
+			h.provisionETA.Observe(time.Since(start))
+			h.wakeDeployQueue()
+			return
+		}
 		_ = h.store.UpdateExpiresAt(context.Background(), namespace, runExpiresAt)
 		h.stampMetrics(context.Background(), namespace, map[string]any{
 			"seeded":     result.Seeded,
@@ -206,7 +218,15 @@ func (h *Handler) failProvision(design deployer.DeploymentDesign, namespace, use
 		sentry.CaptureException(err)
 	})
 	if h.store != nil {
-		_ = h.store.UpdateStatus(context.Background(), namespace, "failed")
+		claimed, claimErr := h.store.ClaimStatus(context.Background(), namespace, []string{statusProvisioning}, statusFailed)
+		if claimErr != nil {
+			log.Printf("failed status claim failed namespace=%s: %v", namespace, claimErr)
+		}
+		if !claimed {
+			log.Printf("skip fail status for namespace=%s", namespace)
+			h.wakeDeployQueue()
+			return
+		}
 	}
 	h.wakeDeployQueue()
 	if h.diagnostics != nil {

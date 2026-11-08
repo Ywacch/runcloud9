@@ -242,9 +242,13 @@ func isAuthFailure(status int) bool {
 	return status == http.StatusUnauthorized || status == http.StatusForbidden
 }
 
-// cleanupDeleteParallel keeps teardown from repeating the create burst
-// against the same edge. Deletes are idempotent (204 or 404).
-const cleanupDeleteParallel = 4
+// cleanupDeleteParallel is how many DELETE calls run at once.
+// Each call returns after the terminating row is stored, so this can match a wave.
+const cleanupDeleteParallel = 64
+
+// cleanupWaitBudget is how long the probe polls for status terminated
+// after DELETE has been accepted.
+const cleanupWaitBudget = 15 * time.Minute
 
 func cleanupTracked(ctx context.Context, client *apiClient, tracker *deploymentTracker) {
 	items := tracker.snapshot()
@@ -254,6 +258,8 @@ func cleanupTracked(ctx context.Context, client *apiClient, tracker *deploymentT
 	log.Printf("cleaning up %d deployments", len(items))
 	sem := make(chan struct{}, cleanupDeleteParallel)
 	var wg sync.WaitGroup
+	var issuedMu sync.Mutex
+	issuedAt := make(map[string]time.Time, len(items))
 	for _, item := range items {
 		item := item
 		wg.Add(1)
@@ -266,38 +272,75 @@ func cleanupTracked(ctx context.Context, client *apiClient, tracker *deploymentT
 				log.Printf("delete %s: %v", item.ID, ctx.Err())
 				return
 			}
+			started := time.Now()
 			if err := deleteDeploymentRetry(ctx, client, item.ID); err != nil {
 				log.Printf("delete %s: %v", item.ID, err)
+				return
 			}
+			issuedMu.Lock()
+			issuedAt[item.ID] = started
+			issuedMu.Unlock()
 		}()
 	}
 	wg.Wait()
 
-	deadline := time.Now().Add(3 * time.Minute)
-	for time.Now().Before(deadline) {
+	seen := make(map[string]struct{}, len(items))
+	var lags []time.Duration
+	deadline := time.Now().Add(cleanupWaitBudget)
+	for {
 		remaining := 0
 		for _, item := range items {
+			if _, ok := seen[item.ID]; ok {
+				continue
+			}
 			st, code, err := client.GetDeployment(ctx, item.ID)
-			if err != nil && code == http.StatusNotFound {
-				continue
-			}
-			if err == nil && (st.Status == "terminated" || st.Status == "failed") {
-				continue
-			}
-			if err == nil && code == http.StatusOK && st.Status != "terminated" {
+			done := (err != nil && code == http.StatusNotFound) || (err == nil && st.Status == "terminated")
+			if !done {
 				remaining++
+				continue
 			}
+			seen[item.ID] = struct{}{}
+			issuedMu.Lock()
+			started, ok := issuedAt[item.ID]
+			issuedMu.Unlock()
+			if !ok {
+				continue
+			}
+			lag := time.Since(started)
+			lags = append(lags, lag)
+			log.Printf("cleanup %s lag=%s", item.ID, lag.Round(time.Millisecond))
 		}
 		if remaining == 0 {
+			logCleanupLag(lags)
+			return
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			logCleanupLag(lags)
+			log.Printf("cleanup wait timed out; %d deployments are not terminated", remaining)
 			return
 		}
 		select {
 		case <-ctx.Done():
+			logCleanupLag(lags)
+			log.Printf("cleanup wait timed out; %d deployments are not terminated", remaining)
 			return
 		case <-time.After(2 * time.Second):
 		}
 	}
-	log.Printf("cleanup wait timed out; some namespaces may still be terminating")
+}
+
+func logCleanupLag(lags []time.Duration) {
+	if len(lags) == 0 {
+		log.Printf("cleanup lag samples=0")
+		return
+	}
+	max := lags[0]
+	for _, lag := range lags[1:] {
+		if lag > max {
+			max = lag
+		}
+	}
+	log.Printf("cleanup lag samples=%d max=%s", len(lags), max.Round(time.Millisecond))
 }
 
 func deleteDeploymentRetry(ctx context.Context, client *apiClient, id string) error {

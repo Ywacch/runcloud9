@@ -2237,32 +2237,99 @@ func (f *fakeDeploymentStore) ListInferredMechanismPromotionSummaries(_ context.
 func (f *fakeDeploymentStore) UpdateStatus(_ context.Context, namespace, status string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.applyStatusLocked(namespace, status)
+	return nil
+}
+
+func (f *fakeDeploymentStore) ClaimStatus(_ context.Context, namespace string, from []string, to string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	row, ok := f.byNS[namespace]
 	if !ok {
-		return nil
+		return false, nil
+	}
+	allowed := false
+	for _, status := range from {
+		if row.Status == status {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return false, nil
+	}
+	f.applyStatusLocked(namespace, to)
+	return true, nil
+}
+
+func (f *fakeDeploymentStore) ListDeploymentsByStatus(_ context.Context, statuses []string) ([]store.DeploymentRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	want := make(map[string]struct{}, len(statuses))
+	for _, status := range statuses {
+		want[status] = struct{}{}
+	}
+	var rows []store.DeploymentRow
+	for _, row := range f.byNS {
+		if _, ok := want[row.Status]; ok {
+			rows = append(rows, row)
+		}
+	}
+	return rows, nil
+}
+
+func (f *fakeDeploymentStore) applyStatusLocked(namespace, status string) {
+	row, ok := f.byNS[namespace]
+	if !ok {
+		return
 	}
 	row.Status = status
 	f.byNS[namespace] = row
 	active := make([]store.ActiveDeploymentRow, 0, len(f.active))
+	found := false
 	for _, r := range f.active {
-		if r.Namespace == namespace {
-			if status == "running" || status == "provisioning" || status == "queued" {
-				r.Status = status
-				active = append(active, r)
-			}
+		if r.Namespace != namespace {
+			active = append(active, r)
 			continue
 		}
-		active = append(active, r)
-	}
-	f.active = active
-	if status != "running" && status != "provisioning" {
-		// Queued still holds weight columns but does not occupy the room;
-		// only drop admitted map when leaving room-relevant statuses.
-		if status != "queued" {
-			delete(f.admittedByNS, namespace)
+		found = true
+		if statusCountsAsActive(status) {
+			r.Status = status
+			active = append(active, r)
 		}
 	}
-	return nil
+	if !found && statusCountsAsActive(status) {
+		active = append(active, store.ActiveDeploymentRow{
+			ID:        row.ID,
+			Namespace: row.Namespace,
+			Template:  row.Template,
+			Status:    status,
+			ExpiresAt: row.ExpiresAt,
+			CreatedAt: row.CreatedAt,
+		})
+	}
+	f.active = active
+	if !statusHoldsAdmissionWeight(status) && status != "queued" {
+		delete(f.admittedByNS, namespace)
+	}
+}
+
+func statusCountsAsActive(status string) bool {
+	switch status {
+	case "running", "provisioning", "queued", "terminating":
+		return true
+	default:
+		return false
+	}
+}
+
+func statusHoldsAdmissionWeight(status string) bool {
+	switch status {
+	case "running", "provisioning", "terminating":
+		return true
+	default:
+		return false
+	}
 }
 
 func (f *fakeDeploymentStore) SumActiveAdmissionWeights(_ context.Context) (store.AdmissionOccupancy, error) {
@@ -2276,7 +2343,7 @@ func (f *fakeDeploymentStore) SumActiveAdmissionWeights(_ context.Context) (stor
 	}
 	var occ store.AdmissionOccupancy
 	for _, r := range f.active {
-		if r.Status != "running" && r.Status != "provisioning" {
+		if !statusHoldsAdmissionWeight(r.Status) {
 			continue
 		}
 		w := f.admittedByNS[r.Namespace]

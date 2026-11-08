@@ -210,7 +210,7 @@ func TestSumActiveAdmissionWeights(t *testing.T) {
 			t.Errorf("path = %q", r.URL.Path)
 		}
 		q := r.URL.Query()
-		if got := q.Get("status"); got != "in.(running,provisioning)" {
+		if got := q.Get("status"); got != "in.(running,provisioning,terminating)" {
 			t.Errorf("status filter = %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -341,7 +341,7 @@ func TestListActiveDeployments_IncludesQueued(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		if got := q.Get("status"); got != "in.(running,provisioning,queued)" {
+		if got := q.Get("status"); got != "in.(running,provisioning,queued,terminating)" {
 			t.Errorf("status filter = %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")

@@ -199,6 +199,50 @@ func (s *DeploymentStore) UpdateStatus(ctx context.Context, namespace, status st
 	return nil
 }
 
+// ClaimStatus sets status to `to` only when the row is still one of `from`.
+// It returns false when another writer already changed the row.
+func (s *DeploymentStore) ClaimStatus(ctx context.Context, namespace string, from []string, to string) (bool, error) {
+	if namespace == "" || to == "" || len(from) == 0 {
+		return false, fmt.Errorf("store.ClaimStatus: namespace, from, and to are required")
+	}
+	s.observe("claim_status")
+	data, _, err := s.client.From("cloud_deployments").
+		Update(map[string]any{"status": to}, "representation", "").
+		Eq("namespace", namespace).
+		In("status", from).
+		Execute()
+	if err != nil {
+		return false, fmt.Errorf("store.ClaimStatus: %w", err)
+	}
+	var rows []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return false, fmt.Errorf("store.ClaimStatus: parse: %w", err)
+	}
+	return len(rows) > 0, nil
+}
+
+// ListDeploymentsByStatus returns rows whose status is in statuses.
+func (s *DeploymentStore) ListDeploymentsByStatus(ctx context.Context, statuses []string) ([]DeploymentRow, error) {
+	if len(statuses) == 0 {
+		return nil, fmt.Errorf("store.ListDeploymentsByStatus: statuses are required")
+	}
+	s.observe("list_deployments_by_status")
+	data, _, err := s.client.From("cloud_deployments").
+		Select("id,namespace,template,archetype,status,expires_at,created_at", "exact", false).
+		In("status", statuses).
+		Execute()
+	if err != nil {
+		return nil, fmt.Errorf("store.ListDeploymentsByStatus: %w", err)
+	}
+	var rows []DeploymentRow
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return nil, fmt.Errorf("store.ListDeploymentsByStatus: parse: %w", err)
+	}
+	return rows, nil
+}
+
 // SetMetricsSummary writes the metrics_summary JSONB column for the given namespace.
 func (s *DeploymentStore) SetMetricsSummary(ctx context.Context, namespace string, summary map[string]any) error {
 	s.observe("set_metrics_summary")
@@ -280,13 +324,15 @@ func (s *DeploymentStore) GetDeployment(ctx context.Context, namespace string) (
 	return rows[0], nil
 }
 
-// ListActiveDeployments returns deployments with status IN ('running','provisioning','queued').
+// ListActiveDeployments returns deployments with status IN
+// ('running','provisioning','queued','terminating').
 // Queued counts toward per-user concurrency so users cannot stuff the queue.
+// Terminating still holds a namespace, so it counts toward the same cap.
 // If userID is non-empty, it filters by user_id.
 func (s *DeploymentStore) ListActiveDeployments(ctx context.Context, userID string) ([]ActiveDeploymentRow, error) {
 	q := s.client.From("cloud_deployments").
 		Select("id,namespace,template,status,expires_at,created_at", "exact", false).
-		In("status", []string{"running", "provisioning", "queued"})
+		In("status", []string{"running", "provisioning", "queued", "terminating"})
 
 	if userID != "" {
 		q = q.Eq("user_id", userID)
@@ -380,12 +426,13 @@ func (s *DeploymentStore) CountUserDeploymentsSince(ctx context.Context, userID 
 }
 
 // SumActiveAdmissionWeights sums admitted_cpu_m / admitted_mem_mi for rows with
-// status IN ('provisioning','running'). NULL weights count as 0.
+// status IN ('provisioning','running','terminating'). NULL weights count as 0.
+// Terminating stays in the sum until the namespace is gone.
 func (s *DeploymentStore) SumActiveAdmissionWeights(ctx context.Context) (AdmissionOccupancy, error) {
 	s.observe("sum_active_admission_weights")
 	data, _, err := s.client.From("cloud_deployments").
 		Select("admitted_cpu_m,admitted_mem_mi", "exact", false).
-		In("status", []string{"running", "provisioning"}).
+		In("status", []string{"running", "provisioning", "terminating"}).
 		Execute()
 	if err != nil {
 		return AdmissionOccupancy{}, fmt.Errorf("store.SumActiveAdmissionWeights: %w", err)

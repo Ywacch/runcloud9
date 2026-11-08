@@ -19,6 +19,10 @@ const (
 
 	statusProvisioning = "provisioning"
 	statusQueued       = "queued"
+	statusRunning      = "running"
+	statusFailed       = "failed"
+	statusTerminating  = "terminating"
+	statusTerminated   = "terminated"
 )
 
 var (
