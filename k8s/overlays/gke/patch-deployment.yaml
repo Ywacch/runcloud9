@@ -19,3 +19,7 @@ spec:
               value: "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
             - name: TEMPLATE_IMAGE_REGISTRY
               value: "us-central1-docker.pkg.dev/runcloud9-505411/cloud9-images"
+            # One worker per session in a 50-wide wave, so every delete starts in the first round.
+            # Diagnostics slot count stays at the process default of 8.
+            - name: TEARDOWN_WORKERS
+              value: "50"
