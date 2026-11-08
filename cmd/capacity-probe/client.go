@@ -14,10 +14,11 @@ import (
 )
 
 const (
-	// apiHTTPTimeout is the whole-request budget for create, poll, and delete.
-	// 60s expired while the edge was still holding DELETE (and slow POST) headers,
-	// which left session namespaces behind after an otherwise successful wave.
-	apiHTTPTimeout = 3 * time.Minute
+	// apiHTTPTimeout is the whole-request budget for create and status polls.
+	// DELETE uses deleteRequestTimeout. The API records terminating and returns.
+	// A short DELETE budget makes a regression fail instead of hiding it.
+	apiHTTPTimeout       = 3 * time.Minute
+	deleteRequestTimeout = 30 * time.Second
 )
 
 type apiClient struct {
@@ -116,6 +117,8 @@ func (c *apiClient) GetDeployment(ctx context.Context, id string) (deploymentSta
 }
 
 func (c *apiClient) DeleteDeployment(ctx context.Context, id string) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, deleteRequestTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+"/deployments/"+id, nil)
 	if err != nil {
 		return 0, err

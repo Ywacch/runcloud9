@@ -49,6 +49,8 @@ type Handler struct {
 	provisionMu          sync.Mutex
 	emitProvisionMu      sync.Mutex
 	provisionCancel      map[string]context.CancelFunc
+	teardownOnce         sync.Once
+	teardown             *teardownQueue
 	door                 *provisionDoor
 	admitMu              sync.Mutex
 	roomBudget           *admission.Config
@@ -80,6 +82,8 @@ type deploymentStore interface {
 	CreateDeployment(ctx context.Context, params store.CreateDeploymentParams) (string, error)
 	SumActiveAdmissionWeights(ctx context.Context) (store.AdmissionOccupancy, error)
 	UpdateStatus(ctx context.Context, namespace, status string) error
+	ClaimStatus(ctx context.Context, namespace string, from []string, to string) (bool, error)
+	ListDeploymentsByStatus(ctx context.Context, statuses []string) ([]store.DeploymentRow, error)
 	UpdateExpiresAt(ctx context.Context, namespace string, expiresAt time.Time) error
 	UpdateMetricsSummary(ctx context.Context, namespace string, patch map[string]any) error
 	GetDeployment(ctx context.Context, namespace string) (store.DeploymentRow, error)
@@ -1241,6 +1245,10 @@ func formatDistributionDetail(dist map[string]int) map[string]string {
 }
 
 func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
+	defer func() {
+		h.observeDeleteRequest(time.Since(started))
+	}()
 	//PathValue is Go 1.22+:extracts {id} from the URL pattern.
 	namespace := r.PathValue("id")
 	if namespace == "" {
@@ -1266,91 +1274,38 @@ func (h *Handler) handleDeleteDeployment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	h.cancelProvision(namespace)
-	// Stop load generator if running (prevents requests to a dying namespace)
-	if h.loadgen != nil {
-		_ = h.loadgen.Stop(r.Context(), namespace)
+	// 204 means the row is terminating or already terminal. The namespace may still exist.
+	switch owned.Status {
+	case statusTerminated:
+		w.WriteHeader(http.StatusNoContent)
+		return
+	case statusTerminating:
+		h.enqueueTeardown(namespace, time.Now(), teardownReasonDelete)
+		w.WriteHeader(http.StatusNoContent)
+		return
 	}
+
+	if h.store == nil {
+		writeError(w, http.StatusInternalServerError, "deployment store unavailable")
+		return
+	}
+	claimCtx, claimCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ok, err := h.store.ClaimStatus(claimCtx, namespace, statusesThatMayTearDown, statusTerminating)
+	claimCancel()
+	if err != nil {
+		log.Printf("delete claim %s: %v", namespace, err)
+		writeError(w, http.StatusInternalServerError, "could not record teardown")
+		return
+	}
+	if !ok {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	h.cancelProvision(namespace)
 	if h.scheduler != nil {
 		h.scheduler.Cancel(namespace)
 	}
-	tpl := ""
-	var row store.DeploymentRow
-	var rowErr error
-	if h.store != nil {
-		row, rowErr = h.store.GetDeployment(r.Context(), namespace)
-		if rowErr == nil {
-			tpl = row.Template
-		}
-	}
-	// Persist final metrics summary before teardown (read-modify-write preserves 'seeded' and other fields).
-	if h.metricsCollector != nil && h.store != nil {
-		design, _ := deployer.DesignFromMap(row.Design)
-		if design == nil {
-			design = &deployer.DeploymentDesign{}
-		}
-		topo := MetricsTopologyFromDeploymentDesign(design, tpl)
-		dm, err := h.metricsCollector.Collect(r.Context(), namespace, tpl, topo)
-		if err == nil && dm != nil {
-			var base map[string]any
-			if rowErr == nil {
-				base = row.MetricsSummary
-			}
-			hist := h.metricsCollector.DownsampledSessionHistory(namespace)
-			summary := h.metricsCollector.SessionSummary(namespace, base, dm)
-			h.EnrichTeardownSummary(r.Context(), namespace, row, summary, hist, dm)
-			summary["terminated_at"] = time.Now().Format(time.RFC3339)
-			if rowErr == nil {
-				summary["actual_duration_seconds"] = int(time.Since(row.CreatedAt).Seconds())
-			}
-			_ = h.store.SetMetricsSummary(r.Context(), namespace, summary)
-		}
-	}
-	if h.diagnostics != nil {
-		createdAt := ""
-		runningAt := ""
-		durationSeconds := 0
-		if rowErr == nil {
-			createdAt = row.CreatedAt.UTC().Format(time.RFC3339)
-			durationSeconds = int(time.Since(row.CreatedAt).Seconds())
-			if raw, ok := row.MetricsSummary["running_at"].(string); ok {
-				runningAt = raw
-			}
-		}
-		diagCtx, diagCancel := context.WithTimeout(context.Background(), 20*time.Second)
-		url, signatures, partial, diagErr := h.diagnostics.Collect(diagCtx, diagnostics.CollectParams{
-			Namespace:        namespace,
-			Template:         tpl,
-			Outcome:          "success",
-			CollectionReason: "delete",
-			CreatedAt:        createdAt,
-			RunningAt:        runningAt,
-			DurationSeconds:  durationSeconds,
-		})
-		diagCancel()
-		if diagErr != nil {
-			log.Printf("DDC: delete-path collection failed for %s: %v", namespace, diagErr)
-		}
-		h.writeDiagnosticsSummary(namespace, url, "success", "delete", signatures, partial, diagErr)
-	}
-	if h.metricsCollector != nil {
-		h.metricsCollector.Cleanup(namespace)
-	}
-	h.lbEndpointsWatch.Stop(namespace)
-	h.ForgetActAsCache(namespace)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	d := h.deployers["db"]
-	if err := d.Teardown(ctx, namespace); err != nil {
-		log.Printf("teardown %s: %v", namespace, err)
-		writeError(w, http.StatusInternalServerError, "teardown failed")
-		return
-	}
-	if h.store != nil {
-		_ = h.store.UpdateStatus(context.Background(), namespace, "terminated")
-	}
-	h.SchedulePostmortemAfterTeardown(namespace)
-	h.wakeDeployQueue()
+	h.enqueueTeardown(namespace, time.Now(), teardownReasonDelete)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1391,6 +1346,19 @@ func (h *Handler) isDeploymentStatus(namespace, status string) bool {
 		return false
 	}
 	return row.Status == status
+}
+
+// provisionWritesBlocked reports that teardown already owns the row.
+// A later provision write must not replace terminating or terminated.
+func (h *Handler) provisionWritesBlocked(namespace string) bool {
+	if h.store == nil {
+		return false
+	}
+	row, err := h.store.GetDeployment(context.Background(), namespace)
+	if err != nil {
+		return false
+	}
+	return row.Status == statusTerminating || row.Status == statusTerminated
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {

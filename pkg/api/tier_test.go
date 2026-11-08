@@ -39,6 +39,12 @@ func (s *stubUserStore) SumActiveAdmissionWeights(context.Context) (store.Admiss
 	return store.AdmissionOccupancy{}, nil
 }
 func (s *stubUserStore) UpdateStatus(context.Context, string, string) error { return nil }
+func (s *stubUserStore) ClaimStatus(context.Context, string, []string, string) (bool, error) {
+	return false, nil
+}
+func (s *stubUserStore) ListDeploymentsByStatus(context.Context, []string) ([]store.DeploymentRow, error) {
+	return nil, nil
+}
 func (s *stubUserStore) UpdateExpiresAt(context.Context, string, time.Time) error {
 	return nil
 }

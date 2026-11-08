@@ -88,8 +88,7 @@ func main() {
 
 	tracker := &deploymentTracker{}
 	defer func() {
-		// Covers a queued delete pass (parallelism 4, 3m HTTP budget each)
-		// plus the follow-up status poll inside cleanupTracked.
+		// DELETE returns after the row write. The poll waits until terminated.
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer cancel()
 		cleanupTracked(cleanupCtx, client, tracker)

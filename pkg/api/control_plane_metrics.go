@@ -21,26 +21,32 @@ var wsFrameBytesBuckets = []float64{1024, 2048, 4096, 8192, 16384, 32768, 65536,
 // controlPlaneMetrics holds Prometheus collectors for cloud9-api provision timing.
 // It uses a private registry so this process does not register app-side metrics.
 type controlPlaneMetrics struct {
-	registry              *prometheus.Registry
-	admitTotal            *prometheus.CounterVec
-	deployQueueDepth      prometheus.Gauge
-	doorWaitSeconds       prometheus.Histogram
-	provisionSeconds      prometheus.Histogram
-	orchestrationSeconds  prometheus.Histogram
-	teardownLagSeconds    prometheus.Histogram
-	websocketLive         prometheus.Gauge
-	informerQueueDepth    *prometheus.GaugeVec
-	informerEventAge      *prometheus.GaugeVec
-	informerEventMu       sync.Mutex
-	informerLastEvent     map[string]time.Time
-	metricsQueriesTotal   *prometheus.CounterVec
-	k8sRequestsTotal      *prometheus.CounterVec
-	k8sRequestSeconds     *prometheus.HistogramVec
-	k8sThrottleWaitsTotal prometheus.Counter
-	promQueriesTotal      *prometheus.CounterVec
-	collectSeconds        *prometheus.HistogramVec
-	wsFrameBytes          prometheus.Histogram
-	storeRequestsTotal    *prometheus.CounterVec
+	registry                *prometheus.Registry
+	admitTotal              *prometheus.CounterVec
+	deployQueueDepth        prometheus.Gauge
+	doorWaitSeconds         prometheus.Histogram
+	provisionSeconds        prometheus.Histogram
+	orchestrationSeconds    prometheus.Histogram
+	teardownLagSeconds      prometheus.Histogram
+	teardownCompleteSeconds prometheus.Histogram
+	deleteRequestSeconds    prometheus.Histogram
+	teardownQueueDepth      prometheus.Gauge
+	teardownInflight        prometheus.Gauge
+	teardownDiagnostics     *prometheus.CounterVec
+	orphanNamespaces        prometheus.Gauge
+	websocketLive           prometheus.Gauge
+	informerQueueDepth      *prometheus.GaugeVec
+	informerEventAge        *prometheus.GaugeVec
+	informerEventMu         sync.Mutex
+	informerLastEvent       map[string]time.Time
+	metricsQueriesTotal     *prometheus.CounterVec
+	k8sRequestsTotal        *prometheus.CounterVec
+	k8sRequestSeconds       *prometheus.HistogramVec
+	k8sThrottleWaitsTotal   prometheus.Counter
+	promQueriesTotal        *prometheus.CounterVec
+	collectSeconds          *prometheus.HistogramVec
+	wsFrameBytes            prometheus.Histogram
+	storeRequestsTotal      *prometheus.CounterVec
 }
 
 func newControlPlaneMetrics() *controlPlaneMetrics {
@@ -72,8 +78,34 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 	})
 	m.teardownLagSeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name:    "cloud9_teardown_lag_seconds",
-		Help:    "Seconds from expires_at to namespace delete start.",
+		Help:    "Seconds from the delete request, or from expires_at when that is earlier, until namespace delete is issued.",
 		Buckets: controlPlaneDurationBuckets,
+	})
+	m.teardownCompleteSeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "cloud9_teardown_complete_seconds",
+		Help:    "Seconds from namespace delete issued until the namespace is gone.",
+		Buckets: controlPlaneDurationBuckets,
+	})
+	m.deleteRequestSeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "cloud9_delete_request_seconds",
+		Help:    "HTTP latency of DELETE /deployments/{id}.",
+		Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5},
+	})
+	m.teardownQueueDepth = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "cloud9_teardown_queue_depth",
+		Help: "Teardown jobs waiting for a worker.",
+	})
+	m.teardownInflight = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "cloud9_teardown_inflight",
+		Help: "Teardown jobs running on a worker.",
+	})
+	m.teardownDiagnostics = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloud9_teardown_diagnostics_total",
+		Help: "Teardown diagnostics attempts by result.",
+	}, []string{"result"})
+	m.orphanNamespaces = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "cloud9_orphan_namespaces",
+		Help: "Session namespaces with no active row for more than 5 minutes.",
 	})
 	m.websocketLive = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "cloud9_websocket_live",
@@ -130,6 +162,12 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		m.provisionSeconds,
 		m.orchestrationSeconds,
 		m.teardownLagSeconds,
+		m.teardownCompleteSeconds,
+		m.deleteRequestSeconds,
+		m.teardownQueueDepth,
+		m.teardownInflight,
+		m.teardownDiagnostics,
+		m.orphanNamespaces,
 		m.websocketLive,
 		m.informerQueueDepth,
 		m.informerEventAge,
@@ -153,6 +191,9 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 	// CounterVec and HistogramVec omit HELP until a label set exists.
 	m.k8sRequestsTotal.WithLabelValues("get", "pods", "unknown")
 	m.k8sRequestSeconds.WithLabelValues("get", "pods", "unknown")
+	for _, result := range []string{"collected", "skipped", "error"} {
+		m.teardownDiagnostics.WithLabelValues(result)
+	}
 	return m
 }
 
@@ -358,16 +399,53 @@ func (h *Handler) RefreshWebsocketLiveGauge() {
 	h.refreshWebsocketLiveGauge()
 }
 
-// ObserveTeardownLag records lag from session expiry to delete start.
-func (h *Handler) ObserveTeardownLag(expiresAt time.Time) {
-	if h == nil || h.cpMetrics == nil || expiresAt.IsZero() {
+// ObserveTeardownLag records lag from intentAt until namespace delete is issued.
+// intentAt is the delete request time, or expires_at when that is earlier.
+func (h *Handler) ObserveTeardownLag(intentAt time.Time) {
+	if h == nil || h.cpMetrics == nil || intentAt.IsZero() {
 		return
 	}
-	lag := time.Since(expiresAt)
+	lag := time.Since(intentAt)
 	if lag < 0 {
 		lag = 0
 	}
 	h.cpMetrics.observeTeardownLag(lag.Seconds())
+}
+
+func (h *Handler) observeDeleteRequest(d time.Duration) {
+	if h == nil || h.cpMetrics == nil || d < 0 {
+		return
+	}
+	h.cpMetrics.deleteRequestSeconds.Observe(d.Seconds())
+}
+
+func (h *Handler) observeTeardownComplete(d time.Duration) {
+	if h == nil || h.cpMetrics == nil || d < 0 {
+		return
+	}
+	h.cpMetrics.teardownCompleteSeconds.Observe(d.Seconds())
+}
+
+func (h *Handler) setTeardownGauges(depth, inflight int) {
+	if h == nil || h.cpMetrics == nil {
+		return
+	}
+	h.cpMetrics.teardownQueueDepth.Set(float64(depth))
+	h.cpMetrics.teardownInflight.Set(float64(inflight))
+}
+
+func (h *Handler) incTeardownDiagnostics(result string) {
+	if h == nil || h.cpMetrics == nil || result == "" {
+		return
+	}
+	h.cpMetrics.teardownDiagnostics.WithLabelValues(result).Inc()
+}
+
+func (h *Handler) setOrphanNamespaces(n int) {
+	if h == nil || h.cpMetrics == nil || n < 0 {
+		return
+	}
+	h.cpMetrics.orphanNamespaces.Set(float64(n))
 }
 
 func (h *Handler) observeAdmitResult(ctx context.Context, status string, err error) {
