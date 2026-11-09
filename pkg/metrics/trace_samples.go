@@ -73,6 +73,11 @@ func (c *MetricsCollector) maybeScrapeTraceSamples(ctx context.Context, namespac
 	if tick%traceSampleScrapeEveryCollect != 0 {
 		return
 	}
+	release, ok := c.beginSideWorkScrape(ctx, namespace)
+	if !ok {
+		return
+	}
+	defer release()
 	c.mergeTraceSamples(namespace, c.scrapeTraceSamples(ctx, namespace))
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/kubeobs"
 	"github.com/ywacch/cloud9/pkg/loadgen"
 	metricshub "github.com/ywacch/cloud9/pkg/metrics/hub"
+	"github.com/ywacch/cloud9/pkg/metrics/sidework"
 	"github.com/ywacch/cloud9/pkg/metrics/signals"
 	"github.com/ywacch/cloud9/pkg/probes"
 	"github.com/ywacch/cloud9/pkg/templates"
@@ -97,13 +98,17 @@ type MetricsCollector struct {
 	clusterState          *clusterstate.Cache
 	inv                   inventory
 	metricsHub            *metricshub.Hub
+	sideWork              *sidework.Pool
+	sideWorkMu            sync.Mutex
+	sideWorkLast          map[string]time.Time
+	sideWorkCadence       time.Duration
 }
 
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
 // metricsClient may be nil; DB/MQ/LB container usage then falls back to kube requests when cAdvisor is empty.
 func NewMetricsCollector(prometheusURL string, lg loadgen.LoadGenerator, clientset kubernetes.Interface, metricsClient PodMetricsProvider, eventBus *EventBus) *MetricsCollector {
 	observer := probes.NewObserver(probes.WithKubeClient(clientset))
-	return &MetricsCollector{
+	c := &MetricsCollector{
 		prometheusURL:        prometheusURL,
 		httpClient:           &http.Client{Timeout: 5 * time.Second},
 		scrapeClient:         &http.Client{Timeout: 2 * time.Second},
@@ -120,6 +125,8 @@ func NewMetricsCollector(prometheusURL string, lg loadgen.LoadGenerator, clients
 		pgHold:               make(map[string]bool),
 		clusterSampleEnabled: false,
 	}
+	initSideWork(c)
+	return c
 }
 
 // SetDebugMetrics enables/disables per-tick metric source comparison logs.
@@ -216,6 +223,11 @@ func (c *MetricsCollector) Cleanup(namespace string) {
 	if c.sessionAcc != nil {
 		c.sessionAcc.Cleanup(namespace)
 	}
+	c.sideWorkMu.Lock()
+	if c.sideWorkLast != nil {
+		delete(c.sideWorkLast, namespace)
+	}
+	c.sideWorkMu.Unlock()
 	c.scaleDesiredMu.Lock()
 	if c.scaleDesired != nil {
 		delete(c.scaleDesired, namespace)

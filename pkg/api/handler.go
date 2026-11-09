@@ -170,6 +170,7 @@ func NewHandler(
 		h.metricsCollector.SetSignalCompareObserver(h.cpMetrics.observeSignalCompare)
 		h.metricsCollector.SetCollectObserver(h.cpMetrics.observeCollectSeconds)
 		h.metricsCollector.SetFrameBytesObserver(h.cpMetrics.observeFrameBytes)
+		h.metricsCollector.SetSideWorkInflightObserver(h.cpMetrics.setSideWorkInflight)
 		h.cpMetrics.RegisterRingGauge(func() float64 {
 			return float64(h.metricsCollector.RingBytes())
 		})

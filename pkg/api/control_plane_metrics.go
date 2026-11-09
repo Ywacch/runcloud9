@@ -54,6 +54,7 @@ type controlPlaneMetrics struct {
 	hubSignalAbsent         *prometheus.CounterVec
 	hubUnlabeledSeries      *prometheus.CounterVec
 	signalCompareTotal      *prometheus.CounterVec
+	sideWorkInflight        prometheus.Gauge
 }
 
 func newControlPlaneMetrics() *controlPlaneMetrics {
@@ -182,6 +183,10 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		Name: "cloud9_metrics_signal_compare_total",
 		Help: "Legacy PromQL comparisons during signal migration.",
 	}, []string{"signal", "result"})
+	m.sideWorkInflight = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "cloud9_sidework_inflight",
+		Help: "Direct scrape and diagnostics tasks holding a side-work slot.",
+	})
 
 	reg.MustRegister(
 		m.admitTotal,
@@ -212,6 +217,7 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		m.hubSignalAbsent,
 		m.hubUnlabeledSeries,
 		m.signalCompareTotal,
+		m.sideWorkInflight,
 	)
 	for _, name := range []string{"pod", "deployment", "statefulset", "hpa", "endpoints", "endpointslice"} {
 		m.informerQueueDepth.WithLabelValues(name).Set(1)
@@ -433,6 +439,13 @@ func (m *controlPlaneMetrics) setWebsocketLive(n float64) {
 		return
 	}
 	m.websocketLive.Set(n)
+}
+
+func (m *controlPlaneMetrics) setSideWorkInflight(n int) {
+	if m == nil {
+		return
+	}
+	m.sideWorkInflight.Set(float64(n))
 }
 
 // SetInformerQueueDepth sets cloud9_informer_queue_depth. When FIFO depth is unavailable,

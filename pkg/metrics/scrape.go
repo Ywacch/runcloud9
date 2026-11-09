@@ -17,6 +17,11 @@ func (c *MetricsCollector) scrapeNginxStubActiveConnections(ctx context.Context,
 	if c == nil || c.scrapeClient == nil {
 		return 0
 	}
+	release, ok := c.beginSideWorkScrape(ctx, namespace)
+	if !ok {
+		return 0
+	}
+	defer release()
 	u := fmt.Sprintf("http://lb.%s.svc.cluster.local/nginx_status", namespace)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -102,6 +107,11 @@ func (c *MetricsCollector) scrapeConsistencySamples(ctx context.Context, namespa
 	if c == nil || c.scrapeClient == nil || namespace == "" {
 		return cacheStaleSample{}, nil
 	}
+	release, ok := c.beginSideWorkScrape(ctx, namespace)
+	if !ok {
+		return cacheStaleSample{}, nil
+	}
+	defer release()
 	u := fmt.Sprintf("http://app-server.%s.svc.cluster.local:8080/consistency/samples", namespace)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
