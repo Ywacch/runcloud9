@@ -14,6 +14,23 @@ func TestDBResources_matchesSmallProfile(t *testing.T) {
 	assertResourceRequirementsEqual(t, got, want)
 }
 
+func TestComponentRegistry_mqPrometheusAnnotations(t *testing.T) {
+	t.Parallel()
+	spec, ok := componentRegistry["mq"]
+	if !ok {
+		t.Fatal("mq missing from registry")
+	}
+	if spec.Annotations["prometheus.io/scrape"] != "true" {
+		t.Fatalf("scrape: %+v", spec.Annotations)
+	}
+	if spec.Annotations["prometheus.io/port"] != "15692" {
+		t.Fatalf("port: %+v", spec.Annotations)
+	}
+	if spec.Annotations["prometheus.io/path"] != "/metrics" {
+		t.Fatalf("path: %+v", spec.Annotations)
+	}
+}
+
 func TestComponentDefaultResources_mqAndLb(t *testing.T) {
 	t.Parallel()
 

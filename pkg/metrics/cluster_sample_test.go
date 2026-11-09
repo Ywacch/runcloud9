@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func promNSValueJSON(values map[string]string) map[string]any {
@@ -70,6 +71,13 @@ func TestClusterSample_TwoNamespacesOneRefresh(t *testing.T) {
 
 	_, _ = c.Collect(context.Background(), "ns-a", "", TopologyFlags{})
 	firstCalls := promCalls.Load()
+	// The shared sample expires after one publisher tick. A slow first Collect
+	// (parallel package tests) must not force a second refresh here.
+	c.sampleMu.Lock()
+	if c.clusterSample != nil {
+		c.clusterSample.fetchedAt = time.Now()
+	}
+	c.sampleMu.Unlock()
 	_, _ = c.Collect(context.Background(), "ns-b", "", TopologyFlags{})
 	secondCalls := promCalls.Load()
 

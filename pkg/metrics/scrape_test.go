@@ -1,9 +1,7 @@
 package metrics
 
 import (
-	"math"
 	"testing"
-	"time"
 )
 
 func TestParseRabbitMQMetricsText(t *testing.T) {
@@ -28,23 +26,6 @@ rabbitmq_resident_memory_limit_bytes 4096
 	}
 	if memUsed != 2048 || memLimit != 4096 {
 		t.Fatalf("memory parse mismatch: memUsed=%v memLimit=%v", memUsed, memLimit)
-	}
-}
-
-func TestRabbitCounterRates(t *testing.T) {
-	t.Parallel()
-	c := &MetricsCollector{mqRates: make(map[string]rabbitCounterSnapshot)}
-	ns := "cloud9-test"
-	t0 := time.Unix(1000, 0)
-
-	p, q := c.rabbitCounterRates(ns, 100, 80, t0)
-	if p != 0 || q != 0 {
-		t.Fatalf("first scrape rates must be zero, got produce=%v consume=%v", p, q)
-	}
-
-	p, q = c.rabbitCounterRates(ns, 130, 95, t0.Add(5*time.Second))
-	if math.Abs(p-6) > 0.001 || math.Abs(q-3) > 0.001 {
-		t.Fatalf("delta rates mismatch: produce=%v consume=%v", p, q)
 	}
 }
 

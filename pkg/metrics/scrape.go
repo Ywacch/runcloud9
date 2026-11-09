@@ -8,16 +8,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 )
-
-type rabbitCounterSnapshot struct {
-	received  float64
-	delivered float64
-	at        time.Time
-}
 
 // scrapeNginxStubActiveConnections returns active connection count from lb:80/nginx_status, or 0 on any failure.
 func (c *MetricsCollector) scrapeNginxStubActiveConnections(ctx context.Context, namespace string) float64 {
@@ -44,35 +37,7 @@ func (c *MetricsCollector) scrapeNginxStubActiveConnections(ctx context.Context,
 	return parseNginxActiveConnections(string(body))
 }
 
-// scrapeRabbitMQPrometheus reads RabbitMQ native Prometheus metrics from :15692.
-// Rates are computed as counter deltas between collection ticks.
-func (c *MetricsCollector) scrapeRabbitMQPrometheus(ctx context.Context, namespace string) (depth, produce, consume, ready, unacked, memUsed, memLimit float64) {
-	var receivedTotal, deliveredTotal float64
-	if c == nil || c.scrapeClient == nil {
-		return 0, 0, 0, 0, 0, 0, 0
-	}
-	u := fmt.Sprintf("http://mq.%s.svc.cluster.local:15692/metrics", namespace)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return 0, 0, 0, 0, 0, 0, 0
-	}
-	resp, err := c.scrapeClient.Do(req)
-	if err != nil {
-		return 0, 0, 0, 0, 0, 0, 0
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return 0, 0, 0, 0, 0, 0, 0
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return 0, 0, 0, 0, 0, 0, 0
-	}
-	depth, ready, unacked, receivedTotal, deliveredTotal, memUsed, memLimit = parseRabbitMQMetricsText(string(body))
-	produce, consume = c.rabbitCounterRates(namespace, receivedTotal, deliveredTotal, time.Now())
-	return depth, produce, consume, ready, unacked, memUsed, memLimit
-}
-
+// parseRabbitMQMetricsText parses rabbitmq_prometheus plugin exposition (used in tests).
 func parseRabbitMQMetricsText(raw string) (depth, ready, unacked, receivedTotal, deliveredTotal, memUsed, memLimit float64) {
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
@@ -109,36 +74,6 @@ func parseRabbitMQMetricsText(raw string) (depth, ready, unacked, receivedTotal,
 		}
 	}
 	return depth, ready, unacked, receivedTotal, deliveredTotal, memUsed, memLimit
-}
-
-func (c *MetricsCollector) rabbitCounterRates(namespace string, receivedTotal, deliveredTotal float64, now time.Time) (produce, consume float64) {
-	if c == nil {
-		return 0, 0
-	}
-	c.mqRateMu.Lock()
-	defer c.mqRateMu.Unlock()
-	prev, ok := c.mqRates[namespace]
-	c.mqRates[namespace] = rabbitCounterSnapshot{
-		received:  receivedTotal,
-		delivered: deliveredTotal,
-		at:        now,
-	}
-	if !ok {
-		return 0, 0
-	}
-	dt := now.Sub(prev.at).Seconds()
-	if dt <= 0 {
-		return 0, 0
-	}
-	produce = (receivedTotal - prev.received) / dt
-	consume = (deliveredTotal - prev.delivered) / dt
-	if produce < 0 {
-		produce = 0
-	}
-	if consume < 0 {
-		consume = 0
-	}
-	return produce, consume
 }
 
 type consistencySamplesPayload struct {
