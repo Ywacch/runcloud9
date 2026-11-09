@@ -374,15 +374,21 @@ func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel strin
 		io.ReadLatency, _ = c.query(ctx, redisStorageReadLatencyQuery(ns, template))
 		io.WriteLatency, _ = c.query(ctx, redisStorageWriteLatencyQuery(ns, template))
 	default:
-		if prov.ReadQuery != nil {
-			io.ReadRate, _ = c.query(ctx, prov.ReadQuery(ns))
-		}
-		if prov.WriteQuery != nil {
-			io.WriteRate, _ = c.query(ctx, prov.WriteQuery(ns))
+		switch engine {
+		case StorageEnginePostgreSQL:
+			io.ReadRate, _ = c.postgresUserTableReadRate(ctx, ns)
+			io.WriteRate, _ = c.postgresUserTableWriteRate(ctx, ns)
+		default:
+			if prov.ReadQuery != nil {
+				io.ReadRate, _ = c.query(ctx, prov.ReadQuery(ns))
+			}
+			if prov.WriteQuery != nil {
+				io.WriteRate, _ = c.query(ctx, prov.WriteQuery(ns))
+			}
 		}
 		if engine == StorageEnginePostgreSQL {
-			readTotal, _ := c.query(ctx, postgresUserTableReadTotal9mQuery(ns))
-			writeTotal, _ := c.query(ctx, postgresUserTableWriteTotal9mQuery(ns))
+			readTotal, _ := c.postgresUserTableReadTotal(ctx, ns)
+			writeTotal, _ := c.postgresUserTableWriteTotal(ctx, ns)
 			if !c.postgresSessionHeld(ns) {
 				readByPod := map[string]float64{postgresClusterTotalKey: readTotal}
 				writeByPod := map[string]float64{postgresClusterTotalKey: writeTotal}
@@ -408,7 +414,12 @@ func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel strin
 		}
 	}
 	if prov.ErrorRateQuery != nil {
-		io.ErrorRate, _ = c.query(ctx, prov.ErrorRateQuery(ns))
+		switch engine {
+		case StorageEnginePostgreSQL:
+			io.ErrorRate, _ = c.postgresXactRollbackRate(ctx, ns)
+		default:
+			io.ErrorRate, _ = c.query(ctx, prov.ErrorRateQuery(ns))
+		}
 	}
 	return io
 }

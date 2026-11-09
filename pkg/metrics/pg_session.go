@@ -72,11 +72,11 @@ func (c *MetricsCollector) queryPostgresEngineTotals(ctx context.Context, ns str
 	if c == nil {
 		return t
 	}
-	if v, ok, err := c.queryScalar(ctx, postgresUserTableReadTotal9mQuery(ns)); err == nil && ok {
+	if v, ok := c.postgresUserTableReadTotal(ctx, ns); ok {
 		t.read = v
 		t.readOK = true
 	}
-	if v, ok, err := c.queryScalar(ctx, postgresUserTableWriteTotal9mQuery(ns)); err == nil && ok {
+	if v, ok := c.postgresUserTableWriteTotal(ctx, ns); ok {
 		t.write = v
 		t.writeOK = true
 	}

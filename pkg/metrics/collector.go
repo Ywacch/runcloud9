@@ -877,14 +877,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	))
 	cmDB.MaxConnections = maxConn
 	// PostgreSQL-native throughput from postgres_exporter; fallback to app-side DB query rate.
-	pgTxnRate, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(pg_stat_database_xact_commit{namespace=%q,datname!=""}%s))`,
-		ns, promRateRange(),
-	))
-	pgRollbackRate, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(pg_stat_database_xact_rollback{namespace=%q,datname!=""}%s))`,
-		ns, promRateRange(),
-	))
+	pgTxnRate, _ := c.postgresXactCommitRate(ctx, ns)
+	pgRollbackRate, _ := c.postgresXactRollbackRate(ctx, ns)
 	if pgTxnRate+pgRollbackRate > 0 {
 		cmDB.RequestRate = pgTxnRate + pgRollbackRate
 	} else if dbQPSPresent {

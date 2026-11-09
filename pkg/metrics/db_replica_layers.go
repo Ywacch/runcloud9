@@ -423,7 +423,7 @@ func (c *MetricsCollector) dbLayerRequestRateByPod(ctx context.Context, ns, writ
 	if c == nil || c.prometheusURL == "" {
 		return nil
 	}
-	return mapPostgresLayerRequestRates(c.queryMultiResult(ctx, postgresXactRateByPodQuery(ns), "pod"), writerPod)
+	return mapPostgresLayerRequestRates(c.postgresXactRateByPod(ctx, ns), writerPod)
 }
 
 func postgresClusterNumBackendsQuery(ns string) string {
@@ -489,7 +489,7 @@ func (c *MetricsCollector) enrichDBLayerEngineMetrics(ctx context.Context, ns st
 	}
 	held := c.postgresSessionHeld(ns)
 
-	xactByPod := c.queryMultiResult(ctx, postgresXactTotalByPodQuery(ns), "pod")
+	xactByPod := c.postgresXactTotalByPod(ctx, ns)
 	xactByLayer := mapPostgresLayerPodValues(xactByPod, split.writerPod)
 	connByPod := c.postgresConnectionsByPod(ctx, ns)
 	connByLayer := mapPostgresLayerPodValues(connByPod, split.writerPod)
