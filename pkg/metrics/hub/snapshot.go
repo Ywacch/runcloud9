@@ -80,3 +80,70 @@ func metaStaleAbsent(s *Snapshot, id signals.ID) (present bool, stale bool) {
 	meta := s.meta[id]
 	return !meta.Absent, meta.Stale
 }
+
+// ByPod returns per-pod values for one namespace and signal.
+func (s *Snapshot) ByPod(namespace string, id signals.ID) (values map[string]float64, present bool, stale bool) {
+	if s == nil || namespace == "" {
+		return nil, false, false
+	}
+	m, ok := s.perPod[id]
+	if !ok {
+		p, st := metaStaleAbsent(s, id)
+		return nil, p, st
+	}
+	inner, ok := m[namespace]
+	if !ok || len(inner) == 0 {
+		p, st := metaStaleAbsent(s, id)
+		return nil, p, st
+	}
+	out := make(map[string]float64, len(inner))
+	for k, v := range inner {
+		out[k] = v
+	}
+	meta := s.meta[id]
+	return out, !meta.Absent, meta.Stale
+}
+
+// Scalar returns one float for a namespace from snapshot data (sums PerApp and PerPod maps).
+func (s *Snapshot) Scalar(namespace string, id signals.ID, shape signals.Shape) (float64, bool, bool) {
+	if s == nil || namespace == "" {
+		return 0, false, false
+	}
+	switch shape {
+	case signals.PerNamespace:
+		m, ok := s.perNS[id]
+		if !ok {
+			p, st := metaStaleAbsent(s, id)
+			return 0, p, st
+		}
+		v, ok := m[namespace]
+		if !ok {
+			p, st := metaStaleAbsent(s, id)
+			return 0, p, st
+		}
+		meta := s.meta[id]
+		return v, true, meta.Stale
+	case signals.PerApp:
+		apps, present, stale := s.ByApp(namespace, id)
+		if !present || len(apps) == 0 {
+			return 0, false, stale
+		}
+		var sum float64
+		for _, v := range apps {
+			sum += v
+		}
+		return sum, true, stale
+	case signals.PerPod:
+		pods, present, stale := s.ByPod(namespace, id)
+		if !present || len(pods) == 0 {
+			return 0, false, stale
+		}
+		var sum float64
+		for _, v := range pods {
+			sum += v
+		}
+		return sum, true, stale
+	default:
+		return 0, false, false
+	}
+}

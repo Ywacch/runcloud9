@@ -53,6 +53,7 @@ type controlPlaneMetrics struct {
 	hubSignalErrors         *prometheus.CounterVec
 	hubSignalAbsent         *prometheus.CounterVec
 	hubUnlabeledSeries      *prometheus.CounterVec
+	signalCompareTotal      *prometheus.CounterVec
 }
 
 func newControlPlaneMetrics() *controlPlaneMetrics {
@@ -177,6 +178,10 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		Name: "cloud9_metrics_hub_unlabeled_series_total",
 		Help: "Dropped Prometheus samples without a namespace label.",
 	}, []string{"signal"})
+	m.signalCompareTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloud9_metrics_signal_compare_total",
+		Help: "Legacy PromQL comparisons during signal migration.",
+	}, []string{"signal", "result"})
 
 	reg.MustRegister(
 		m.admitTotal,
@@ -206,6 +211,7 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		m.hubSignalErrors,
 		m.hubSignalAbsent,
 		m.hubUnlabeledSeries,
+		m.signalCompareTotal,
 	)
 	for _, name := range []string{"pod", "deployment", "statefulset", "hpa", "endpoints", "endpointslice"} {
 		m.informerQueueDepth.WithLabelValues(name).Set(1)
@@ -226,8 +232,17 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		m.hubSignalErrors.WithLabelValues(id)
 		m.hubSignalAbsent.WithLabelValues(id)
 		m.hubUnlabeledSeries.WithLabelValues(id)
+		m.signalCompareTotal.WithLabelValues(id, "match")
+		m.signalCompareTotal.WithLabelValues(id, "mismatch")
 	}
 	return m
+}
+
+func (m *controlPlaneMetrics) observeSignalCompare(signal, result string) {
+	if m == nil || signal == "" || result == "" {
+		return
+	}
+	m.signalCompareTotal.WithLabelValues(signal, result).Inc()
 }
 
 // HubMetricsObserver returns a hub.ObserveHub wired to control-plane Prometheus metrics.

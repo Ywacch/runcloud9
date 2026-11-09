@@ -132,6 +132,14 @@ func (h *Hub) Wait() {
 	h.wg.Wait()
 }
 
+// RefreshOnce runs a single refresh tick (tests and manual checks).
+func (h *Hub) RefreshOnce(ctx context.Context) {
+	if h == nil {
+		return
+	}
+	h.refresh(ctx)
+}
+
 func (h *Hub) refresh(ctx context.Context) {
 	start := h.now()
 	next := newSnapshot(start)
