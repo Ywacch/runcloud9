@@ -20,50 +20,33 @@ func templateHasTimelineJob(tmpl *templates.TemplateSpec) bool {
 	return false
 }
 
-func (c *MetricsCollector) collectTimelineOps(ctx context.Context, nsSel, template string) *TimelineOps {
+func (c *MetricsCollector) collectTimelineOps(ctx context.Context, ns, nsSel, template string) *TimelineOps {
 	ctx = withPromCaller(ctx, "timeline")
 	tmpl := templates.GetTemplate(template)
 	if !templateHasTimelineJob(tmpl) {
 		return nil
 	}
-	engine := c.detectTimelineEngine(ctx, nsSel)
+	engine := c.detectTimelineEngine(ctx, ns, nsSel)
 	if engine == "" {
 		return nil
 	}
 	out := &TimelineOps{Engine: engine}
-	rate := promRateRange()
 
-	appendRate, ok, _ := c.queryScalar(ctx, fmt.Sprintf(
-		`sum(rate(%s{%s,engine=%q}%s))`,
-		timeline.MetricAppendTotal, nsSel, engine, rate,
-	))
-	if ok {
+	if appendRate, ok := c.timelineAppendRate(ctx, ns, nsSel, engine); ok {
 		out.AppendRate = ptrFloat64(appendRate)
 	}
 
-	appendP99Sec, ok, _ := c.queryScalar(ctx, fmt.Sprintf(
-		`histogram_quantile(0.99, sum by (le) (rate(%s{%s,engine=%q}%s)))`,
-		timeline.MetricAppendDuration+"_bucket", nsSel, engine, rate,
-	))
-	if ok {
+	if appendP99Sec, ok := c.timelineAppendP99Sec(ctx, ns, nsSel, engine); ok {
 		ms := appendP99Sec * 1000
 		out.AppendP99Ms = ptrFloat64(ms)
 	}
 
-	rangeP99Sec, ok, _ := c.queryScalar(ctx, fmt.Sprintf(
-		`histogram_quantile(0.99, sum by (le) (rate(%s{%s,engine=%q}%s)))`,
-		timeline.MetricRangeDuration+"_bucket", nsSel, engine, rate,
-	))
-	if ok {
+	if rangeP99Sec, ok := c.timelineRangeP99Sec(ctx, ns, nsSel, engine); ok {
 		ms := rangeP99Sec * 1000
 		out.RangeP99Ms = ptrFloat64(ms)
 	}
 
-	errRate, ok, _ := c.queryScalar(ctx, fmt.Sprintf(
-		`sum(rate(%s{%s,engine=%q}%s))`,
-		timeline.MetricOpErrorsTotal, nsSel, engine, rate,
-	))
-	if ok {
+	if errRate, ok := c.timelineOpErrorsRate(ctx, ns, nsSel, engine); ok {
 		out.ErrorRate = ptrFloat64(errRate)
 	}
 
@@ -73,13 +56,9 @@ func (c *MetricsCollector) collectTimelineOps(ctx context.Context, nsSel, templa
 	return out
 }
 
-func (c *MetricsCollector) detectTimelineEngine(ctx context.Context, nsSel string) string {
-	rate := promRateRange()
+func (c *MetricsCollector) detectTimelineEngine(ctx context.Context, ns, nsSel string) string {
 	for _, engine := range []string{"postgresql", "redis"} {
-		v, ok, _ := c.queryScalar(ctx, fmt.Sprintf(
-			`sum(rate(%s{%s,engine=%q}%s))`,
-			timeline.MetricAppendTotal, nsSel, engine, rate,
-		))
+		v, ok := c.timelineAppendRate(ctx, ns, nsSel, engine)
 		if ok && v > 0 {
 			return engine
 		}
@@ -97,12 +76,10 @@ func (c *MetricsCollector) collectPostgresTimelineTableStats(ctx context.Context
 	if cm == nil {
 		return
 	}
-	relBytes, ok, _ := c.queryScalar(ctx, fmt.Sprintf(`max(c9_timeline_relation_bytes{namespace=%q})`, ns))
-	if ok {
+	if relBytes, ok := c.timelineRelationBytes(ctx, ns); ok {
 		cm.TimelineRelationBytes = ptrFloat64(relBytes)
 	}
-	dead, ok, _ := c.queryScalar(ctx, fmt.Sprintf(`max(c9_timeline_dead_tuples{namespace=%q})`, ns))
-	if ok {
+	if dead, ok := c.timelineDeadTuples(ctx, ns); ok {
 		cm.TimelineDeadTuples = ptrFloat64(dead)
 	}
 }
