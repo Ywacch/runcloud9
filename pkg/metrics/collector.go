@@ -1002,13 +1002,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	errRate, _ := c.sigCompat(ctx, ns, signals.AppErrorRate, errRateProm)
 	cmApp.ErrorRate = errRate
 
-	// Session p50/p95/p99: rate() over elapsed deployment time (clamped 1m–30m), not a fixed 9m window.
-	// After an app-server pod kill, the quantile reflects only pods still live in Prometheus.
-	sessionP99Range := sessionP99PromRange(c.sessionAcc.Elapsed(ns, time.Now()))
-	latBucketRate9m := fmt.Sprintf(`sum(rate(http_request_duration_seconds_bucket{%s}%s)) by (le)`, nsSel, sessionP99Range)
-	p50_9m, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.50, %s)`, latBucketRate9m))
-	p95_9m, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.95, %s)`, latBucketRate9m))
-	p99_9m, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.99, %s)`, latBucketRate9m))
+	// Session p50/p95/p99: hub integrates bucket rates when METRICS_HUB is on; else elapsed PromQL window.
+	p50_9m, p95_9m, p99_9m := c.appSessionLatency9m(ctx, ns, nsSel)
 	cmApp.P50Latency9m = p50_9m
 	cmApp.P95Latency9m = p95_9m
 	cmApp.P99Latency9m = p99_9m
@@ -1037,13 +1032,13 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		`sum by (pod) (cache_errors_total{%s})`,
 		appServerSel,
 	), "pod")
-	cmApp.TotalRequests = c.sessionAcc.Observe(ns, seriesHTTP, totalReqsByPod)
-	cmApp.TotalErrors9m = c.sessionAcc.Observe(ns, seriesHTTP5xx, httpErrByPod)
-	cmApp.CacheHitsLast9m = c.sessionAcc.Observe(ns, seriesCacheHits, hitsByPod)
-	cmApp.CacheMissesLast9m = c.sessionAcc.Observe(ns, seriesCacheMisses, missesByPod)
-	cmApp.CacheErrorsLast9m = c.sessionAcc.Observe(ns, seriesCacheErrors, errorsByPod)
+	cmApp.TotalRequests = c.sessionTotalHTTP(ctx, ns, totalReqsByPod)
+	cmApp.TotalErrors9m = c.sessionTotalHTTP5xx(ctx, ns, httpErrByPod)
+	cmApp.CacheHitsLast9m = c.sessionTotalCacheHits(ns, hitsByPod)
+	cmApp.CacheMissesLast9m = c.sessionTotalCacheMisses(ns, missesByPod)
+	cmApp.CacheErrorsLast9m = c.sessionTotalCacheErrors(ns, errorsByPod)
 	if db, ok := dm.Components["db"]; ok {
-		db.DbTotalQueries = c.sessionAcc.Observe(ns, seriesSQL, sqlByPod)
+		db.DbTotalQueries = c.sessionTotalSQL(ns, sqlByPod)
 		dm.Components["db"] = db
 	}
 
@@ -1247,14 +1242,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmWorker.P99Latency = workerP99
 	workerErrors, _ := c.query(ctx, fmt.Sprintf(`sum(rate({__name__=~".*_worker_errors_total",namespace=%q}%s))`, ns, promRateRange()))
 	cmWorker.ErrorRate = workerErrors
-	workerSessionRange := sessionP99PromRange(c.sessionAcc.Elapsed(ns, time.Now()))
-	workerSessionBucketRate := fmt.Sprintf(
-		`sum(rate({__name__=~".*_worker_processing_duration_seconds_bucket",namespace=%q}%s)) by (le)`,
-		ns, workerSessionRange,
-	)
-	wP50Session, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.50, %s)`, workerSessionBucketRate))
-	wP95Session, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.95, %s)`, workerSessionBucketRate))
-	wP99Session, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.99, %s)`, workerSessionBucketRate))
+	wP50Session, wP95Session, wP99Session := c.workerSessionLatency9m(ctx, ns)
 	cmWorker.P50Latency9m = wP50Session
 	cmWorker.P95Latency9m = wP95Session
 	cmWorker.P99Latency9m = wP99Session
@@ -1267,8 +1255,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		cmWorker.WorkerSaturation = sat
 	}
 	wRpsByPod, wP50ByPod, wP95ByPod, wP99ByPod, wP50SessionByPod, wP95SessionByPod, wP99SessionByPod, wCPUByPod, wErrByPod, wTotalProcessedByPod, wTotalErrorsByPod, wMemByPod := c.workerReplicaSeries(ctx, ns)
-	cmWorker.TotalRequests = c.sessionAcc.Observe(ns, seriesWorkerProcessed, wTotalProcessedByPod)
-	cmWorker.TotalErrors9m = c.sessionAcc.Observe(ns, seriesWorkerErrors, wTotalErrorsByPod)
+	cmWorker.TotalRequests = c.sessionTotalWorkerProcessed(ns, wTotalProcessedByPod)
+	cmWorker.TotalErrors9m = c.sessionTotalWorkerErrors(ns, wTotalErrorsByPod)
 	workerPodNames, workerReadyByPod, workerReplicaCounts := c.listWorkerPods(ctx, ns)
 	workerReplicaRows := mergePodMetricMaps(
 		workerPodNames, workerReadyByPod,

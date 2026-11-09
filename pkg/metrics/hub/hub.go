@@ -62,6 +62,7 @@ type Hub struct {
 
 	lastOK   map[signals.ID]time.Time
 	lastData map[signals.ID]signalPayload
+	window   *WindowAccumulator
 
 	mu           sync.Mutex
 	lastPodFetch time.Time
@@ -88,10 +89,27 @@ func New(q Querier, catalog []signals.Signal, now func() time.Time, obs ObserveH
 		podLister: lister,
 		lastOK:    make(map[signals.ID]time.Time),
 		lastData:  make(map[signals.ID]signalPayload),
+		window:    NewWindowAccumulator(now),
 	}
 	empty := newSnapshot(now())
 	h.snap.Store(empty)
 	return h
+}
+
+// SessionTotal returns a hub-integrated session counter for one namespace.
+func (h *Hub) SessionTotal(namespace string, key StreamKey) (float64, bool) {
+	if h == nil || h.window == nil {
+		return 0, false
+	}
+	return h.window.Total(namespace, key)
+}
+
+// SessionQuantile returns a quantile from hub-integrated latency buckets.
+func (h *Hub) SessionQuantile(namespace string, key StreamKey, q float64) (float64, bool) {
+	if h == nil || h.window == nil {
+		return 0, false
+	}
+	return h.window.Quantile(namespace, key, q)
 }
 
 // Snapshot returns the latest immutable snapshot pointer.
@@ -170,6 +188,8 @@ func (h *Hub) refresh(ctx context.Context) {
 	h.mergeStale(prev, next, start)
 	h.snap.Store(next)
 	h.mu.Unlock()
+
+	h.refreshSessionWindows(ctx, next)
 
 	if h.metrics != nil {
 		h.metrics.ObserveRefresh(h.now().Sub(start).Seconds())
