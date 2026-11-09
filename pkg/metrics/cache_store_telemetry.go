@@ -2,7 +2,6 @@ package metrics
 
 import (
 	"context"
-	"fmt"
 )
 
 // CacheStoreTelemetry is engine-agnostic backing-store telemetry (L0).
@@ -24,28 +23,16 @@ func (c *MetricsCollector) fillRedisCacheStoreTelemetry(ctx context.Context, ns 
 		return CacheStoreTelemetry{}
 	}
 	var out CacheStoreTelemetry
-	evicted, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(redis_evicted_keys_total{namespace=%q}%s))`,
-		ns, promRateRange(),
-	))
-	expired, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(redis_expired_keys_total{namespace=%q}%s))`,
-		ns, promRateRange(),
-	))
-	if evicted > 0 {
+	evicted, evictedOK := c.redisEvictedKeysRate(ctx, ns)
+	expired, expiredOK := c.redisExpiredKeysRate(ctx, ns)
+	if evictedOK && evicted > 0 {
 		out.EvictionsPerSec = evicted
 	}
-	if expired > 0 {
+	if expiredOK && expired > 0 {
 		out.ExpirationsPerSec = expired
 	}
-	evictedByPod := c.queryMultiResult(ctx, fmt.Sprintf(
-		`sum by (pod) (redis_evicted_keys_total{namespace=%q})`,
-		ns,
-	), "pod")
-	expiredByPod := c.queryMultiResult(ctx, fmt.Sprintf(
-		`sum by (pod) (redis_expired_keys_total{namespace=%q})`,
-		ns,
-	), "pod")
+	evictedByPod := c.redisEvictedKeysByPod(ctx, ns)
+	expiredByPod := c.redisExpiredKeysByPod(ctx, ns)
 	out.EvictionsLast9m = c.sessionAcc.Observe(ns, seriesRedisEvicted, evictedByPod)
 	out.ExpirationsLast9m = c.sessionAcc.Observe(ns, seriesRedisExpired, expiredByPod)
 	return out

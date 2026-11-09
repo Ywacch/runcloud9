@@ -26,32 +26,20 @@ func (c *MetricsCollector) applyMemcachedCacheMetrics(ctx context.Context, ns st
 	cm.MemIsEstimated = memRes.Estimated
 	cm.MemSource = memRes.Source
 	cm.MemoryLimit = c.kubeLimitMem(ctx, ns, "memcached.*", "memcached")
-	ops, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(memcached_commands_total{namespace=%q}%s))`,
-		ns, promRateRange(),
-	))
-	if ops > 0 {
+	ops, opsOK := c.memcachedCommandsRate(ctx, ns)
+	if opsOK && ops > 0 {
 		cm.RedisOpsPerSec = ops
 		cm.RequestRate = ops
 	}
-	hits, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(memcached_commands_total{namespace=%q,command="get",status="hit"}%s))`,
-		ns, promRateRange(),
-	))
-	misses, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(memcached_commands_total{namespace=%q,command="get",status="miss"}%s))`,
-		ns, promRateRange(),
-	))
+	hits, _ := c.memcachedGetHitRate(ctx, ns)
+	misses, _ := c.memcachedGetMissRate(ctx, ns)
 	cm.RedisKeyspaceHits = hits
 	cm.RedisKeyspaceMisses = misses
-	conns, _ := c.query(ctx, fmt.Sprintf(`sum(memcached_current_connections{namespace=%q})`, ns))
-	if conns > 0 {
+	conns, connsOK := c.memcachedCurrentConnections(ctx, ns)
+	if connsOK && conns > 0 {
 		cm.ActiveConnections = conns
 	}
-	rejected, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(memcached_connections_listener_disabled_total{namespace=%q}%s))`,
-		ns, promRateRange(),
-	))
+	rejected, _ := c.memcachedConnectionsListenerDisabledRate(ctx, ns)
 	cm.RedisRejectedRate = rejected
 	cm.CPULimit = c.kubeLimitCPU(ctx, ns, "memcached.*", "memcached")
 	c.applyMemcachedItemLifecycle(ctx, ns, cm)
@@ -67,24 +55,12 @@ func (c *MetricsCollector) applyMemcachedCacheMetrics(ctx context.Context, ns st
 // applyMemcachedItemLifecycle reads slab evictions and expired-slot reclaims.
 // TTL expiry does not increment evictions.
 func (c *MetricsCollector) applyMemcachedItemLifecycle(ctx context.Context, ns string, cm *ComponentMetrics) {
-	evicted, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(memcached_items_evicted_total{namespace=%q}%s))`,
-		ns, promRateRange(),
-	))
-	reclaimed, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(memcached_items_reclaimed_total{namespace=%q}%s))`,
-		ns, promRateRange(),
-	))
+	evicted, _ := c.memcachedItemsEvictedRate(ctx, ns)
+	reclaimed, _ := c.memcachedItemsReclaimedRate(ctx, ns)
 	cm.EvictionsPerSec = evicted
 	cm.ExpirationsPerSec = reclaimed
-	evictedByPod := c.queryMultiResult(ctx, fmt.Sprintf(
-		`sum by (pod) (memcached_items_evicted_total{namespace=%q})`,
-		ns,
-	), "pod")
-	reclaimedByPod := c.queryMultiResult(ctx, fmt.Sprintf(
-		`sum by (pod) (memcached_items_reclaimed_total{namespace=%q})`,
-		ns,
-	), "pod")
+	evictedByPod := c.memcachedItemsEvictedByPod(ctx, ns)
+	reclaimedByPod := c.memcachedItemsReclaimedByPod(ctx, ns)
 	cm.EvictionsLast9m = c.sessionAcc.Observe(ns, seriesMemcachedEvicted, evictedByPod)
 	cm.ExpirationsLast9m = c.sessionAcc.Observe(ns, seriesMemcachedReclaimed, reclaimedByPod)
 }
