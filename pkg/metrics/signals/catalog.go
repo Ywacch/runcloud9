@@ -66,5 +66,26 @@ func Catalog() []Signal {
 			Metrics: []string{"process_resident_memory_bytes"},
 			Expr:    `sum by (__BY__) (process_resident_memory_bytes{__SEL__})`,
 		},
+		{
+			ID:      AppCacheHitsRate,
+			Shape:   PerApp,
+			Missing: MissingIsZero,
+			Metrics: []string{"cache_hits_total"},
+			Expr:    `sum by (__BY__) (rate(cache_hits_total{__SEL__}` + promRateWindow + `))`,
+		},
+		{
+			ID:      AppCacheMissesRate,
+			Shape:   PerApp,
+			Missing: MissingIsZero,
+			Metrics: []string{"cache_misses_total"},
+			Expr:    `sum by (__BY__) (rate(cache_misses_total{__SEL__}` + promRateWindow + `))`,
+		},
+		{
+			ID:      AppCacheErrorsRate,
+			Shape:   PerApp,
+			Missing: MissingIsZero,
+			Metrics: []string{"cache_errors_total"},
+			Expr:    `sum by (__BY__) (rate(cache_errors_total{__SEL__}` + promRateWindow + `))`,
+		},
 	}
 }
