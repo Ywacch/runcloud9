@@ -76,17 +76,20 @@ func (d *RedisDriver) ScanKeys(ctx context.Context, pattern string, cursor uint6
 	// MATCH can return an empty batch while the cursor is still non-zero.
 	if !PatternHasGlob(pattern) {
 		if cursor != 0 {
-			return nil, 0, nil
+			return []KeyInfo{}, 0, nil
 		}
 		exists, err := d.client.Exists(ctx, pattern).Result()
 		if err != nil {
 			return nil, 0, err
 		}
 		if exists == 0 || !IsStudentCacheKey(pattern) {
-			return nil, 0, nil
+			return []KeyInfo{}, 0, nil
 		}
 		out, err := d.keyInfosForKeys(ctx, []string{pattern})
-		return out, 0, err
+		if err != nil {
+			return nil, 0, err
+		}
+		return nonNilKeys(out), 0, nil
 	}
 
 	keys, next, err := d.client.Scan(ctx, cursor, pattern, int64(count)).Result()
@@ -94,12 +97,24 @@ func (d *RedisDriver) ScanKeys(ctx context.Context, pattern string, cursor uint6
 		return nil, 0, err
 	}
 	out, err := d.keyInfosForKeys(ctx, keys)
-	return out, next, err
+	if err != nil {
+		return nil, 0, err
+	}
+	return nonNilKeys(out), next, nil
+}
+
+// nonNilKeys keeps an empty scan as [] in JSON. A nil slice becomes null,
+// and the cache browser crashes calling filter on it.
+func nonNilKeys(keys []KeyInfo) []KeyInfo {
+	if keys == nil {
+		return []KeyInfo{}
+	}
+	return keys
 }
 
 func (d *RedisDriver) keyInfosForKeys(ctx context.Context, keys []string) ([]KeyInfo, error) {
 	if len(keys) == 0 {
-		return nil, nil
+		return []KeyInfo{}, nil
 	}
 
 	pipe := d.client.Pipeline()
