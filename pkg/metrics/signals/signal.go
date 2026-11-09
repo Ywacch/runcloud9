@@ -94,6 +94,14 @@ const (
 	TimelineRelationBytes        ID = "timeline_relation_bytes"
 	TimelineDeadTuples           ID = "timeline_dead_tuples"
 
+	RabbitMQQueueMessages               ID = "rabbitmq_queue_messages"
+	RabbitMQQueueMessagesReady          ID = "rabbitmq_queue_messages_ready"
+	RabbitMQQueueMessagesUnacked        ID = "rabbitmq_queue_messages_unacked"
+	RabbitMQGlobalMessagesReceivedRate  ID = "rabbitmq_global_messages_received_rate"
+	RabbitMQGlobalMessagesDeliveredRate ID = "rabbitmq_global_messages_delivered_rate"
+	RabbitMQProcessResidentMemoryBytes  ID = "rabbitmq_process_resident_memory_bytes"
+	RabbitMQResidentMemoryLimitBytes    ID = "rabbitmq_resident_memory_limit_bytes"
+
 	ContainerCPULimit    ID = "container_cpu_limit"
 	ContainerMemoryLimit ID = "container_memory_limit"
 )

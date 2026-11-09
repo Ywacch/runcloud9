@@ -66,8 +66,6 @@ type MetricsCollector struct {
 	traceSampleMu           sync.Mutex
 	traceSamples            map[string]*traceSampleAccumulator
 	traceCollectTick        map[string]int
-	mqRateMu                sync.Mutex
-	mqRates                 map[string]rabbitCounterSnapshot
 	podHealthMu             sync.Mutex
 	podHealth               map[string]*podHealthTracker
 	sessionAcc              *sessionAccumulator
@@ -118,7 +116,6 @@ func NewMetricsCollector(prometheusURL string, lg loadgen.LoadGenerator, clients
 		invariants:           NewInvariantChecker(),
 		observer:             observer,
 		consistency:          NewConsistencyDetector(observer),
-		mqRates:              make(map[string]rabbitCounterSnapshot),
 		sessionAcc:           newSessionAccumulator(),
 		pgHold:               make(map[string]bool),
 		clusterSampleEnabled: false,
@@ -211,9 +208,6 @@ func (c *MetricsCollector) Cleanup(namespace string) {
 		delete(c.clientLatency, namespace)
 	}
 	c.clientLatencyMu.Unlock()
-	c.mqRateMu.Lock()
-	delete(c.mqRates, namespace)
-	c.mqRateMu.Unlock()
 	c.podHealthMu.Lock()
 	if c.podHealth != nil {
 		delete(c.podHealth, namespace)
@@ -1196,9 +1190,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmMQ.MemSource = mqMemRes.Source
 	cmMQ.CPULimit = c.kubeLimitCPU(ctx, ns, "rabbitmq.*", "rabbitmq")
 	cmMQ.MemoryLimit = c.kubeLimitMem(ctx, ns, "rabbitmq.*", "rabbitmq")
-	cmMQ.QueueDepth, cmMQ.ProduceRate, cmMQ.ConsumeRate, cmMQ.MessagesReady, cmMQ.MessagesUnacked, cmMQ.MQMemoryUsed, cmMQ.MQMemoryLimit =
-		c.scrapeRabbitMQPrometheus(ctx, ns)
-	// Override estimated memory with live scrape data from rabbitmq_prometheus plugin.
+	c.applyRabbitMQBrokerMetrics(ctx, ns, &cmMQ)
+	// Override estimated memory with broker metrics from Prometheus when present.
 	if cmMQ.MQMemoryUsed > 0 {
 		cmMQ.MemoryBytes = int64(cmMQ.MQMemoryUsed)
 		cmMQ.MemIsEstimated = false

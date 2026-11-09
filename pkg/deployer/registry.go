@@ -80,6 +80,11 @@ var componentRegistry = map[string]ComponentSpec{
 		Ports:       []int32{5672, 15692},
 		ServiceName: "mq",
 		ServicePort: 5672,
+		Annotations: map[string]string{
+			"prometheus.io/scrape": "true",
+			"prometheus.io/port":   "15692",
+			"prometheus.io/path":   "/metrics",
+		},
 		Command: []string{
 			"sh", "-c",
 			"rabbitmq-plugins enable --offline rabbitmq_prometheus && exec docker-entrypoint.sh rabbitmq-server",
