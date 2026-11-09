@@ -14,11 +14,26 @@ func RenderCluster(s Signal) (string, error) {
 // RenderNamespace replaces __SEL__ with deployment!="" and namespace="<ns>", and __BY__ from Shape.
 // ns must be non-empty.
 func RenderNamespace(s Signal, ns string) (string, error) {
-	sel, err := namespaceSelector(ns)
+	var sel string
+	var err error
+	if s.BareNamespace {
+		sel, err = bareNamespaceSelector(ns)
+	} else {
+		sel, err = namespaceSelector(ns)
+	}
 	if err != nil {
 		return "", err
 	}
-	return render(s, sel, groupBy(s.Shape))
+	return render(s, sel, namespaceGroupBy(s))
+}
+
+// namespaceGroupBy matches legacy replica PromQL: one namespace is already
+// selected, so per-pod series group by pod (and le stays on the histogram expr).
+func namespaceGroupBy(s Signal) string {
+	if s.BareNamespace && s.Shape == PerPod {
+		return "pod"
+	}
+	return groupBy(s.Shape)
 }
 
 func render(s Signal, selector, groupBy string) (string, error) {
@@ -56,7 +71,19 @@ func namespaceSelector(ns string) (string, error) {
 	if ns == "" {
 		return "", errors.New("signals: namespace is empty")
 	}
-	escaped := strings.ReplaceAll(ns, `\`, `\\`)
-	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	escaped := escapeNamespace(ns)
 	return fmt.Sprintf(`deployment!="",namespace="%s"`, escaped), nil
+}
+
+func bareNamespaceSelector(ns string) (string, error) {
+	if ns == "" {
+		return "", errors.New("signals: namespace is empty")
+	}
+	escaped := escapeNamespace(ns)
+	return fmt.Sprintf(`namespace="%s"`, escaped), nil
+}
+
+func escapeNamespace(ns string) string {
+	escaped := strings.ReplaceAll(ns, `\`, `\\`)
+	return strings.ReplaceAll(escaped, `"`, `\"`)
 }

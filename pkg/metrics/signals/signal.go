@@ -16,6 +16,24 @@ const (
 	AppCacheMissesRate ID = "app_cache_misses_rate"
 	AppCacheErrorsRate ID = "app_cache_errors_rate"
 
+	AppRequestRatePod       ID = "app_request_rate_pod"
+	AppErrorRatePod         ID = "app_error_rate_pod"
+	AppLatencyP50Pod        ID = "app_latency_p50_pod"
+	AppLatencyP95Pod        ID = "app_latency_p95_pod"
+	AppLatencyP99Pod        ID = "app_latency_p99_pod"
+	AppProcessCPUPod        ID = "app_process_cpu_pod"
+	AppHTTPRequestsTotalPod ID = "app_http_requests_total_pod"
+	AppHTTP5xxTotalPod      ID = "app_http_5xx_total_pod"
+
+	WorkerProcessedRatePod  ID = "worker_processed_rate_pod"
+	WorkerErrorsRatePod     ID = "worker_errors_rate_pod"
+	WorkerLatencyP50Pod     ID = "worker_latency_p50_pod"
+	WorkerLatencyP95Pod     ID = "worker_latency_p95_pod"
+	WorkerLatencyP99Pod     ID = "worker_latency_p99_pod"
+	WorkerProcessedTotalPod ID = "worker_processed_total_pod"
+	WorkerErrorsTotalPod    ID = "worker_errors_total_pod"
+	WorkerProcessCPUPod     ID = "worker_process_cpu_pod"
+
 	PgDatabaseXactCommitRate      ID = "pg_database_xact_commit_rate"
 	PgDatabaseXactRollbackRate    ID = "pg_database_xact_rollback_rate"
 	PgDatabaseXactCommitRatePod   ID = "pg_database_xact_commit_rate_pod"
@@ -98,9 +116,10 @@ const (
 
 // Signal describes one PromQL value the metrics collector may read via the hub or direct query.
 type Signal struct {
-	ID      ID
-	Expr    string
-	Shape   Shape
-	Missing Missing
-	Metrics []string
+	ID            ID
+	Expr          string
+	Shape         Shape
+	Missing       Missing
+	Metrics       []string
+	BareNamespace bool // RenderNamespace uses namespace only (replica per-pod PromQL).
 }
