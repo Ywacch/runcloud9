@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/deployer"
+	"github.com/ywacch/cloud9/pkg/metrics/sidework"
 	"github.com/ywacch/cloud9/pkg/store"
 )
 
@@ -31,14 +32,19 @@ func TestTeardownIntent_DeleteBeforeExpiry(t *testing.T) {
 	}
 }
 
-func TestAcquireDiagnosticsSlot_TimesOut(t *testing.T) {
-	sem := make(chan struct{}, 1)
-	sem <- struct{}{}
-	if acquireDiagnosticsSlot(sem, 20*time.Millisecond) {
+func TestTeardownDiagnostics_SideWorkPoolTimesOut(t *testing.T) {
+	t.Parallel()
+	pool := sidework.New(1, time.Now)
+	release, ok := pool.Acquire(context.Background(), 0)
+	if !ok {
+		t.Fatal("expected first acquire")
+	}
+	_, ok = pool.Acquire(context.Background(), 20*time.Millisecond)
+	if ok {
 		t.Fatal("expected the wait to end with no free slot")
 	}
-	releaseDiagnosticsSlot(sem)
-	if !acquireDiagnosticsSlot(sem, 20*time.Millisecond) {
+	release()
+	if _, ok = pool.Acquire(context.Background(), 20*time.Millisecond); !ok {
 		t.Fatal("expected a free slot after release")
 	}
 }

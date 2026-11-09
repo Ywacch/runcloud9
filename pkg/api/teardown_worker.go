@@ -43,7 +43,6 @@ type teardownQueue struct {
 	h        *Handler
 	workers  int
 	diagWait time.Duration
-	diagSem  chan struct{}
 
 	mu       sync.Mutex
 	pending  map[string]teardownJob
@@ -52,12 +51,9 @@ type teardownQueue struct {
 	wg       sync.WaitGroup
 }
 
-func newTeardownQueue(h *Handler, workers, diagSlots int, diagWait time.Duration) *teardownQueue {
+func newTeardownQueue(h *Handler, workers int, diagWait time.Duration) *teardownQueue {
 	if workers < 1 {
 		workers = 1
-	}
-	if diagSlots < 1 {
-		diagSlots = 1
 	}
 	if diagWait < 0 {
 		diagWait = 0
@@ -66,7 +62,6 @@ func newTeardownQueue(h *Handler, workers, diagSlots int, diagWait time.Duration
 		h:        h,
 		workers:  workers,
 		diagWait: diagWait,
-		diagSem:  make(chan struct{}, diagSlots),
 		pending:  make(map[string]teardownJob),
 		inflight: make(map[string]struct{}),
 		wake:     make(chan struct{}, 1),
@@ -167,7 +162,6 @@ func (h *Handler) ensureTeardownWorkers() {
 		h.teardown = newTeardownQueue(
 			h,
 			positiveIntEnv("TEARDOWN_WORKERS", 8),
-			positiveIntEnv("TEARDOWN_DIAGNOSTICS_SLOTS", 8),
 			durationEnv("TEARDOWN_DIAGNOSTICS_WAIT", 10*time.Second),
 		)
 		h.teardown.start()
@@ -370,14 +364,30 @@ func (h *Handler) collectTeardownDiagnostics(ctx context.Context, namespace, tpl
 	if h.diagnostics == nil || h.teardown == nil {
 		return
 	}
-	if !acquireDiagnosticsSlot(h.teardown.diagSem, h.teardown.diagWait) {
+	if h.metricsCollector == nil {
 		h.incTeardownDiagnostics("skipped")
 		h.stampMetrics(context.Background(), namespace, map[string]any{
 			"diagnostics_skipped": true,
 		})
 		return
 	}
-	defer releaseDiagnosticsSlot(h.teardown.diagSem)
+	pool := h.metricsCollector.SideWorkPool()
+	if pool == nil {
+		h.incTeardownDiagnostics("skipped")
+		h.stampMetrics(context.Background(), namespace, map[string]any{
+			"diagnostics_skipped": true,
+		})
+		return
+	}
+	release, ok := pool.Acquire(ctx, h.teardown.diagWait)
+	if !ok {
+		h.incTeardownDiagnostics("skipped")
+		h.stampMetrics(context.Background(), namespace, map[string]any{
+			"diagnostics_skipped": true,
+		})
+		return
+	}
+	defer release()
 
 	createdAt := ""
 	runningAt := ""
@@ -488,32 +498,6 @@ func teardownIntent(enqueued, expires time.Time) time.Time {
 		return time.Now()
 	}
 	return enqueued
-}
-
-func acquireDiagnosticsSlot(sem chan struct{}, wait time.Duration) bool {
-	if wait <= 0 {
-		select {
-		case sem <- struct{}{}:
-			return true
-		default:
-			return false
-		}
-	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	select {
-	case sem <- struct{}{}:
-		return true
-	case <-timer.C:
-		return false
-	}
-}
-
-func releaseDiagnosticsSlot(sem chan struct{}) {
-	select {
-	case <-sem:
-	default:
-	}
 }
 
 func positiveIntEnv(key string, def int) int {
