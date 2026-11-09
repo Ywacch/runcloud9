@@ -72,6 +72,44 @@ func TestScanKeysExactStreamKey(t *testing.T) {
 	}
 }
 
+func TestScanKeysMissReturnsEmptySlice(t *testing.T) {
+	t.Parallel()
+
+	srv, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("miniredis.Run: %v", err)
+	}
+	t.Cleanup(srv.Close)
+
+	client := redis.NewClient(&redis.Options{Addr: srv.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+
+	driver := &RedisDriver{client: client}
+	ctx := context.Background()
+
+	exact, _, err := driver.ScanKeys(ctx, "fanout", 0, 50)
+	if err != nil {
+		t.Fatalf("exact ScanKeys: %v", err)
+	}
+	if exact == nil {
+		t.Fatal("missing exact key returned nil; JSON keys would be null")
+	}
+	if len(exact) != 0 {
+		t.Fatalf("exact len %d, want 0", len(exact))
+	}
+
+	glob, _, err := driver.ScanKeys(ctx, "timeline:*", 0, 50)
+	if err != nil {
+		t.Fatalf("glob ScanKeys: %v", err)
+	}
+	if glob == nil {
+		t.Fatal("empty glob returned nil; JSON keys would be null")
+	}
+	if len(glob) != 0 {
+		t.Fatalf("glob len %d, want 0", len(glob))
+	}
+}
+
 func TestGetKeyValueStreamPreview(t *testing.T) {
 	t.Parallel()
 
