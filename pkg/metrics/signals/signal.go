@@ -12,6 +12,9 @@ const (
 	AppLatencyP99    ID = "app_latency_p99"
 	AppProcessCPU    ID = "app_process_cpu"
 	AppProcessMemory ID = "app_process_memory"
+
+	ContainerCPULimit    ID = "container_cpu_limit"
+	ContainerMemoryLimit ID = "container_memory_limit"
 )
 
 type Shape int

@@ -235,6 +235,11 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		m.signalCompareTotal.WithLabelValues(id, "match")
 		m.signalCompareTotal.WithLabelValues(id, "mismatch")
 	}
+	for _, id := range []signals.ID{signals.ContainerCPULimit, signals.ContainerMemoryLimit} {
+		s := string(id)
+		m.signalCompareTotal.WithLabelValues(s, "match")
+		m.signalCompareTotal.WithLabelValues(s, "mismatch")
+	}
 	return m
 }
 
