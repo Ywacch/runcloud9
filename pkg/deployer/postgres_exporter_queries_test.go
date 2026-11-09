@@ -1,6 +1,7 @@
 package deployer
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -150,8 +151,13 @@ func TestPostgresExporterReplicaQueriesVolumeMount(t *testing.T) {
 func TestPostgresExporterExtendQueryArgs(t *testing.T) {
 	t.Parallel()
 	args := postgresExporterExtendQueryArgs()
-	if len(args) != 1 || args[0] != postgresExporterExtendQueryPathFlag {
+	if len(args) < 2 || args[0] != postgresExporterExtendQueryPathFlag {
 		t.Fatalf("args: %+v", args)
+	}
+	for _, want := range postgresExporterCollectorArgs() {
+		if !slices.Contains(args, want) {
+			t.Fatalf("args missing %q: %+v", want, args)
+		}
 	}
 }
 
@@ -188,8 +194,9 @@ func TestDBReplicaDeploymentSpec_mountsExporterQueriesVolume(t *testing.T) {
 	if exporter == nil {
 		t.Fatal("expected postgres-exporter sidecar on replica pod")
 	}
-	if len(exporter.Args) != 1 || exporter.Args[0] != postgresExporterExtendQueryPathFlag {
-		t.Fatalf("exporter args: %+v", exporter.Args)
+	wantArgs := postgresExporterExtendQueryArgs()
+	if !slices.Equal(exporter.Args, wantArgs) {
+		t.Fatalf("exporter args: %+v want %+v", exporter.Args, wantArgs)
 	}
 	var queriesMount *corev1.VolumeMount
 	for i := range exporter.VolumeMounts {
