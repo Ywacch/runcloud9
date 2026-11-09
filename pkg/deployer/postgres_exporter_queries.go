@@ -140,6 +140,21 @@ func postgresExporterQueriesVolumeMountFor(subPath string) corev1.VolumeMount {
 	}
 }
 
+// postgresExporterCollectorArgs disables built-in collectors that no signal reads.
+// Custom queries in queries.yaml still run.
+func postgresExporterCollectorArgs() []string {
+	return []string{
+		"--no-collector.locks",
+		"--no-collector.replication",
+		"--no-collector.replication_slot",
+		"--no-collector.stat_bgwriter",
+		"--no-collector.stat_wal_receiver",
+		"--no-collector.statio",
+		"--no-collector.wal",
+	}
+}
+
 func postgresExporterExtendQueryArgs() []string {
-	return []string{postgresExporterExtendQueryPathFlag}
+	args := []string{postgresExporterExtendQueryPathFlag}
+	return append(args, postgresExporterCollectorArgs()...)
 }
