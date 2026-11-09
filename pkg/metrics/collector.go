@@ -593,26 +593,8 @@ func (c *MetricsCollector) kubeLimitCPU(ctx context.Context, ns, podRe, containe
 	return c.kubeLimitCPUExcluding(ctx, ns, podRe, "", container)
 }
 
-func (c *MetricsCollector) kubeLimitCPUExcluding(ctx context.Context, ns, podRe, excludePodRe, container string) float64 {
-	podSel := promPodLabelSelectors(podRe, excludePodRe)
-	v, _ := c.query(ctx, fmt.Sprintf(
-		`sum(kube_pod_container_resource_limits{namespace=%q,%s,container="%s",resource="cpu"})`,
-		ns, podSel, container,
-	))
-	return v
-}
-
 func (c *MetricsCollector) kubeLimitMem(ctx context.Context, ns, podRe, container string) int64 {
 	return c.kubeLimitMemExcluding(ctx, ns, podRe, "", container)
-}
-
-func (c *MetricsCollector) kubeLimitMemExcluding(ctx context.Context, ns, podRe, excludePodRe, container string) int64 {
-	podSel := promPodLabelSelectors(podRe, excludePodRe)
-	v, _ := c.query(ctx, fmt.Sprintf(
-		`sum(kube_pod_container_resource_limits{namespace=%q,%s,container="%s",resource="memory"})`,
-		ns, podSel, container,
-	))
-	return int64(v)
 }
 
 // queryProcessCPU uses process_cpu_seconds_total from the app's /metrics (works on GKE Autopilot

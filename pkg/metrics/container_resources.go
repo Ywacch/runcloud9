@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 
+	"github.com/ywacch/cloud9/pkg/metrics/signals"
+	corev1 "k8s.io/api/core/v1"
 	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
@@ -26,6 +28,151 @@ func promPodLabelSelectors(podRe, excludePodRe string) string {
 		return fmt.Sprintf(`pod=~%q`, podRe)
 	}
 	return fmt.Sprintf(`pod=~%q,pod!~%q`, podRe, excludePodRe)
+}
+
+func kubeLimitCPUPromQL(ns, podRe, excludePodRe, container string) string {
+	podSel := promPodLabelSelectors(podRe, excludePodRe)
+	return fmt.Sprintf(
+		`sum(kube_pod_container_resource_limits{namespace=%q,%s,container="%s",resource="cpu"})`,
+		ns, podSel, container,
+	)
+}
+
+func kubeLimitMemPromQL(ns, podRe, excludePodRe, container string) string {
+	podSel := promPodLabelSelectors(podRe, excludePodRe)
+	return fmt.Sprintf(
+		`sum(kube_pod_container_resource_limits{namespace=%q,%s,container="%s",resource="memory"})`,
+		ns, podSel, container,
+	)
+}
+
+func (c *MetricsCollector) limitsCacheActive() bool {
+	return c != nil && (c.inv != nil || c.clusterState != nil)
+}
+
+func (c *MetricsCollector) listPodsForLimits(ctx context.Context, ns string) ([]*corev1.Pod, error) {
+	if c == nil || ns == "" {
+		return nil, nil
+	}
+	if c.inv != nil {
+		return c.inv.Pods(ns)
+	}
+	if c.clusterState != nil {
+		return c.clusterState.Pods(ns)
+	}
+	return nil, nil
+}
+
+func sumPodContainerCPULimits(pods []*corev1.Pod, podRe, excludePodRe, container string) (float64, bool) {
+	include, exclude, err := compilePodREWithExclude(podRe, excludePodRe)
+	if err != nil {
+		return 0, false
+	}
+	var sum float64
+	var found bool
+	for _, pod := range pods {
+		if pod == nil || pod.DeletionTimestamp != nil {
+			continue
+		}
+		if !podMatchesSelectors(pod.Name, include, exclude) {
+			continue
+		}
+		for i := range pod.Spec.Containers {
+			cont := &pod.Spec.Containers[i]
+			if cont.Name != container {
+				continue
+			}
+			q, ok := cont.Resources.Limits[corev1.ResourceCPU]
+			if !ok || q.IsZero() {
+				continue
+			}
+			found = true
+			sum += float64(q.MilliValue()) / 1000.0
+		}
+	}
+	return sum, found
+}
+
+func sumPodContainerMemoryLimits(pods []*corev1.Pod, podRe, excludePodRe, container string) (int64, bool) {
+	include, exclude, err := compilePodREWithExclude(podRe, excludePodRe)
+	if err != nil {
+		return 0, false
+	}
+	var sum int64
+	var found bool
+	for _, pod := range pods {
+		if pod == nil || pod.DeletionTimestamp != nil {
+			continue
+		}
+		if !podMatchesSelectors(pod.Name, include, exclude) {
+			continue
+		}
+		for i := range pod.Spec.Containers {
+			cont := &pod.Spec.Containers[i]
+			if cont.Name != container {
+				continue
+			}
+			q, ok := cont.Resources.Limits[corev1.ResourceMemory]
+			if !ok || q.IsZero() {
+				continue
+			}
+			found = true
+			sum += q.Value()
+		}
+	}
+	return sum, found
+}
+
+func (c *MetricsCollector) kubeLimitCPUExcluding(ctx context.Context, ns, podRe, excludePodRe, container string) float64 {
+	promql := kubeLimitCPUPromQL(ns, podRe, excludePodRe, container)
+	if c != nil && c.limitsCacheActive() {
+		pods, err := c.listPodsForLimits(ctx, ns)
+		if err == nil {
+			val, present := sumPodContainerCPULimits(pods, podRe, excludePodRe, container)
+			c.compareResourceLimit(ctx, signals.ContainerCPULimit, val, present, promql)
+			if present {
+				return val
+			}
+			return 0
+		}
+	}
+	v, _ := c.query(ctx, promql)
+	return v
+}
+
+func (c *MetricsCollector) kubeLimitMemExcluding(ctx context.Context, ns, podRe, excludePodRe, container string) int64 {
+	promql := kubeLimitMemPromQL(ns, podRe, excludePodRe, container)
+	if c != nil && c.limitsCacheActive() {
+		pods, err := c.listPodsForLimits(ctx, ns)
+		if err == nil {
+			val, present := sumPodContainerMemoryLimits(pods, podRe, excludePodRe, container)
+			c.compareResourceLimit(ctx, signals.ContainerMemoryLimit, float64(val), present, promql)
+			if present {
+				return val
+			}
+			return 0
+		}
+	}
+	v, _ := c.query(ctx, promql)
+	return int64(v)
+}
+
+func (c *MetricsCollector) compareResourceLimit(ctx context.Context, id signals.ID, cacheVal float64, cacheOK bool, promql string) {
+	if c == nil || !signalCompareEnabled() || !c.limitsCacheActive() {
+		return
+	}
+	oldVal, oldOK, err := c.queryScalarDirect(ctx, promql)
+	if err != nil {
+		oldOK = false
+	}
+	match := promValuesMatch(cacheVal, oldVal, cacheOK, oldOK)
+	result := "match"
+	if !match {
+		result = "mismatch"
+	}
+	if c.signalCompareObserver != nil {
+		c.signalCompareObserver(string(id), result)
+	}
 }
 
 // queryContainerResourceCPU returns live CPU for a named container: cAdvisor → Metrics API → kube requests.
