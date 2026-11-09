@@ -18,6 +18,8 @@ import (
 	"github.com/ywacch/cloud9/pkg/kubeobs"
 	"github.com/ywacch/cloud9/pkg/loadgen"
 	"github.com/ywacch/cloud9/pkg/metrics"
+	"github.com/ywacch/cloud9/pkg/metrics/hub"
+	"github.com/ywacch/cloud9/pkg/metrics/signals"
 	"github.com/ywacch/cloud9/pkg/seeder"
 	"github.com/ywacch/cloud9/pkg/store"
 	"github.com/ywacch/cloud9/pkg/teardown"
@@ -341,6 +343,24 @@ func main() {
 	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed, metricsCollector, diagnosticsCollector, clientset, lg, eventBus)
 	if clusterCache != nil {
 		handler.SetClusterState(clusterCache)
+	}
+	if hub.Enabled(os.Getenv("METRICS_HUB")) && prometheusURL != "" {
+		var podLister hub.AllPodMetricsLister
+		if adapter, ok := metricsClient.(*metrics.MetricsClientAdapter); ok {
+			podLister = adapter
+		}
+		metricsHub := hub.New(
+			&hub.HTTPQuerier{BaseURL: prometheusURL},
+			signals.Catalog(),
+			time.Now,
+			handler.HubMetricsObserver(),
+			podLister,
+		)
+		metricsCollector.SetMetricsHub(metricsHub)
+		metricsHub.Start(context.Background())
+		log.Printf("metrics hub: on")
+	} else {
+		log.Printf("metrics hub: off")
 	}
 	requestTeardown = handler.RequestTeardown
 	mux := http.NewServeMux()

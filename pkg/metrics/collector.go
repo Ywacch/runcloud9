@@ -16,6 +16,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/kubeobs"
 	"github.com/ywacch/cloud9/pkg/loadgen"
+	metricshub "github.com/ywacch/cloud9/pkg/metrics/hub"
 	"github.com/ywacch/cloud9/pkg/probes"
 	"github.com/ywacch/cloud9/pkg/templates"
 	"golang.org/x/sync/singleflight"
@@ -95,6 +96,7 @@ type MetricsCollector struct {
 	frameBytesObserver   FrameBytesObserver
 	clusterState         *clusterstate.Cache
 	inv                  inventory
+	metricsHub           *metricshub.Hub
 }
 
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
