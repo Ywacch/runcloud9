@@ -8,6 +8,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/ywacch/cloud9/pkg/metrics/hub"
+	"github.com/ywacch/cloud9/pkg/metrics/signals"
 )
 
 var controlPlaneDurationBuckets = []float64{1, 5, 15, 30, 60, 120, 300, 600, 1200}
@@ -47,6 +49,10 @@ type controlPlaneMetrics struct {
 	collectSeconds          *prometheus.HistogramVec
 	wsFrameBytes            prometheus.Histogram
 	storeRequestsTotal      *prometheus.CounterVec
+	hubRefreshSeconds       prometheus.Histogram
+	hubSignalErrors         *prometheus.CounterVec
+	hubSignalAbsent         *prometheus.CounterVec
+	hubUnlabeledSeries      *prometheus.CounterVec
 }
 
 func newControlPlaneMetrics() *controlPlaneMetrics {
@@ -154,6 +160,23 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		Name: "cloud9_store_requests_total",
 		Help: "Supabase PostgREST requests by store operation.",
 	}, []string{"op"})
+	m.hubRefreshSeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "cloud9_metrics_hub_refresh_seconds",
+		Help:    "Duration of one metrics hub refresh tick.",
+		Buckets: controlPlaneDurationBuckets,
+	})
+	m.hubSignalErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloud9_metrics_hub_signal_errors_total",
+		Help: "Prometheus query failures per hub signal.",
+	}, []string{"signal"})
+	m.hubSignalAbsent = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloud9_metrics_signal_absent_total",
+		Help: "Hub refresh ticks with no series for a signal.",
+	}, []string{"signal"})
+	m.hubUnlabeledSeries = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloud9_metrics_hub_unlabeled_series_total",
+		Help: "Dropped Prometheus samples without a namespace label.",
+	}, []string{"signal"})
 
 	reg.MustRegister(
 		m.admitTotal,
@@ -179,6 +202,10 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		m.collectSeconds,
 		m.wsFrameBytes,
 		m.storeRequestsTotal,
+		m.hubRefreshSeconds,
+		m.hubSignalErrors,
+		m.hubSignalAbsent,
+		m.hubUnlabeledSeries,
 	)
 	for _, name := range []string{"pod", "deployment", "statefulset", "hpa", "endpoints", "endpointslice"} {
 		m.informerQueueDepth.WithLabelValues(name).Set(1)
@@ -194,7 +221,55 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 	for _, result := range []string{"collected", "skipped", "error"} {
 		m.teardownDiagnostics.WithLabelValues(result)
 	}
+	for _, s := range signals.Catalog() {
+		id := string(s.ID)
+		m.hubSignalErrors.WithLabelValues(id)
+		m.hubSignalAbsent.WithLabelValues(id)
+		m.hubUnlabeledSeries.WithLabelValues(id)
+	}
 	return m
+}
+
+// HubMetricsObserver returns a hub.ObserveHub wired to control-plane Prometheus metrics.
+func (m *controlPlaneMetrics) HubMetricsObserver() hub.ObserveHub {
+	if m == nil {
+		return nil
+	}
+	return hubMetricsBinder{m}
+}
+
+type hubMetricsBinder struct{ *controlPlaneMetrics }
+
+func (b hubMetricsBinder) ObservePromQuery(path, caller, template string) {
+	b.observePromQuery(path, caller, template)
+}
+
+func (b hubMetricsBinder) ObserveRefresh(seconds float64) {
+	if b.controlPlaneMetrics == nil {
+		return
+	}
+	b.hubRefreshSeconds.Observe(seconds)
+}
+
+func (b hubMetricsBinder) IncSignalError(signal string) {
+	if b.controlPlaneMetrics == nil || signal == "" {
+		return
+	}
+	b.hubSignalErrors.WithLabelValues(signal).Inc()
+}
+
+func (b hubMetricsBinder) IncSignalAbsent(signal string) {
+	if b.controlPlaneMetrics == nil || signal == "" {
+		return
+	}
+	b.hubSignalAbsent.WithLabelValues(signal).Inc()
+}
+
+func (b hubMetricsBinder) IncUnlabeledSeries(signal string) {
+	if b.controlPlaneMetrics == nil || signal == "" {
+		return
+	}
+	b.hubUnlabeledSeries.WithLabelValues(signal).Inc()
 }
 
 func (m *controlPlaneMetrics) metricsHandler() http.Handler {

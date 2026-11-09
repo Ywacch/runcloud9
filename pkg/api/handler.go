@@ -25,6 +25,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/loadgen/vu"
 	"github.com/ywacch/cloud9/pkg/logs"
 	"github.com/ywacch/cloud9/pkg/metrics"
+	"github.com/ywacch/cloud9/pkg/metrics/hub"
 	"github.com/ywacch/cloud9/pkg/seeder"
 	"github.com/ywacch/cloud9/pkg/store"
 	"github.com/ywacch/cloud9/pkg/teardown"
@@ -179,6 +180,14 @@ func NewHandler(
 		sh.SetRequestObserver(h.cpMetrics.observeStoreRequest)
 	}
 	return h
+}
+
+// HubMetricsObserver exposes control-plane counters for the metrics hub refresh loop.
+func (h *Handler) HubMetricsObserver() hub.ObserveHub {
+	if h == nil || h.cpMetrics == nil {
+		return nil
+	}
+	return h.cpMetrics.HubMetricsObserver()
 }
 
 // SetClusterState attaches the shared informer cache for later read paths (P2.2+).
