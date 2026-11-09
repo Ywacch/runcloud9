@@ -12,6 +12,8 @@ import (
 var (
 	aggFuncs       = []string{"sum", "max", "min", "avg", "count"}
 	metricInExprRe = regexp.MustCompile(`([a-zA-Z_:][a-zA-Z0-9_:]*)\{`)
+	// Worker series names vary by template, so PromQL matches __name__ instead of a literal.
+	nameMatcherRe = regexp.MustCompile(`__name__=~"([^"]+)"`)
 )
 
 func TestLint_Catalog(t *testing.T) {
@@ -83,19 +85,23 @@ func lintSelectorPlaceholders(expr string) error {
 }
 
 func metricsInExpr(expr string) []string {
-	matches := metricInExprRe.FindAllStringSubmatch(expr, -1)
 	seen := make(map[string]struct{})
 	var out []string
-	for _, m := range matches {
-		name := m[1]
-		if isPromFunc(name) {
-			continue
+	add := func(name string) {
+		if name == "" || isPromFunc(name) {
+			return
 		}
 		if _, ok := seen[name]; ok {
-			continue
+			return
 		}
 		seen[name] = struct{}{}
 		out = append(out, name)
+	}
+	for _, m := range metricInExprRe.FindAllStringSubmatch(expr, -1) {
+		add(m[1])
+	}
+	for _, m := range nameMatcherRe.FindAllStringSubmatch(expr, -1) {
+		add(m[1])
 	}
 	sort.Strings(out)
 	return out

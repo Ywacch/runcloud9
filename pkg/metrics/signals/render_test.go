@@ -34,7 +34,33 @@ func TestRender_AllCatalogClusterAndNamespace(t *testing.T) {
 			if !strings.Contains(got, `namespace="ns-a"`) {
 				t.Fatalf("namespace form missing namespace: %q", got)
 			}
+			if s.BareNamespace {
+				if strings.Contains(got, `deployment!=""`) {
+					t.Fatalf("bare namespace form must omit deployment selector: %q", got)
+				}
+			} else if !strings.Contains(got, `deployment!=""`) {
+				t.Fatalf("namespace form missing deployment selector: %q", got)
+			}
 		})
+	}
+}
+
+func TestRender_AppRequestRatePodBareNamespace(t *testing.T) {
+	t.Parallel()
+
+	s := signalByID(t, AppRequestRatePod)
+	got, err := RenderNamespace(s, "ns-replica")
+	if err != nil {
+		t.Fatalf("RenderNamespace: %v", err)
+	}
+	if strings.Contains(got, `deployment!=""`) {
+		t.Fatalf("pod request rate must use bare namespace selector: %q", got)
+	}
+	if !strings.Contains(got, "by (pod)") {
+		t.Fatalf("missing pod group by: %q", got)
+	}
+	if strings.Contains(got, "by (namespace, pod)") {
+		t.Fatalf("namespace form must group by pod only: %q", got)
 	}
 }
 
