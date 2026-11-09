@@ -1398,7 +1398,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 
 	dm.TemplateMetrics = c.collectTemplateMetrics(ctx, nsSel, template)
 	c.augmentTemplateMetrics(dm, template)
-	dm.Timeline = c.collectTimelineOps(ctx, nsSel, template)
+	dm.Timeline = c.collectTimelineOps(ctx, namespace, nsSel, template)
 
 	tmpl := templates.GetTemplate(template)
 	runtimeEvents := c.attachRuntimeHealth(ctx, namespace, dm)

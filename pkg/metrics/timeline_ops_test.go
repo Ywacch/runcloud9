@@ -112,7 +112,7 @@ func TestDetectTimelineEngine_prefersPostgresqlRate(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
-	engine := c.detectTimelineEngine(context.Background(), `namespace="ns"`)
+	engine := c.detectTimelineEngine(context.Background(), "ns", `namespace="ns"`)
 	if engine != "postgresql" {
 		t.Fatalf("engine: got %q want postgresql", engine)
 	}

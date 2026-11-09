@@ -365,14 +365,14 @@ func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel strin
 	io := &StorageIO{Unit: prov.Unit, Source: prov.Source}
 	switch engine {
 	case StorageEngineRedis:
-		io.ReadRate, _ = c.query(ctx, redisStorageReadRateQuery(ns, template))
-		io.WriteRate, _ = c.query(ctx, redisStorageWriteRateQuery(ns, template))
-		readByPod := c.queryMultiResult(ctx, redisStorageReadTotal9mQuery(ns, template), "pod")
-		writeByPod := c.queryMultiResult(ctx, redisStorageWriteTotal9mQuery(ns, template), "pod")
+		io.ReadRate, _ = c.redisStorageReadRate(ctx, ns, template)
+		io.WriteRate, _ = c.redisStorageWriteRate(ctx, ns, template)
+		readByPod := c.redisStorageReadTotalByPod(ctx, ns, template)
+		writeByPod := c.redisStorageWriteTotalByPod(ctx, ns, template)
 		io.ReadTotal9m = c.sessionAcc.ObserveDeltas(ns, seriesRedisRead, readByPod)
 		io.WriteTotal9m = c.sessionAcc.ObserveDeltas(ns, seriesRedisWrite, writeByPod)
-		io.ReadLatency, _ = c.query(ctx, redisStorageReadLatencyQuery(ns, template))
-		io.WriteLatency, _ = c.query(ctx, redisStorageWriteLatencyQuery(ns, template))
+		io.ReadLatency, _ = c.redisStorageReadLatency(ctx, ns, template)
+		io.WriteLatency, _ = c.redisStorageWriteLatency(ctx, ns, template)
 	default:
 		switch engine {
 		case StorageEnginePostgreSQL:
@@ -404,19 +404,35 @@ func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel strin
 		}
 	}
 	if prov.BytesUsedQuery != nil {
-		if v, _ := c.query(ctx, prov.BytesUsedQuery(ns)); v > 0 {
-			io.BytesUsed = int64(v)
+		switch engine {
+		case StorageEngineRedis:
+			if v, ok := c.redisMemoryUsedBytes(ctx, ns); ok && v > 0 {
+				io.BytesUsed = int64(v)
+			}
+		default:
+			if v, _ := c.query(ctx, prov.BytesUsedQuery(ns)); v > 0 {
+				io.BytesUsed = int64(v)
+			}
 		}
 	}
 	if prov.BytesLimitQuery != nil {
-		if v, _ := c.query(ctx, prov.BytesLimitQuery(ns)); v > 0 {
-			io.BytesLimit = int64(v)
+		switch engine {
+		case StorageEngineRedis:
+			if v, ok := c.redisMemoryMaxBytes(ctx, ns); ok && v > 0 {
+				io.BytesLimit = int64(v)
+			}
+		default:
+			if v, _ := c.query(ctx, prov.BytesLimitQuery(ns)); v > 0 {
+				io.BytesLimit = int64(v)
+			}
 		}
 	}
 	if prov.ErrorRateQuery != nil {
 		switch engine {
 		case StorageEnginePostgreSQL:
 			io.ErrorRate, _ = c.postgresXactRollbackRate(ctx, ns)
+		case StorageEngineRedis:
+			io.ErrorRate, _ = c.redisStorageRejectedRate(ctx, ns)
 		default:
 			io.ErrorRate, _ = c.query(ctx, prov.ErrorRateQuery(ns))
 		}
