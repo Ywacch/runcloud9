@@ -5,13 +5,16 @@ package signals
 type ID string
 
 const (
-	AppRequestRate   ID = "app_request_rate"
-	AppErrorRate     ID = "app_error_rate"
-	AppLatencyP50    ID = "app_latency_p50"
-	AppLatencyP95    ID = "app_latency_p95"
-	AppLatencyP99    ID = "app_latency_p99"
-	AppProcessCPU    ID = "app_process_cpu"
-	AppProcessMemory ID = "app_process_memory"
+	AppRequestRate     ID = "app_request_rate"
+	AppErrorRate       ID = "app_error_rate"
+	AppLatencyP50      ID = "app_latency_p50"
+	AppLatencyP95      ID = "app_latency_p95"
+	AppLatencyP99      ID = "app_latency_p99"
+	AppProcessCPU      ID = "app_process_cpu"
+	AppProcessMemory   ID = "app_process_memory"
+	AppCacheHitsRate   ID = "app_cache_hits_rate"
+	AppCacheMissesRate ID = "app_cache_misses_rate"
+	AppCacheErrorsRate ID = "app_cache_errors_rate"
 
 	ContainerCPULimit    ID = "container_cpu_limit"
 	ContainerMemoryLimit ID = "container_memory_limit"

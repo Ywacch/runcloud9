@@ -17,6 +17,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/kubeobs"
 	"github.com/ywacch/cloud9/pkg/loadgen"
 	metricshub "github.com/ywacch/cloud9/pkg/metrics/hub"
+	"github.com/ywacch/cloud9/pkg/metrics/signals"
 	"github.com/ywacch/cloud9/pkg/probes"
 	"github.com/ywacch/cloud9/pkg/templates"
 	"golang.org/x/sync/singleflight"
@@ -951,50 +952,66 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 
 	// App-server: HTTP + cache counters from url-shortener /metrics
 	cmApp := ComponentMetrics{Component: "app-server"}
-	appCPU, appCPUEst := c.queryProcessCPU(ctx, ns, "app-server.*", "app-server")
-	appMem, appMemEst := c.queryProcessMemory(ctx, ns, "app-server.*", "app-server")
+	appCPUPrimary := fmt.Sprintf(
+		`sum(rate(process_cpu_seconds_total{namespace=%q,pod=~"app-server.*"}%s))`,
+		ns, promRateRange(),
+	)
+	appCPU, appCPUOK := c.sigCompatByApp(ctx, ns, signals.AppProcessCPU, "app-server", appCPUPrimary)
+	appCPUEst := false
+	if !appCPUOK {
+		appCPU, appCPUEst = c.queryProcessCPU(ctx, ns, "app-server.*", "app-server")
+	}
+	appMemPrimary := fmt.Sprintf(
+		`sum(process_resident_memory_bytes{namespace=%q,pod=~"app-server.*"})`,
+		ns,
+	)
+	appMem, appMemOK := c.sigCompatByApp(ctx, ns, signals.AppProcessMemory, "app-server", appMemPrimary)
+	appMemEst := false
+	if !appMemOK {
+		appMem, appMemEst = c.queryProcessMemory(ctx, ns, "app-server.*", "app-server")
+	}
 	cmApp.CPUUsage = appCPU
 	cmApp.CPUIsEstimated = appCPUEst
 	cmApp.MemoryBytes = int64(appMem)
 	cmApp.MemIsEstimated = appMemEst
 
-	rps, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(http_requests_total{%s}%s))`,
-		nsSel, promRateRange(),
-	))
+	rpsProm := fmt.Sprintf(`sum(rate(http_requests_total{%s}%s))`, nsSel, promRateRange())
+	rps, _ := c.sigCompat(ctx, ns, signals.AppRequestRate, rpsProm)
 	cmApp.RequestRate = rps
 
-	// UNDERSTAND: histogram_quantile needs the _bucket metric, not _total.
-	latBucketRate := fmt.Sprintf(`sum(rate(http_request_duration_seconds_bucket{%s}%s)) by (le)`, nsSel, promRateRange())
-	p50, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.50, %s)`, latBucketRate))
-	p95, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.95, %s)`, latBucketRate))
-	p99, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.99, %s)`, latBucketRate))
+	p50Prom := fmt.Sprintf(
+		`histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{%s}%s)) by (le))`,
+		nsSel, promRateRange(),
+	)
+	p95Prom := fmt.Sprintf(
+		`histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{%s}%s)) by (le))`,
+		nsSel, promRateRange(),
+	)
+	p99Prom := fmt.Sprintf(
+		`histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{%s}%s)) by (le))`,
+		nsSel, promRateRange(),
+	)
+	p50, _ := c.sigCompat(ctx, ns, signals.AppLatencyP50, p50Prom)
+	p95, _ := c.sigCompat(ctx, ns, signals.AppLatencyP95, p95Prom)
+	p99, _ := c.sigCompat(ctx, ns, signals.AppLatencyP99, p99Prom)
 	cmApp.P50Latency = p50
 	cmApp.P95Latency = p95
 	cmApp.P99Latency = p99
 
-	hits, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(cache_hits_total{%s}%s))`,
-		nsSel, promRateRange(),
-	))
+	hitsProm := fmt.Sprintf(`sum(rate(cache_hits_total{%s}%s))`, nsSel, promRateRange())
+	hits, _ := c.sigCompat(ctx, ns, signals.AppCacheHitsRate, hitsProm)
 	cmApp.CacheHits = hits
 
-	misses, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(cache_misses_total{%s}%s))`,
-		nsSel, promRateRange(),
-	))
+	missesProm := fmt.Sprintf(`sum(rate(cache_misses_total{%s}%s))`, nsSel, promRateRange())
+	misses, _ := c.sigCompat(ctx, ns, signals.AppCacheMissesRate, missesProm)
 	cmApp.CacheMisses = misses
 
-	cacheErrs, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(cache_errors_total{%s}%s))`,
-		nsSel, promRateRange(),
-	))
+	cacheErrsProm := fmt.Sprintf(`sum(rate(cache_errors_total{%s}%s))`, nsSel, promRateRange())
+	cacheErrs, _ := c.sigCompat(ctx, ns, signals.AppCacheErrorsRate, cacheErrsProm)
 	cmApp.CacheErrors = cacheErrs
 
-	errRate, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(http_requests_total{%s,status=~"5.."}%s))`,
-		nsSel, promRateRange(),
-	))
+	errRateProm := fmt.Sprintf(`sum(rate(http_requests_total{%s,status=~"5.."}%s))`, nsSel, promRateRange())
+	errRate, _ := c.sigCompat(ctx, ns, signals.AppErrorRate, errRateProm)
 	cmApp.ErrorRate = errRate
 
 	// Session p50/p95/p99: rate() over elapsed deployment time (clamped 1m–30m), not a fixed 9m window.
@@ -1201,8 +1218,24 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	}
 
 	cmWorker := ComponentMetrics{Component: "worker"}
-	wCPU, wCPUEst := c.queryProcessCPU(ctx, ns, "worker.*", "worker")
-	wMem, wMemEst := c.queryProcessMemory(ctx, ns, "worker.*", "worker")
+	wCPUPrimary := fmt.Sprintf(
+		`sum(rate(process_cpu_seconds_total{namespace=%q,pod=~"worker.*"}%s))`,
+		ns, promRateRange(),
+	)
+	wCPU, wCPUOK := c.sigCompatByApp(ctx, ns, signals.AppProcessCPU, "worker", wCPUPrimary)
+	wCPUEst := false
+	if !wCPUOK {
+		wCPU, wCPUEst = c.queryProcessCPU(ctx, ns, "worker.*", "worker")
+	}
+	wMemPrimary := fmt.Sprintf(
+		`sum(process_resident_memory_bytes{namespace=%q,pod=~"worker.*"})`,
+		ns,
+	)
+	wMem, wMemOK := c.sigCompatByApp(ctx, ns, signals.AppProcessMemory, "worker", wMemPrimary)
+	wMemEst := false
+	if !wMemOK {
+		wMem, wMemEst = c.queryProcessMemory(ctx, ns, "worker.*", "worker")
+	}
 	cmWorker.CPUUsage = wCPU
 	cmWorker.CPUIsEstimated = wCPUEst
 	cmWorker.MemoryBytes = int64(wMem)
