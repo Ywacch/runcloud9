@@ -86,17 +86,18 @@ type MetricsCollector struct {
 	replSQLFlight           singleflight.Group
 	replicationAdminForTest func(namespace, pod, container string) deployer.PostgresAdmin // tests only
 
-	clusterSampleEnabled bool
-	sampleMu             sync.RWMutex
-	clusterSample        *clusterSample
-	sampleFlight         singleflight.Group
-	metricsQueryObserver MetricsQueryObserver
-	promQueryObserver    PromQueryObserver
-	collectObserver      CollectObserver
-	frameBytesObserver   FrameBytesObserver
-	clusterState         *clusterstate.Cache
-	inv                  inventory
-	metricsHub           *metricshub.Hub
+	clusterSampleEnabled  bool
+	sampleMu              sync.RWMutex
+	clusterSample         *clusterSample
+	sampleFlight          singleflight.Group
+	metricsQueryObserver  MetricsQueryObserver
+	promQueryObserver     PromQueryObserver
+	signalCompareObserver SignalCompareObserver
+	collectObserver       CollectObserver
+	frameBytesObserver    FrameBytesObserver
+	clusterState          *clusterstate.Cache
+	inv                   inventory
+	metricsHub            *metricshub.Hub
 }
 
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.

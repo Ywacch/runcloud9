@@ -4,6 +4,16 @@ package signals
 // does not import pkg/metrics.
 const promRateWindow = "[10s]"
 
+// Lookup returns one catalog entry by ID.
+func Lookup(id ID) (Signal, bool) {
+	for _, s := range Catalog() {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return Signal{}, false
+}
+
 // Catalog returns every declared signal. The slice order is stable for tests.
 func Catalog() []Signal {
 	return []Signal{

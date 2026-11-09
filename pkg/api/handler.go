@@ -167,6 +167,7 @@ func NewHandler(
 	if h.metricsCollector != nil && h.cpMetrics != nil {
 		h.metricsCollector.SetMetricsQueryObserver(h.cpMetrics.observeMetricsQueries)
 		h.metricsCollector.SetPromQueryObserver(h.cpMetrics.observePromQuery)
+		h.metricsCollector.SetSignalCompareObserver(h.cpMetrics.observeSignalCompare)
 		h.metricsCollector.SetCollectObserver(h.cpMetrics.observeCollectSeconds)
 		h.metricsCollector.SetFrameBytesObserver(h.cpMetrics.observeFrameBytes)
 		h.cpMetrics.RegisterRingGauge(func() float64 {
