@@ -41,17 +41,9 @@ func (c *MetricsCollector) collectCacheLayerSplit(ctx context.Context, ns string
 		},
 	}
 
-	redisCPUUser, redisUserPresent, _ := c.queryScalar(ctx, fmt.Sprintf(
-		`sum(rate(redis_cpu_user_seconds_total{namespace=%q}%s))`,
-		ns, promRateRange(),
-	))
-	redisCPUSys, redisSysPresent, _ := c.queryScalar(ctx, fmt.Sprintf(
-		`sum(rate(redis_cpu_sys_seconds_total{namespace=%q}%s))`,
-		ns, promRateRange(),
-	))
-	redisExporterPresent := redisUserPresent || redisSysPresent
+	redisCPU, redisExporterPresent := c.redisExporterCPURate(ctx, ns)
 	if redisExporterPresent {
-		out.redis.CPUUsage = redisCPUUser + redisCPUSys
+		out.redis.CPUUsage = redisCPU
 		out.redis.CPUIsEstimated = false
 	} else {
 		cpu, est := c.queryContainerCPUPrimaryOnly(ctx, ns, "redis-internal.*", "redis")
@@ -72,7 +64,7 @@ func (c *MetricsCollector) collectCacheLayerSplit(ctx context.Context, ns string
 	redisMem, redisMemPresent := c.queryContainerMemoryPrimaryOnly(ctx, ns, "redis-internal.*", "redis")
 	out.redis.MemoryBytes = int64(redisMem)
 	out.redis.MemIsEstimated = !redisMemPresent
-	if v, _ := c.query(ctx, fmt.Sprintf(`sum(redis_memory_used_bytes{namespace=%q})`, ns)); v > 0 {
+	if v, ok := c.redisMemoryUsedBytes(ctx, ns); ok && v > 0 {
 		out.redis.MemoryBytes = int64(v)
 		out.redis.MemIsEstimated = false
 	}
@@ -89,7 +81,7 @@ func (c *MetricsCollector) collectCacheLayerSplit(ctx context.Context, ns string
 	out.redis.CPULimit = c.kubeLimitCPU(ctx, ns, "redis-internal.*", "redis")
 	out.proxy.CPULimit = c.kubeLimitCPU(ctx, ns, "cache-proxy.*", "cache-proxy")
 	out.redis.MemoryLimit = c.kubeLimitMem(ctx, ns, "redis-internal.*", "redis")
-	if redisMax, _ := c.query(ctx, fmt.Sprintf(`max(redis_memory_max_bytes{namespace=%q})`, ns)); redisMax > 0 {
+	if redisMax, ok := c.redisMemoryMaxBytes(ctx, ns); ok && redisMax > 0 {
 		out.redis.MemoryLimit = int64(redisMax)
 	}
 	out.proxy.MemoryLimit = c.kubeLimitMem(ctx, ns, "cache-proxy.*", "cache-proxy")
