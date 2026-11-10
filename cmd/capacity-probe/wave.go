@@ -259,7 +259,8 @@ func cleanupTracked(ctx context.Context, client *apiClient, tracker *deploymentT
 	sem := make(chan struct{}, cleanupDeleteParallel)
 	var wg sync.WaitGroup
 	var issuedMu sync.Mutex
-	issuedAt := make(map[string]time.Time, len(items))
+	acceptedAt := make(map[string]time.Time, len(items))
+	var acceptLags []time.Duration
 	for _, item := range items {
 		item := item
 		wg.Add(1)
@@ -277,15 +278,18 @@ func cleanupTracked(ctx context.Context, client *apiClient, tracker *deploymentT
 				log.Printf("delete %s: %v", item.ID, err)
 				return
 			}
+			accepted := time.Now()
 			issuedMu.Lock()
-			issuedAt[item.ID] = started
+			acceptedAt[item.ID] = accepted
+			acceptLags = append(acceptLags, accepted.Sub(started))
 			issuedMu.Unlock()
 		}()
 	}
 	wg.Wait()
 
 	seen := make(map[string]struct{}, len(items))
-	var lags []time.Duration
+	var drainLags []time.Duration
+	var workerLags []time.Duration
 	deadline := time.Now().Add(cleanupWaitBudget)
 	for {
 		remaining := 0
@@ -301,27 +305,34 @@ func cleanupTracked(ctx context.Context, client *apiClient, tracker *deploymentT
 			}
 			seen[item.ID] = struct{}{}
 			issuedMu.Lock()
-			started, ok := issuedAt[item.ID]
+			accepted, ok := acceptedAt[item.ID]
 			issuedMu.Unlock()
 			if !ok {
 				continue
 			}
-			lag := time.Since(started)
-			lags = append(lags, lag)
-			log.Printf("cleanup %s lag=%s", item.ID, lag.Round(time.Millisecond))
+			now := time.Now()
+			drain := now.Sub(accepted)
+			drainLags = append(drainLags, drain)
+			worker, hasWorker := workerLag(st.MetricsSummary, now)
+			if hasWorker {
+				workerLags = append(workerLags, worker)
+				log.Printf("cleanup %s accept-to-gone=%s worker=%s", item.ID, drain.Round(time.Millisecond), worker.Round(time.Millisecond))
+				continue
+			}
+			log.Printf("cleanup %s accept-to-gone=%s", item.ID, drain.Round(time.Millisecond))
 		}
 		if remaining == 0 {
-			logCleanupLag(lags)
+			logCleanupTimes(acceptLags, drainLags, workerLags)
 			return
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
-			logCleanupLag(lags)
+			logCleanupTimes(acceptLags, drainLags, workerLags)
 			log.Printf("cleanup wait timed out; %d deployments are not terminated", remaining)
 			return
 		}
 		select {
 		case <-ctx.Done():
-			logCleanupLag(lags)
+			logCleanupTimes(acceptLags, drainLags, workerLags)
 			log.Printf("cleanup wait timed out; %d deployments are not terminated", remaining)
 			return
 		case <-time.After(2 * time.Second):
@@ -329,18 +340,45 @@ func cleanupTracked(ctx context.Context, client *apiClient, tracker *deploymentT
 	}
 }
 
-func logCleanupLag(lags []time.Duration) {
-	if len(lags) == 0 {
-		log.Printf("cleanup lag samples=0")
+func workerLag(summary map[string]any, now time.Time) (time.Duration, bool) {
+	if summary == nil {
+		return 0, false
+	}
+	raw, ok := summary["teardown_worker_started_at"].(string)
+	if !ok || raw == "" {
+		return 0, false
+	}
+	started, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return 0, false
+	}
+	d := now.Sub(started)
+	if d < 0 {
+		return 0, false
+	}
+	return d, true
+}
+
+func logCleanupTimes(accept, drain, worker []time.Duration) {
+	if len(drain) == 0 && len(accept) == 0 {
+		log.Printf("cleanup samples=0")
 		return
 	}
-	max := lags[0]
-	for _, lag := range lags[1:] {
-		if lag > max {
-			max = lag
+	log.Printf("cleanup samples=%d accept_max=%s drain_max=%s worker_max=%s worker_samples=%d",
+		len(drain), maxDuration(accept), maxDuration(drain), maxDuration(worker), len(worker))
+}
+
+func maxDuration(ds []time.Duration) time.Duration {
+	if len(ds) == 0 {
+		return 0
+	}
+	max := ds[0]
+	for _, d := range ds[1:] {
+		if d > max {
+			max = d
 		}
 	}
-	log.Printf("cleanup lag samples=%d max=%s", len(lags), max.Round(time.Millisecond))
+	return max.Round(time.Millisecond)
 }
 
 func deleteDeploymentRetry(ctx context.Context, client *apiClient, id string) error {
