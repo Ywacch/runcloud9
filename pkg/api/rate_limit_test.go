@@ -23,12 +23,12 @@ func TestNoopRequestLimiter_AlwaysAllows(t *testing.T) {
 func TestMemoryRequestLimiter_StandardBurst(t *testing.T) {
 	t.Parallel()
 	lim := newMemoryRequestLimiter(rateLimitConfig{
-		standardRPS:   rate.Limit(1000),
-		standardBurst: 2,
-		expensiveRPS:  rate.Limit(1000),
+		standardRPS:    rate.Limit(1000),
+		standardBurst:  2,
+		expensiveRPS:   rate.Limit(1000),
 		expensiveBurst: 10,
-		publicRPS:     rate.Limit(1000),
-		publicBurst:   10,
+		publicRPS:      rate.Limit(1000),
+		publicBurst:    10,
 	})
 
 	key := "user:test"
@@ -44,6 +44,32 @@ func TestMemoryRequestLimiter_StandardBurst(t *testing.T) {
 	}
 	if retry <= 0 {
 		t.Fatalf("expected positive retry-after, got %v", retry)
+	}
+}
+
+func TestMemoryRequestLimiter_ReleaseSeparateFromStandard(t *testing.T) {
+	t.Parallel()
+	lim := newMemoryRequestLimiter(rateLimitConfig{
+		standardRPS:   rate.Limit(0.001),
+		standardBurst: 1,
+		releaseRPS:    rate.Limit(100),
+		releaseBurst:  4,
+	})
+	key := "user:release"
+	if allowed, _ := lim.Allow(context.Background(), key, LimitClassStandard); !allowed {
+		t.Fatal("standard burst should allow the first request")
+	}
+	if allowed, _ := lim.Allow(context.Background(), key, LimitClassStandard); allowed {
+		t.Fatal("standard bucket should be exhausted")
+	}
+	for i := 0; i < 4; i++ {
+		allowed, _ := lim.Allow(context.Background(), key, LimitClassRelease)
+		if !allowed {
+			t.Fatalf("release request %d: expected allowed", i+1)
+		}
+	}
+	if allowed, _ := lim.Allow(context.Background(), key, LimitClassRelease); allowed {
+		t.Fatal("release burst should be exhausted on the fifth request")
 	}
 }
 
@@ -70,12 +96,12 @@ func TestMemoryRequestLimiter_ExpensiveSeparateFromStandard(t *testing.T) {
 func TestRateLimitMiddleware_Returns429(t *testing.T) {
 	t.Parallel()
 	lim := newMemoryRequestLimiter(rateLimitConfig{
-		standardRPS:   rate.Limit(1),
-		standardBurst: 1,
-		expensiveRPS:  rate.Limit(1),
+		standardRPS:    rate.Limit(1),
+		standardBurst:  1,
+		expensiveRPS:   rate.Limit(1),
 		expensiveBurst: 1,
-		publicRPS:     rate.Limit(1),
-		publicBurst:   1,
+		publicRPS:      rate.Limit(1),
+		publicBurst:    1,
 	})
 	rl := newRateLimitMiddleware(lim)
 
@@ -164,12 +190,12 @@ func TestNewRequestLimiterFromEnv_RedisNotImplemented(t *testing.T) {
 
 func TestRouteAuth_OrderAuthBeforeRateLimit(t *testing.T) {
 	lim := newMemoryRequestLimiter(rateLimitConfig{
-		standardRPS:   rate.Limit(1),
-		standardBurst: 1,
-		expensiveRPS:  rate.Limit(1),
+		standardRPS:    rate.Limit(1),
+		standardBurst:  1,
+		expensiveRPS:   rate.Limit(1),
 		expensiveBurst: 1,
-		publicRPS:     rate.Limit(1),
-		publicBurst:   1,
+		publicRPS:      rate.Limit(1),
+		publicBurst:    1,
 	})
 	rl := newRateLimitMiddleware(lim)
 

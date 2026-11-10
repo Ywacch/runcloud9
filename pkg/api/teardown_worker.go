@@ -264,6 +264,15 @@ func (h *Handler) runTeardown(namespace string, enqueued time.Time, reason strin
 	if row.Status == statusTerminated {
 		return nil
 	}
+	startedAt := rfc3339UTC(time.Now())
+	if row.MetricsSummary == nil {
+		row.MetricsSummary = map[string]any{}
+	}
+	row.MetricsSummary["teardown_worker_started_at"] = startedAt
+	h.stampMetrics(ctx, namespace, map[string]any{
+		"teardown_worker_started_at": startedAt,
+	})
+
 	if row.Status != statusTerminating {
 		ok, err := h.store.ClaimStatus(ctx, namespace, statusesThatMayTearDown, statusTerminating)
 		if err != nil {

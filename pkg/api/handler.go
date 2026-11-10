@@ -236,7 +236,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /me", routeAuth(auth, rl, http.HandlerFunc(h.handleGetCurrentUser)))
 	mux.Handle("GET /me/engine-gates", routeAuth(auth, rl, http.HandlerFunc(h.handleEngineGates)))
 	mux.Handle("GET /deployments/{id}", routeAuth(auth, rl, http.HandlerFunc(h.handleGetDeployment)))
-	mux.Handle("DELETE /deployments/{id}", routeAuth(auth, rl, http.HandlerFunc(h.handleDeleteDeployment)))
+	mux.Handle("DELETE /deployments/{id}", routeAuthRelease(auth, rl, http.HandlerFunc(h.handleDeleteDeployment)))
 	mux.Handle("GET /deployments/{id}/ai-context", routeAuth(auth, rl, http.HandlerFunc(h.handleAIContext)))
 	mux.Handle("GET /deployments/{id}/metrics", routeAuth(auth, rl, http.HandlerFunc(h.handleMetricsStream)))
 	mux.Handle("GET /deployments/{id}/chat", routeAuth(auth, rl, http.HandlerFunc(h.handleChatStream)))

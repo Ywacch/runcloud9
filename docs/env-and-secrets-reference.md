@@ -37,6 +37,9 @@ Use this doc as the source of truth for required/optional environment variables 
 | `API_RATE_LIMIT_BURST` | No | `60` | Burst for standard authenticated routes. |
 | `API_RATE_LIMIT_EXPENSIVE_RPM` | No | `6` | Per-user rate for create deploy, loadgen start, chaos (requests/minute). |
 | `API_RATE_LIMIT_EXPENSIVE_BURST` | No | `3` | Burst for expensive routes. |
+| `API_RATE_LIMIT_RELEASE_RPS` | No | `100` | Per-user rate for `DELETE /deployments`. Separate from the standard and create buckets. |
+| `API_RATE_LIMIT_RELEASE_BURST` | No | `128` | Burst for `DELETE /deployments`. A 100-delete wave fits in one burst. |
+| `TEARDOWN_WORKERS` | No | `8` | How many namespace deletions run at once after DELETE has returned. |
 | `API_RATE_LIMIT_PUBLIC_RPS` | No | `60` | Per-IP rate for `/health` and `/templates`. |
 | `API_RATE_LIMIT_PUBLIC_BURST` | No | `120` | Burst for public routes. |
 | `TEMPLATE_IMAGE_REGISTRY` | No | Empty | Registry prefix for deployable images. |

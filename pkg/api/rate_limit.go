@@ -22,6 +22,7 @@ type LimitClass string
 const (
 	LimitClassStandard  LimitClass = "standard"
 	LimitClassExpensive LimitClass = "expensive"
+	LimitClassRelease   LimitClass = "release"
 	LimitClassPublic    LimitClass = "public"
 )
 
@@ -41,12 +42,14 @@ func (noopRequestLimiter) Allow(context.Context, string, LimitClass) (bool, time
 }
 
 type rateLimitConfig struct {
-	standardRPS   rate.Limit
-	standardBurst int
-	expensiveRPS  rate.Limit
+	standardRPS    rate.Limit
+	standardBurst  int
+	expensiveRPS   rate.Limit
 	expensiveBurst int
-	publicRPS     rate.Limit
-	publicBurst   int
+	releaseRPS     rate.Limit
+	releaseBurst   int
+	publicRPS      rate.Limit
+	publicBurst    int
 }
 
 type memoryRequestLimiter struct {
@@ -99,6 +102,8 @@ func (m *memoryRequestLimiter) limitsFor(class LimitClass) (rate.Limit, int) {
 	switch class {
 	case LimitClassExpensive:
 		return m.cfg.expensiveRPS, m.cfg.expensiveBurst
+	case LimitClassRelease:
+		return m.cfg.releaseRPS, m.cfg.releaseBurst
 	case LimitClassPublic:
 		return m.cfg.publicRPS, m.cfg.publicBurst
 	default:
@@ -144,6 +149,8 @@ func rateLimitConfigFromEnv() rateLimitConfig {
 		standardBurst:  envPositiveInt("API_RATE_LIMIT_BURST", 60),
 		expensiveRPS:   envRPM("API_RATE_LIMIT_EXPENSIVE_RPM", 6),
 		expensiveBurst: envPositiveInt("API_RATE_LIMIT_EXPENSIVE_BURST", 3),
+		releaseRPS:     envRateLimit("API_RATE_LIMIT_RELEASE_RPS", 100),
+		releaseBurst:   envPositiveInt("API_RATE_LIMIT_RELEASE_BURST", 128),
 		publicRPS:      envRateLimit("API_RATE_LIMIT_PUBLIC_RPS", 60),
 		publicBurst:    envPositiveInt("API_RATE_LIMIT_PUBLIC_BURST", 120),
 	}
@@ -255,6 +262,12 @@ func routeAuth(auth func(http.Handler) http.Handler, rl *rateLimitMiddleware, ne
 // routeAuthExpensive applies JWT auth then stricter per-user limits.
 func routeAuthExpensive(auth func(http.Handler) http.Handler, rl *rateLimitMiddleware, next http.Handler) http.Handler {
 	return auth(rl.wrap(LimitClassExpensive, next))
+}
+
+// routeAuthRelease applies JWT auth then the delete bucket.
+// Deletes free capacity, so they do not share the standard or create buckets.
+func routeAuthRelease(auth func(http.Handler) http.Handler, rl *rateLimitMiddleware, next http.Handler) http.Handler {
+	return auth(rl.wrap(LimitClassRelease, next))
 }
 
 // routePublic applies per-IP limits without auth.
