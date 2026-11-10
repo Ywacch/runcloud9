@@ -77,8 +77,8 @@ func GetTierLimits(tier string) TierLimits {
 		return TierLimits{
 			// Raised for capacity-measurement campaigns (bouncer Phase 0).
 			// This is an authorization ceiling, not a cluster admission budget.
-			// Must cover rung-1 (50 sessions in one wave): cmd/capacity-probe/testdata/waves/rung-1.yaml
-			MaxConcurrent:        50,
+			// Default 50; rung-2 needs 100 via INTERNAL_MAX_CONCURRENT on the API deployment.
+			MaxConcurrent:        internalMaxConcurrent(),
 			SessionDefaultMins:   9,
 			SessionCapMins:       30,
 			MaxSessionsPerMonth:  0, // unlimited
