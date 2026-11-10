@@ -1,0 +1,11 @@
+# Rung 2 ladder: 100 url-shortener-small sessions, one burst wave.
+# Operator checklist: throwaway/tasks/scale-2000-plan.md section 8 (rung 2).
+name: rung-2
+tier: internal
+cooldown_seconds: 0
+waves:
+  - name: rung-2
+    mode: burst
+    groups:
+      - count: 100
+        design: url-shortener-small

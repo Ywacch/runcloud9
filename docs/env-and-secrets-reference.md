@@ -23,6 +23,7 @@ Use this doc as the source of truth for required/optional environment variables 
 | `PROMETHEUS_URL` | No | Empty | Prometheus base URL for metrics collection. |
 | `SEED_BUCKET_NAME` | No | `cloud9-seed-data` | Bucket used by seeder for prebuilt DB dumps. |
 | `DDC_BUCKET` | No | Empty | Bucket for diagnostics collector artifact uploads. |
+| `INTERNAL_MAX_CONCURRENT` | No | `50` | Internal-tier authorization ceiling (`GET /me` → `maxConcurrent`, create admission). Positive integer only; invalid or unset uses `50`. Not cluster doorway (`MAX_CONCURRENT_PROVISIONS`). |
 | `MAX_ACTIVE_DEPLOYMENTS_PER_USER` | No | `1` | Documented legacy name; per-user active limit is enforced via tier `MaxConcurrent` in code, not this env. |
 | `MAX_CONCURRENT_PROVISIONS` | No | unset (unlimited) | Doorway: max in-flight orchestrations per API process (`replicas: 1` only). |
 | `CLUSTER_DEPLOY_BUDGET_CPU` | No | unset (gate off) | Room budget CPU (k8s Quantity, e.g. `18500m`). Set **with** memory or leave both unset. |
