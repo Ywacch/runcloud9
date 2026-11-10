@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/ywacch/cloud9/pkg/admission"
@@ -42,6 +43,21 @@ var (
 	errCreateRow            = errors.New("create deployment row")
 )
 
+// admitQueueFullError is errQueueFull plus the queue depth at reject time.
+// The handler records the admission event after it releases admitMu.
+type admitQueueFullError struct {
+	depth int
+}
+
+func (e *admitQueueFullError) Error() string {
+	if e == nil {
+		return errQueueFull.Error()
+	}
+	return errQueueFull.Error()
+}
+
+func (e *admitQueueFullError) Unwrap() error { return errQueueFull }
+
 const (
 	designExceedsClusterMessage = "this design needs more CPU or memory than the cluster provides"
 	monthlySessionLimitMessage  = "monthly session limit reached — upgrade or wait until next month"
@@ -67,11 +83,13 @@ func hasRecentActiveCreate(active []store.ActiveDeploymentRow, now time.Time, wi
 // admitAndCreate enforces per-user concurrency, a short duplicate-create cooldown
 // (unless allowBurst), monthly session caps, and optional room budget, then inserts
 // the deployment row as provisioning or queued.
-// Caller must hold h.admitMu for the duration on a single-replica API.
+// Caller must hold h.admitMu for this call on a single-replica API.
+// Do not call finishAdmit while that lock is held.
 // The duplicate-create check is best-effort on one replica; burst callers opt out
 // via allowBurst (X-Cloud9-Batch-Launch).
 //
-// Returns the persisted status ("provisioning" or "queued").
+// Returns the persisted status ("provisioning" or "queued") and how many queued
+// rows were ahead of this one when status is queued.
 func (h *Handler) admitAndCreate(
 	ctx context.Context,
 	userID string,
@@ -82,9 +100,9 @@ func (h *Handler) admitAndCreate(
 	namespace string,
 	sessionExpiresAt time.Time,
 	allowBurst bool,
-) (string, error) {
+) (string, int, error) {
 	if h.store == nil {
-		return statusProvisioning, nil
+		return statusProvisioning, 0, nil
 	}
 
 	var err error
@@ -94,25 +112,21 @@ func (h *Handler) admitAndCreate(
 		}
 	}()
 
-	active, err := h.store.ListActiveDeployments(ctx, userID)
+	snap, err := h.loadAdmitSnapshot(ctx, userID, maxSessionsPerMonth)
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", errListActive, err)
+		return "", 0, err
 	}
-	if !allowBurst && hasRecentActiveCreate(active, time.Now(), duplicateCreateWindow) {
-		return "", errDuplicateCreate
+	if !allowBurst && hasRecentActiveCreate(snap.active, time.Now(), duplicateCreateWindow) {
+		err = errDuplicateCreate
+		return "", 0, err
 	}
-	if len(active) >= maxConcurrent {
-		return "", errUserAtCapacity
+	if len(snap.active) >= maxConcurrent {
+		err = errUserAtCapacity
+		return "", 0, err
 	}
-
-	if maxSessionsPerMonth > 0 {
-		n, err := h.store.CountUserDeploymentsSince(ctx, userID, store.StartOfUTCMonth(time.Now()))
-		if err != nil {
-			return "", fmt.Errorf("%w: %w", errCountMonthlySessions, err)
-		}
-		if n >= maxSessionsPerMonth {
-			return "", errMonthlySessionLimit
-		}
+	if maxSessionsPerMonth > 0 && snap.monthly >= maxSessionsPerMonth {
+		err = errMonthlySessionLimit
+		return "", 0, err
 	}
 
 	weight := admission.WeightFromBudget(deployer.QuotaResourceLimits(design, resourceQuotaTier))
@@ -123,30 +137,18 @@ func (h *Handler) admitAndCreate(
 
 	if h.roomBudget != nil {
 		if admission.ExceedsRoom(h.roomBudget, weight) {
-			return "", errDesignExceedsCluster
+			err = errDesignExceedsCluster
+			return "", 0, err
 		}
-		occRow, err := h.store.SumActiveAdmissionWeights(ctx)
-		if err != nil {
-			return "", fmt.Errorf("%w: %w", errSumOccupancy, err)
-		}
-		occ := admission.Occupancy{
-			CPUMillicores: occRow.CPUMillicores,
-			MemoryMi:      occRow.MemoryMi,
-		}
-		if !admission.Fits(h.roomBudget, occ, weight) {
-			n, err := h.store.CountQueuedDeployments(ctx)
-			if err != nil {
-				return "", fmt.Errorf("%w: %w", errCountQueued, err)
+		if !admission.Fits(h.roomBudget, snap.occ, weight) {
+			n, countErr := h.store.CountQueuedDeployments(ctx)
+			if countErr != nil {
+				err = fmt.Errorf("%w: %w", errCountQueued, countErr)
+				return "", 0, err
 			}
 			if n >= h.maxDeployQueue {
-				h.recordAdmissionEvent(ctx, store.AdmissionEvent{
-					UserID:        userID,
-					Template:      design.Template,
-					Kind:          store.AdmissionKindQueueFull,
-					QueuePosition: intPtr(n),
-					Paid:          h.admissionPaid(ctx, userID),
-				})
-				return "", errQueueFull
+				err = &admitQueueFullError{depth: n}
+				return "", 0, err
 			}
 			status = statusQueued
 			expiresAt = time.Now().Add(h.queueTTL)
@@ -154,9 +156,10 @@ func (h *Handler) admitAndCreate(
 		}
 	}
 
-	designMap, err := designToMap(design)
-	if err != nil {
-		return "", fmt.Errorf("%w: %w", errDesignEncode, err)
+	designMap, mapErr := designToMap(design)
+	if mapErr != nil {
+		err = fmt.Errorf("%w: %w", errDesignEncode, mapErr)
+		return "", 0, err
 	}
 
 	_, err = h.store.CreateDeployment(ctx, store.CreateDeploymentParams{
@@ -171,13 +174,25 @@ func (h *Handler) admitAndCreate(
 		Status:        status,
 	})
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", errCreateRow, err)
+		err = fmt.Errorf("%w: %w", errCreateRow, err)
+		return "", 0, err
 	}
+	return status, queuedAhead, nil
+}
+
+// finishAdmit writes the run manifest and admission events after admitMu is released
+// and after the HTTP response headers are sent.
+// ctx is detached from client cancel so a client that already read the response
+// does not abort the manifest write.
+func (h *Handler) finishAdmit(ctx context.Context, userID string, design deployer.DeploymentDesign, namespace, status string, queuedAhead int) {
+	if h == nil || h.store == nil || namespace == "" {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
 	h.stampRunManifest(ctx, namespace, design)
 	if status == statusQueued {
-		now := time.Now()
 		h.stampMetrics(ctx, namespace, map[string]any{
-			"queued_at": rfc3339UTC(now),
+			"queued_at": rfc3339UTC(time.Now()),
 		})
 		h.recordAdmissionEvent(ctx, store.AdmissionEvent{
 			UserID:        userID,
@@ -189,7 +204,60 @@ func (h *Handler) admitAndCreate(
 		})
 	}
 	h.observeAdmitResult(ctx, status, nil)
-	return status, nil
+}
+
+type admitSnapshot struct {
+	active  []store.ActiveDeploymentRow
+	occ     admission.Occupancy
+	monthly int
+}
+
+// loadAdmitSnapshot reads the rows the admit decision needs.
+// Independent reads run together. The caller still holds admitMu, so the
+// following insert stays ordered with other admits.
+func (h *Handler) loadAdmitSnapshot(ctx context.Context, userID string, maxSessionsPerMonth int) (admitSnapshot, error) {
+	var (
+		snap     admitSnapshot
+		listErr  error
+		sumErr   error
+		monthErr error
+		wg       sync.WaitGroup
+	)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		snap.active, listErr = h.store.ListActiveDeployments(ctx, userID)
+	}()
+	if h.roomBudget != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			row, err := h.store.SumActiveAdmissionWeights(ctx)
+			sumErr = err
+			snap.occ = admission.Occupancy{
+				CPUMillicores: row.CPUMillicores,
+				MemoryMi:      row.MemoryMi,
+			}
+		}()
+	}
+	if maxSessionsPerMonth > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			snap.monthly, monthErr = h.store.CountUserDeploymentsSince(ctx, userID, store.StartOfUTCMonth(time.Now()))
+		}()
+	}
+	wg.Wait()
+	if listErr != nil {
+		return admitSnapshot{}, fmt.Errorf("%w: %w", errListActive, listErr)
+	}
+	if sumErr != nil {
+		return admitSnapshot{}, fmt.Errorf("%w: %w", errSumOccupancy, sumErr)
+	}
+	if monthErr != nil {
+		return admitSnapshot{}, fmt.Errorf("%w: %w", errCountMonthlySessions, monthErr)
+	}
+	return snap, nil
 }
 
 func designToMap(design deployer.DeploymentDesign) (map[string]any, error) {

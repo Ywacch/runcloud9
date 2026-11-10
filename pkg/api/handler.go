@@ -575,14 +575,25 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 	sessionExpiresAt := time.Now().Add(time.Duration(sessionMinutes) * time.Minute)
 
 	status := statusProvisioning
+	queuedAhead := 0
 	if h.store != nil {
 		allowBurst := strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Cloud9-Batch-Launch")), "1")
 		h.admitMu.Lock()
 		var admitErr error
-		status, admitErr = h.admitAndCreate(r.Context(), userID, limits.MaxConcurrent, limits.MaxSessionsPerMonth, design, resourceQuotaTier, namespace, sessionExpiresAt, allowBurst)
+		status, queuedAhead, admitErr = h.admitAndCreate(r.Context(), userID, limits.MaxConcurrent, limits.MaxSessionsPerMonth, design, resourceQuotaTier, namespace, sessionExpiresAt, allowBurst)
 		h.admitMu.Unlock()
 		if admitErr != nil {
 			log.Printf("admit create deployment: %v", admitErr)
+			var queueFull *admitQueueFullError
+			if errors.As(admitErr, &queueFull) {
+				h.recordAdmissionEvent(r.Context(), store.AdmissionEvent{
+					UserID:        userID,
+					Template:      design.Template,
+					Kind:          store.AdmissionKindQueueFull,
+					QueuePosition: intPtr(queueFull.depth),
+					Paid:          h.admissionPaid(r.Context(), userID),
+				})
+			}
 			writeAdmitError(w, admitErr)
 			return
 		}
@@ -601,6 +612,10 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(resp)
+
+	if h.store != nil {
+		h.finishAdmit(r.Context(), userID, design, namespace, status, queuedAhead)
+	}
 
 	if status == statusQueued {
 		h.wakeDeployQueue()

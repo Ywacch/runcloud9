@@ -26,7 +26,7 @@ func TestAdmitAndCreate_StampsManifest(t *testing.T) {
 			Config: map[string]interface{}{"engine": "postgresql"},
 		}},
 	}
-	_, err := h.admitAndCreate(
+	status, _, err := h.admitAndCreate(
 		context.Background(),
 		"user-1",
 		2,
@@ -40,6 +40,7 @@ func TestAdmitAndCreate_StampsManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("admitAndCreate: %v", err)
 	}
+	h.finishAdmit(context.Background(), "user-1", design, ns, status, 0)
 	row, err := s.GetDeployment(context.Background(), ns)
 	if err != nil {
 		t.Fatal(err)
