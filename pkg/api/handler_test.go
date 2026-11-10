@@ -731,6 +731,77 @@ func TestHandleCreateDeployment_ConcurrentLimit_RejectsSecondActive(t *testing.T
 	}
 }
 
+func TestHandleCreateDeployment_MetricsStampDoesNotBlockAdmit(t *testing.T) {
+	t.Setenv("ENV", "development")
+	t.Setenv("SUPABASE_JWT_SECRET", "")
+	t.Setenv("SUPABASE_URL", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_CPU", "")
+	t.Setenv("CLUSTER_DEPLOY_BUDGET_MEMORY", "")
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	s := newFakeDeploymentStore()
+	s.blockMetricsUpdate = func() {
+		select {
+		case <-entered:
+		default:
+			close(entered)
+		}
+		<-release
+	}
+	h := NewHandler(nil, s, nil, nil, nil, nil, nil, nil, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := deployer.DeploymentDesign{
+		Template:  "url-shortener",
+		Archetype: "standard",
+		Nodes: []deployer.DeploymentNode{
+			{ID: "app", Type: "app-server", Name: "app", Config: map[string]interface{}{}},
+			{ID: "db", Type: "db", Name: "db", Config: map[string]interface{}{}},
+		},
+		Connections: []deployer.DeploymentConn{
+			{SourceID: "app", TargetID: "db"},
+		},
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var first sync.WaitGroup
+	first.Add(1)
+	go func() {
+		defer first.Done()
+		req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		mux.ServeHTTP(httptest.NewRecorder(), req)
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("metrics stamp did not start")
+	}
+
+	secondDone := make(chan struct{})
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/deployments", bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		mux.ServeHTTP(httptest.NewRecorder(), req)
+		close(secondDone)
+	}()
+
+	select {
+	case <-secondDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second create blocked while the first create stamped metrics")
+	}
+
+	close(release)
+	first.Wait()
+}
+
 func TestHandleCreateDeployment_MonthlySessionLimit(t *testing.T) {
 	t.Setenv("ENV", "development")
 	t.Setenv("SUPABASE_JWT_SECRET", "")
@@ -2032,6 +2103,7 @@ func TestDeleteDuringProvision_StaysTerminated(t *testing.T) {
 
 type fakeDeploymentStore struct {
 	mu                 sync.Mutex
+	blockMetricsUpdate func()
 	byNS               map[string]store.DeploymentRow
 	active             []store.ActiveDeploymentRow
 	history            []store.DeploymentHistoryRow
@@ -2370,6 +2442,9 @@ func (f *fakeDeploymentStore) UpdateExpiresAt(_ context.Context, namespace strin
 }
 
 func (f *fakeDeploymentStore) UpdateMetricsSummary(_ context.Context, namespace string, patch map[string]any) error {
+	if f.blockMetricsUpdate != nil {
+		f.blockMetricsUpdate()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	row, ok := f.byNS[namespace]
