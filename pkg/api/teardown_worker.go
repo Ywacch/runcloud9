@@ -287,8 +287,18 @@ func (h *Handler) runTeardown(namespace string, enqueued time.Time, reason strin
 	if rowErr == nil {
 		tpl = row.Template
 	}
-	h.persistTeardownSummary(ctx, namespace, tpl, row, rowErr)
-	h.collectTeardownDiagnostics(ctx, namespace, tpl, reason, row, rowErr)
+	// User DELETE paths (capacity probe, inspector) need fast namespace removal.
+	// Forensic summary and DDC run on expiry, not on explicit delete.
+	if reason == teardownReasonDelete {
+		h.incTeardownDiagnostics("skipped")
+		h.stampMetrics(ctx, namespace, map[string]any{
+			"diagnostics_skipped":      true,
+			"teardown_summary_skipped": true,
+		})
+	} else {
+		h.persistTeardownSummary(ctx, namespace, tpl, row, rowErr)
+		h.collectTeardownDiagnostics(ctx, namespace, tpl, reason, row, rowErr)
+	}
 	h.ForgetActAsCache(namespace)
 	h.StopLBEndpointsWatch(namespace)
 	if h.metricsCollector != nil {
