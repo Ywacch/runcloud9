@@ -27,7 +27,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/util/flowcontrol"
 	"k8s.io/client-go/util/homedir"
 	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 )
@@ -78,9 +77,9 @@ func buildDeployers(kubeObs kubeobs.RequestObserver) (map[string]deployer.Compon
 			log.Fatalf("build kubeconfig: %v", err)
 		}
 	}
-	// Raise client-go rate limits for concurrent deployment orchestration.
-	// Default rest.Config (5 QPS, 10 burst) causes 10-16s delays at 20+ concurrent deploys.
-	// Defaults here are 200 QPS / 400 burst; override with K8S_CLIENT_QPS and K8S_CLIENT_BURST.
+	// Default rest.Config (5 QPS, 10 burst) queues for seconds at 20+ concurrent deploys.
+	// Override with K8S_CLIENT_QPS and K8S_CLIENT_BURST. The metrics client gets
+	// its own bucket so pod-metrics reads do not spend orchestration tokens.
 	qps, burst := kubeClientLimits(os.Getenv("K8S_CLIENT_QPS"), os.Getenv("K8S_CLIENT_BURST"))
 	config.QPS = qps
 	config.Burst = burst
@@ -89,15 +88,15 @@ func buildDeployers(kubeObs kubeobs.RequestObserver) (map[string]deployer.Compon
 		config.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
 			return kubeobs.Wrap(rt, kubeObs)
 		}
-		inner := flowcontrol.NewTokenBucketRateLimiter(config.QPS, config.Burst)
-		config.RateLimiter = kubeobs.CountingLimiter(inner, kubeObs)
 	}
+	config.RateLimiter = kubeobs.FreshTokenBucket(config.QPS, config.Burst, kubeObs)
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		log.Fatalf("build clientset: %v", err)
 	}
 	var metricsClient metrics.PodMetricsProvider
-	if mc, err := metricsclient.NewForConfig(config); err != nil {
+	metricsCfg := kubeobs.IsolatedConfig(config, kubeObs)
+	if mc, err := metricsclient.NewForConfig(metricsCfg); err != nil {
 		log.Printf("metrics client unavailable (container usage Metrics API fallback disabled): %v", err)
 	} else {
 		metricsClient = &metrics.MetricsClientAdapter{Client: mc}

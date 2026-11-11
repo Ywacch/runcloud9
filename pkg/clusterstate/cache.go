@@ -93,7 +93,8 @@ func New(restConfig *rest.Config, obs kubeobs.RequestObserver, metrics InformerM
 	if restConfig == nil {
 		return nil, fmt.Errorf("clusterstate: rest config required")
 	}
-	cfg := rest.CopyConfig(restConfig)
+	// Informers must not share the orchestration token bucket.
+	cfg := kubeobs.IsolatedConfig(restConfig, obs)
 	prev := cfg.WrapTransport
 	cfg.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
 		if prev != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/util/flowcontrol"
 )
 
@@ -50,4 +51,30 @@ func (l *countingLimiter) reportWait(d time.Duration) {
 		return
 	}
 	l.obs.ObserveThrottle(d.Seconds())
+}
+
+// FreshTokenBucket returns a new token bucket. Pass a non-nil observer to
+// count waits longer than 1ms. A non-positive QPS or burst returns nil.
+func FreshTokenBucket(qps float32, burst int, obs RequestObserver) flowcontrol.RateLimiter {
+	if qps <= 0 || burst <= 0 {
+		return nil
+	}
+	inner := flowcontrol.NewTokenBucketRateLimiter(qps, burst)
+	if obs == nil {
+		return inner
+	}
+	return CountingLimiter(inner, obs)
+}
+
+// IsolatedConfig copies cfg and installs a new token bucket.
+// rest.CopyConfig copies RateLimiter by pointer, so a second clientset built
+// from that copy waits on the first clientset's bucket. This copy does not.
+// A nil cfg returns nil. Non-positive QPS or burst clears RateLimiter.
+func IsolatedConfig(cfg *rest.Config, obs RequestObserver) *rest.Config {
+	if cfg == nil {
+		return nil
+	}
+	out := rest.CopyConfig(cfg)
+	out.RateLimiter = FreshTokenBucket(out.QPS, out.Burst, obs)
+	return out
 }
