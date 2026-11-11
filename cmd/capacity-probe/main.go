@@ -32,6 +32,9 @@ func main() {
 	confirm := flag.Bool("confirm", false, "required to create real deployments (ignored with -dry-run)")
 	sampleCluster := flag.Bool("sample-cluster", false, "sample Kubernetes pressure during waves")
 	kubeconfig := flag.String("kubeconfig", "", "kubeconfig path for -sample-cluster (defaults to KUBECONFIG or ~/.kube/config)")
+	cleanupReady := flag.String("cleanup-ready", envOr("CAPACITY_PROBE_CLEANUP_READY", ""), "file to write when a wave is still up, before DELETE")
+	cleanupHold := flag.String("cleanup-hold", envOr("CAPACITY_PROBE_CLEANUP_HOLD", ""), "file to wait for before DELETE; empty skips the wait")
+	cleanupHoldTimeout := flag.Duration("cleanup-hold-timeout", 20*time.Minute, "how long to wait for -cleanup-hold before deleting anyway")
 	flag.Parse()
 
 	if strings.TrimSpace(*manifestPath) == "" {
@@ -123,6 +126,19 @@ func main() {
 		report.Waves = append(report.Waves, wr)
 		log.Printf("wave %s done success=%d/%d peak_provisions=%d p50=%dms p95=%dms",
 			wr.Name, wr.SuccessCount, wr.RequestedCount, wr.PeakSimultaneousProv, wr.P50TimeToRunningMS, wr.P95TimeToRunningMS)
+
+		if strings.TrimSpace(*cleanupHold) != "" {
+			log.Printf("cleanup hold: writing %s and waiting up to %s for %s",
+				strings.TrimSpace(*cleanupReady), cleanupHoldTimeout.String(), strings.TrimSpace(*cleanupHold))
+		}
+		if err := waitForMeasureHold(ctx, *cleanupReady, *cleanupHold, *cleanupHoldTimeout, time.Second); err != nil {
+			log.Printf("cleanup hold: %v", err)
+		}
+		if ctx.Err() != nil {
+			report.FinishedAt = time.Now().UTC()
+			writeReports(*outDir, report)
+			return
+		}
 
 		cleanupTracked(ctx, client, tracker)
 		tracker = &deploymentTracker{}

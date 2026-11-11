@@ -6,12 +6,14 @@ import (
 )
 
 const (
-	defaultKubeClientQPS   float32 = 200
-	defaultKubeClientBurst int     = 400
+	// Defaults cover a 100-session orchestration burst. Each clientset gets its
+	// own bucket at these values (see kubeobs.IsolatedConfig).
+	defaultKubeClientQPS   float32 = 400
+	defaultKubeClientBurst int     = 800
 )
 
 // kubeClientLimits reads K8S_CLIENT_QPS and K8S_CLIENT_BURST.
-// Unset or invalid uses 200 and 400. Values must be > 0.
+// Unset or invalid uses 400 and 800. Values must be > 0.
 // Burst may be lower than QPS; do not reorder them.
 func kubeClientLimits(qpsRaw, burstRaw string) (qps float32, burst int) {
 	qps = defaultKubeClientQPS

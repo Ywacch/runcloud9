@@ -98,7 +98,7 @@ and quota; rerun after material quota changes or account migration.
 
 ### Prerequisites
 
-Rung 1 fires 50 `url-shortener-small` deployments in one burst (`testdata/waves/rung-1.yaml`). Use the operator checklist that comes with that ladder: temporary doorway width, room budget, and expensive-route rate limits scaled for 50 sessions, plus a long-lived `CAPACITY_PROBE_TOKEN`. The API logs `kube client limiter: qps=… burst=…` at startup (defaults 200 / 400 unless `K8S_CLIENT_QPS` / `K8S_CLIENT_BURST` override).
+Rung 1 fires 50 `url-shortener-small` deployments in one burst (`testdata/waves/rung-1.yaml`). Use the operator checklist that comes with that ladder: temporary doorway width, room budget, and expensive-route rate limits scaled for 50 sessions, plus a long-lived `CAPACITY_PROBE_TOKEN`. The API logs `kube client limiter: qps=… burst=…` at startup (defaults 400 / 800 unless `K8S_CLIENT_QPS` / `K8S_CLIENT_BURST` override). The orchestration client, the metrics client, and the informer client each have their own bucket at those values.
 
 1. Deploy an API build where the internal tier allows enough concurrent deployments
    (currently 50).

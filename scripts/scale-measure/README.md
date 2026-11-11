@@ -30,6 +30,22 @@ Optional kube context:
 
 `-NamespacePrefix` must be at least `cloud9-` plus one more character. Do not pass `cloud9` alone. Namespaces `cloud9-system` and `monitoring` are always skipped.
 
+## Hold DELETE until the scrape finishes
+
+`watch-and-measure.ps1` waits for a ready file the probe writes after the wave is up, runs this script, scrapes `http://127.0.0.1:18080/metrics`, then writes the release file. The probe deletes only after that file exists (or after `-cleanup-hold-timeout`, default 20m).
+
+```powershell
+$out = "capacity-probe-results/rung-2-measure"
+New-Item -ItemType Directory -Force -Path $out | Out-Null
+powershell -NoProfile -File ./scripts/scale-measure/watch-and-measure.ps1 `
+  -ReadyFile "$out/wave-ready" -ReleaseFile "$out/measure-done" -OutDir $out
+# in another terminal, after the port-forwards are up:
+go run ./cmd/capacity-probe -manifest ./cmd/capacity-probe/testdata/waves/rung-2.yaml -confirm `
+  -cleanup-ready "$out/wave-ready" -cleanup-hold "$out/measure-done" -timeout 25m -out "./$out"
+```
+
+Unset both probe flags and DELETE starts as soon as the wave finishes.
+
 ## PromQL
 
 Series count per namespace (one query for all namespaces):

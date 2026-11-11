@@ -13,8 +13,8 @@ Use this doc as the source of truth for required/optional environment variables 
 | `SUPABASE_JWT_SECRET` | Production yes (current mode) | None | JWT verification secret for HS256-compatible auth path. |
 | `ENV` | No | Empty/non-production | Runtime mode (`production` enables stricter checks). |
 | `DEPLOYER` | No | `local` | `k8s` enables real cluster deployer; otherwise LocalDeployer. |
-| `K8S_CLIENT_QPS` | No | `200` | Client-go REST rate limit sustained QPS for the API process Kubernetes client. Invalid or non-positive falls back to the default. |
-| `K8S_CLIENT_BURST` | No | `400` | Client-go REST burst for that client. Invalid or non-positive falls back to the default. May be lower than QPS. |
+| `K8S_CLIENT_QPS` | No | `400` | Client-go REST rate limit sustained QPS. The orchestration client, the metrics client, and the informer client each get a bucket at this QPS. Invalid or non-positive falls back to the default. |
+| `K8S_CLIENT_BURST` | No | `800` | Client-go REST burst for each of those buckets. Invalid or non-positive falls back to the default. May be lower than QPS. |
 | `CLUSTERSTATE` | No | off | `1` or `true`: start shared Kubernetes informer caches at API startup (`WaitForSync` timeout 45s; process continues on timeout). Requires `DEPLOYER=k8s`. Reader flags are separate env vars. |
 | `CLUSTERSTATE_READINESS` | No | off | `1` or `true`: `waitForReady` and postgres primary pod lookup read pods from the informer cache. Requires non-nil cache (`CLUSTERSTATE` on). |
 | `CLUSTERSTATE_METRICS` | No | off | `1` or `true`: metrics Collect inventory (pods, deployments, statefulsets, HPAs) reads from the informer cache. Requires non-nil cache (`CLUSTERSTATE` on). |

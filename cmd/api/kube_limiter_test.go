@@ -18,8 +18,8 @@ func TestKubeClientLimits(t *testing.T) {
 			name:      "unset uses defaults",
 			qpsRaw:    "",
 			burstRaw:  "",
-			wantQPS:   200,
-			wantBurst: 400,
+			wantQPS:   400,
+			wantBurst: 800,
 		},
 		{
 			name:      "explicit 200 and 400",
