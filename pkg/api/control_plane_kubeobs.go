@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/ywacch/cloud9/pkg/kubeobs"
+	"github.com/ywacch/cloud9/pkg/sessionreg"
 )
 
 var (
@@ -21,6 +22,16 @@ func BootstrapControlPlaneMetrics() kubeobs.RequestObserver {
 		sharedCPMetrics = newControlPlaneMetrics()
 	}
 	kubeobs.RegisterThrottleLatency(sharedCPMetrics)
+	return sharedCPMetrics
+}
+
+// SessionRegistryObserver returns the shared control-plane metrics hooks for the session registry.
+func SessionRegistryObserver() sessionreg.Observer {
+	sharedCPMetricsMu.Lock()
+	defer sharedCPMetricsMu.Unlock()
+	if sharedCPMetrics == nil {
+		sharedCPMetrics = newControlPlaneMetrics()
+	}
 	return sharedCPMetrics
 }
 
