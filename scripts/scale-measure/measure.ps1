@@ -92,23 +92,30 @@ function Get-SeriesByNamespace {
     return $byNS
 }
 
-function Get-KubernetesObjectCount {
-    param([string]$Namespace)
+function Get-ObjectCountsByNamespace {
+    param([string[]]$Namespaces)
 
     $resourceList = @(
         'deploy', 'rs', 'po', 'svc', 'endpoints',
         'endpointslices.discovery.k8s.io', 'cm', 'netpol', 'resourcequota', 'sa', 'secret'
     ) -join ','
 
-    $raw = Invoke-Kubectl -KubectlArgs @('get', $resourceList, '-n', $Namespace, '-o', 'json')
+    $raw = Invoke-Kubectl -KubectlArgs @('get', $resourceList, '-A', '-o', 'json')
     $doc = $raw | ConvertFrom-Json
 
-    $items = 0
-    if ($null -ne $doc.items) {
-        $items = @($doc.items).Count
+    # +1 counts the namespace object itself, matching the old per-namespace total.
+    $counts = @{}
+    foreach ($ns in $Namespaces) {
+        $counts[$ns] = 1
     }
-    # Namespace object itself.
-    return $items + 1
+    foreach ($item in @($doc.items)) {
+        $ns = $item.metadata.namespace
+        if (-not $ns -or -not $counts.ContainsKey($ns)) {
+            continue
+        }
+        $counts[$ns]++
+    }
+    return $counts
 }
 
 function Get-SessionNamespaces {
@@ -134,7 +141,8 @@ function Get-SessionNamespaces {
 Test-NamespacePrefix -Prefix $NamespacePrefix
 
 $seriesByNS = Get-SeriesByNamespace -BaseURL $PrometheusURL
-$namespaces = Get-SessionNamespaces -Prefix $NamespacePrefix
+$namespaces = @(Get-SessionNamespaces -Prefix $NamespacePrefix)
+$objectCounts = Get-ObjectCountsByNamespace -Namespaces $namespaces
 
 Write-Output '| namespace | template | series | objects |'
 
@@ -147,7 +155,7 @@ foreach ($ns in $namespaces) {
     if ($seriesByNS.ContainsKey($ns)) {
         $series = $seriesByNS[$ns]
     }
-    $objects = Get-KubernetesObjectCount -Namespace $ns
+    $objects = $objectCounts[$ns]
     Write-Output "| $ns | $Template | $series | $objects |"
     $seriesSum += $series
     $objectsSum += $objects

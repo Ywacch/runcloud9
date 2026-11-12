@@ -778,10 +778,11 @@ func TestCollect_HistogramQuantilesUsePromRateWindowBucketRate(t *testing.T) {
 					sawPodLive = true
 					continue
 				}
-				if strings.Contains(q, " by (le)") {
+				// Catalog PerApp quantiles group by namespace and app. The le label stays on the inner sum.
+				if strings.Contains(q, " by (le)") || strings.Contains(q, "by (namespace, app, le)") {
 					continue
 				}
-				t.Fatalf("live histogram should use by (le) or by (pod, le): %s", q)
+				t.Fatalf("live histogram should use by (le), by (namespace, app, le), or by (pod, le): %s", q)
 			}
 			if strings.Contains(q, "[9m]") {
 				t.Fatalf("session histogram should not use [9m]: %s", q)

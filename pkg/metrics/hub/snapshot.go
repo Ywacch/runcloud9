@@ -147,3 +147,32 @@ func (s *Snapshot) Scalar(namespace string, id signals.ID, shape signals.Shape) 
 		return 0, false, false
 	}
 }
+
+// ContainerUsage sums metrics.k8s.io CPU millicores and memory bytes for one container
+// in a namespace. include, when non-nil, keeps pods it accepts. exclude, when non-nil, drops them.
+// sampled is true when this snapshot holds a cluster metrics API fetch.
+// found is true when at least one container matched.
+func (s *Snapshot) ContainerUsage(namespace, container string, include, exclude func(string) bool) (cpuMilli, memBytes int64, found, sampled bool) {
+	if s == nil || s.podUsage.At.IsZero() {
+		return 0, 0, false, false
+	}
+	if namespace == "" || container == "" {
+		return 0, 0, false, true
+	}
+	for name, conts := range s.podUsage.ByPod[namespace] {
+		if include != nil && !include(name) {
+			continue
+		}
+		if exclude != nil && exclude(name) {
+			continue
+		}
+		u, ok := conts[container]
+		if !ok {
+			continue
+		}
+		found = true
+		cpuMilli += u.CPUMilli
+		memBytes += u.MemBytes
+	}
+	return cpuMilli, memBytes, found, true
+}

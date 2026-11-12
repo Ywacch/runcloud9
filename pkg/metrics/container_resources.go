@@ -7,7 +7,6 @@ import (
 
 	"github.com/ywacch/cloud9/pkg/metrics/signals"
 	corev1 "k8s.io/api/core/v1"
-	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
 // Resource usage source identifiers for ComponentMetrics cpuSource/memSource.
@@ -355,13 +354,22 @@ func (c *MetricsCollector) sumMetricsAPIContainerExcluding(ctx context.Context, 
 	if err != nil {
 		return 0, 0, false
 	}
-	var list *metricsv1beta1.PodMetricsList
-	var errList error
-	if sampleList, ok := c.podMetricsListFromSample(ctx, ns); ok {
-		list = sampleList
-	} else {
-		list, errList = c.metricsClient.ListPodMetrics(ctx, ns)
+	if h := c.MetricsHub(); h != nil {
+		if snap := h.Snapshot(); snap != nil {
+			var excludeFn func(string) bool
+			if exclude != nil {
+				excludeFn = exclude.MatchString
+			}
+			cpuMilli, mem, found, sampled := snap.ContainerUsage(ns, container, include.MatchString, excludeFn)
+			if sampled {
+				if !found {
+					return 0, 0, false
+				}
+				return float64(cpuMilli) / 1000.0, mem, true
+			}
+		}
 	}
+	list, errList := c.metricsClient.ListPodMetrics(ctx, ns)
 	if errList != nil {
 		return 0, 0, false
 	}

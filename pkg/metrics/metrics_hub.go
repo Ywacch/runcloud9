@@ -2,7 +2,7 @@ package metrics
 
 import "github.com/ywacch/cloud9/pkg/metrics/hub"
 
-// SetMetricsHub attaches the cluster-wide metrics hub (METRICS_HUB). Collect ignores it until P3.3.
+// SetMetricsHub attaches the cluster-wide metrics hub (METRICS_HUB).
 func (c *MetricsCollector) SetMetricsHub(h *hub.Hub) {
 	if c == nil {
 		return

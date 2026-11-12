@@ -315,13 +315,6 @@ func main() {
 	debugMetrics := os.Getenv("CLOUD9_DEBUG_METRICS") == "true"
 	eventBus := metrics.NewEventBus()
 	metricsCollector = metrics.NewMetricsCollector(prometheusURL, lg, clientset, metricsClient, eventBus)
-	sampleOn := metrics.ClusterSampleEnabled(prometheusURL, os.Getenv("METRICS_CLUSTER_SAMPLE"))
-	metricsCollector.SetClusterSampleEnabled(sampleOn)
-	if sampleOn {
-		log.Printf("cluster metrics sample: on")
-	} else {
-		log.Printf("cluster metrics sample: off")
-	}
 	metricsCollector.SetDebugMetrics(debugMetrics)
 	if clusterCache != nil {
 		metricsCollector.SetClusterState(clusterCache)
@@ -343,7 +336,8 @@ func main() {
 	if clusterCache != nil {
 		handler.SetClusterState(clusterCache)
 	}
-	if hub.Enabled(os.Getenv("METRICS_HUB")) && prometheusURL != "" {
+	hubOn := hub.Enabled(os.Getenv("METRICS_HUB"))
+	if hubOn && prometheusURL != "" {
 		var podLister hub.AllPodMetricsLister
 		if adapter, ok := metricsClient.(*metrics.MetricsClientAdapter); ok {
 			podLister = adapter
@@ -358,8 +352,10 @@ func main() {
 		metricsCollector.SetMetricsHub(metricsHub)
 		metricsHub.Start(context.Background())
 		log.Printf("metrics hub: on")
+	} else if !hubOn {
+		log.Printf("metrics hub: off (METRICS_HUB disabled)")
 	} else {
-		log.Printf("metrics hub: off")
+		log.Printf("metrics hub: off (no PROMETHEUS_URL)")
 	}
 	requestTeardown = handler.RequestTeardown
 	mux := http.NewServeMux()

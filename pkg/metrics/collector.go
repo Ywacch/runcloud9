@@ -86,10 +86,6 @@ type MetricsCollector struct {
 	replSQLFlight           singleflight.Group
 	replicationAdminForTest func(namespace, pod, container string) deployer.PostgresAdmin // tests only
 
-	clusterSampleEnabled  bool
-	sampleMu              sync.RWMutex
-	clusterSample         *clusterSample
-	sampleFlight          singleflight.Group
 	metricsQueryObserver  MetricsQueryObserver
 	promQueryObserver     PromQueryObserver
 	signalCompareObserver SignalCompareObserver
@@ -109,21 +105,20 @@ type MetricsCollector struct {
 func NewMetricsCollector(prometheusURL string, lg loadgen.LoadGenerator, clientset kubernetes.Interface, metricsClient PodMetricsProvider, eventBus *EventBus) *MetricsCollector {
 	observer := probes.NewObserver(probes.WithKubeClient(clientset))
 	c := &MetricsCollector{
-		prometheusURL:        prometheusURL,
-		httpClient:           &http.Client{Timeout: 5 * time.Second},
-		scrapeClient:         &http.Client{Timeout: 2 * time.Second},
-		loadgen:              lg,
-		clientset:            clientset,
-		metricsClient:        metricsClient,
-		eventBus:             eventBus,
-		thresholds:           NewThresholdDetector(),
-		cascade:              NewCascadeDetector(),
-		invariants:           NewInvariantChecker(),
-		observer:             observer,
-		consistency:          NewConsistencyDetector(observer),
-		sessionAcc:           newSessionAccumulator(),
-		pgHold:               make(map[string]bool),
-		clusterSampleEnabled: false,
+		prometheusURL: prometheusURL,
+		httpClient:    &http.Client{Timeout: 5 * time.Second},
+		scrapeClient:  &http.Client{Timeout: 2 * time.Second},
+		loadgen:       lg,
+		clientset:     clientset,
+		metricsClient: metricsClient,
+		eventBus:      eventBus,
+		thresholds:    NewThresholdDetector(),
+		cascade:       NewCascadeDetector(),
+		invariants:    NewInvariantChecker(),
+		observer:      observer,
+		consistency:   NewConsistencyDetector(observer),
+		sessionAcc:    newSessionAccumulator(),
+		pgHold:        make(map[string]bool),
 	}
 	initSideWork(c)
 	return c
@@ -373,17 +368,6 @@ type prometheusResponse struct {
 // queryScalar runs an instant PromQL query. present is false when the result vector is empty
 // (no matching series). A scalar 0 with matching series sets present=true — distinct from “no data”.
 func (c *MetricsCollector) queryScalar(ctx context.Context, promql string) (val float64, present bool, err error) {
-	if c.clusterSampleEnabled && c.prometheusURL != "" {
-		sample := c.ensureClusterSample(ctx)
-		if sample != nil {
-			if v, okPresent, ok := c.lookupSampleScalar(sample, ctx, promql); ok {
-				return v, okPresent, nil
-			}
-			if time.Since(sample.fetchedAt) < clusterSampleTick {
-				return 0, false, nil
-			}
-		}
-	}
 	return c.queryScalarDirect(ctx, promql)
 }
 
@@ -464,17 +448,6 @@ func (c *MetricsCollector) query(ctx context.Context, promql string) (float64, e
 
 // queryMultiResult runs a PromQL instant query and returns one float per series, keyed by labelKey (e.g. "pod").
 func (c *MetricsCollector) queryMultiResult(ctx context.Context, promql, labelKey string) map[string]float64 {
-	if c.clusterSampleEnabled && c.prometheusURL != "" {
-		sample := c.ensureClusterSample(ctx)
-		if sample != nil {
-			if out, ok := c.lookupSampleMulti(sample, ctx, promql, labelKey); ok {
-				return out
-			}
-			if time.Since(sample.fetchedAt) < clusterSampleTick {
-				return map[string]float64{}
-			}
-		}
-	}
 	out := make(map[string]float64)
 	if c.prometheusURL == "" || labelKey == "" {
 		return out
@@ -817,8 +790,6 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	ctx = withCollectNamespace(ctx, namespace)
 	ctx = WithPromMeta(ctx, template, "collect", "direct")
 	ctx = kubeobs.WithCaller(ctx, "metrics")
-	c.ensureClusterSample(ctx)
-
 	dm := &DeploymentMetrics{
 		Timestamp:  time.Now(),
 		Namespace:  namespace,
@@ -952,20 +923,12 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 
 	// App-server: HTTP + cache counters from url-shortener /metrics
 	cmApp := ComponentMetrics{Component: "app-server"}
-	appCPUPrimary := fmt.Sprintf(
-		`sum(rate(process_cpu_seconds_total{namespace=%q,pod=~"app-server.*"}%s))`,
-		ns, promRateRange(),
-	)
-	appCPU, appCPUOK := c.sigCompatByApp(ctx, ns, signals.AppProcessCPU, "app-server", appCPUPrimary)
+	appCPU, appCPUOK := c.sigForApp(ctx, ns, signals.AppProcessCPU, "app-server")
 	appCPUEst := false
 	if !appCPUOK {
 		appCPU, appCPUEst = c.queryProcessCPU(ctx, ns, "app-server.*", "app-server")
 	}
-	appMemPrimary := fmt.Sprintf(
-		`sum(process_resident_memory_bytes{namespace=%q,pod=~"app-server.*"})`,
-		ns,
-	)
-	appMem, appMemOK := c.sigCompatByApp(ctx, ns, signals.AppProcessMemory, "app-server", appMemPrimary)
+	appMem, appMemOK := c.sigForApp(ctx, ns, signals.AppProcessMemory, "app-server")
 	appMemEst := false
 	if !appMemOK {
 		appMem, appMemEst = c.queryProcessMemory(ctx, ns, "app-server.*", "app-server")
@@ -975,43 +938,26 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	cmApp.MemoryBytes = int64(appMem)
 	cmApp.MemIsEstimated = appMemEst
 
-	rpsProm := fmt.Sprintf(`sum(rate(http_requests_total{%s}%s))`, nsSel, promRateRange())
-	rps, _ := c.sigCompat(ctx, ns, signals.AppRequestRate, rpsProm)
+	rps, _ := c.sig(ctx, ns, signals.AppRequestRate)
 	cmApp.RequestRate = rps
 
-	p50Prom := fmt.Sprintf(
-		`histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{%s}%s)) by (le))`,
-		nsSel, promRateRange(),
-	)
-	p95Prom := fmt.Sprintf(
-		`histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{%s}%s)) by (le))`,
-		nsSel, promRateRange(),
-	)
-	p99Prom := fmt.Sprintf(
-		`histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{%s}%s)) by (le))`,
-		nsSel, promRateRange(),
-	)
-	p50, _ := c.sigCompat(ctx, ns, signals.AppLatencyP50, p50Prom)
-	p95, _ := c.sigCompat(ctx, ns, signals.AppLatencyP95, p95Prom)
-	p99, _ := c.sigCompat(ctx, ns, signals.AppLatencyP99, p99Prom)
+	p50, _ := c.sig(ctx, ns, signals.AppLatencyP50)
+	p95, _ := c.sig(ctx, ns, signals.AppLatencyP95)
+	p99, _ := c.sig(ctx, ns, signals.AppLatencyP99)
 	cmApp.P50Latency = p50
 	cmApp.P95Latency = p95
 	cmApp.P99Latency = p99
 
-	hitsProm := fmt.Sprintf(`sum(rate(cache_hits_total{%s}%s))`, nsSel, promRateRange())
-	hits, _ := c.sigCompat(ctx, ns, signals.AppCacheHitsRate, hitsProm)
+	hits, _ := c.sig(ctx, ns, signals.AppCacheHitsRate)
 	cmApp.CacheHits = hits
 
-	missesProm := fmt.Sprintf(`sum(rate(cache_misses_total{%s}%s))`, nsSel, promRateRange())
-	misses, _ := c.sigCompat(ctx, ns, signals.AppCacheMissesRate, missesProm)
+	misses, _ := c.sig(ctx, ns, signals.AppCacheMissesRate)
 	cmApp.CacheMisses = misses
 
-	cacheErrsProm := fmt.Sprintf(`sum(rate(cache_errors_total{%s}%s))`, nsSel, promRateRange())
-	cacheErrs, _ := c.sigCompat(ctx, ns, signals.AppCacheErrorsRate, cacheErrsProm)
+	cacheErrs, _ := c.sig(ctx, ns, signals.AppCacheErrorsRate)
 	cmApp.CacheErrors = cacheErrs
 
-	errRateProm := fmt.Sprintf(`sum(rate(http_requests_total{%s,status=~"5.."}%s))`, nsSel, promRateRange())
-	errRate, _ := c.sigCompat(ctx, ns, signals.AppErrorRate, errRateProm)
+	errRate, _ := c.sig(ctx, ns, signals.AppErrorRate)
 	cmApp.ErrorRate = errRate
 
 	// Session p50/p95/p99: hub integrates bucket rates when METRICS_HUB is on; else elapsed PromQL window.
@@ -1212,20 +1158,12 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	}
 
 	cmWorker := ComponentMetrics{Component: "worker"}
-	wCPUPrimary := fmt.Sprintf(
-		`sum(rate(process_cpu_seconds_total{namespace=%q,pod=~"worker.*"}%s))`,
-		ns, promRateRange(),
-	)
-	wCPU, wCPUOK := c.sigCompatByApp(ctx, ns, signals.AppProcessCPU, "worker", wCPUPrimary)
+	wCPU, wCPUOK := c.sigForApp(ctx, ns, signals.AppProcessCPU, "worker")
 	wCPUEst := false
 	if !wCPUOK {
 		wCPU, wCPUEst = c.queryProcessCPU(ctx, ns, "worker.*", "worker")
 	}
-	wMemPrimary := fmt.Sprintf(
-		`sum(process_resident_memory_bytes{namespace=%q,pod=~"worker.*"})`,
-		ns,
-	)
-	wMem, wMemOK := c.sigCompatByApp(ctx, ns, signals.AppProcessMemory, "worker", wMemPrimary)
+	wMem, wMemOK := c.sigForApp(ctx, ns, signals.AppProcessMemory, "worker")
 	wMemEst := false
 	if !wMemOK {
 		wMem, wMemEst = c.queryProcessMemory(ctx, ns, "worker.*", "worker")

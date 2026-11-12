@@ -2,7 +2,6 @@ package metrics
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/ywacch/cloud9/pkg/metrics/signals"
 )
@@ -50,19 +49,19 @@ func redisStorageWriteTotalSignal(template string) signals.ID {
 }
 
 func (c *MetricsCollector) redisStorageReadRate(ctx context.Context, ns, template string) (float64, bool) {
-	return c.sigCompat(ctx, ns, redisStorageReadRateSignal(template), redisStorageReadRateQuery(ns, template))
+	return c.sig(ctx, ns, redisStorageReadRateSignal(template))
 }
 
 func (c *MetricsCollector) redisStorageWriteRate(ctx context.Context, ns, template string) (float64, bool) {
-	return c.sigCompat(ctx, ns, redisStorageWriteRateSignal(template), redisStorageWriteRateQuery(ns, template))
+	return c.sig(ctx, ns, redisStorageWriteRateSignal(template))
 }
 
 func (c *MetricsCollector) redisStorageReadLatency(ctx context.Context, ns, template string) (float64, bool) {
-	return c.sigCompat(ctx, ns, redisStorageReadLatencySignal(template), redisStorageReadLatencyQuery(ns, template))
+	return c.sig(ctx, ns, redisStorageReadLatencySignal(template))
 }
 
 func (c *MetricsCollector) redisStorageWriteLatency(ctx context.Context, ns, template string) (float64, bool) {
-	return c.sigCompat(ctx, ns, redisStorageWriteLatencySignal(template), redisStorageWriteLatencyQuery(ns, template))
+	return c.sig(ctx, ns, redisStorageWriteLatencySignal(template))
 }
 
 func (c *MetricsCollector) redisStorageReadTotalByPod(ctx context.Context, ns, template string) map[string]float64 {
@@ -90,6 +89,5 @@ func (c *MetricsCollector) redisStorageWriteTotalByPod(ctx context.Context, ns, 
 }
 
 func (c *MetricsCollector) redisStorageRejectedRate(ctx context.Context, ns string) (float64, bool) {
-	old := fmt.Sprintf(`sum(rate(redis_rejected_connections_total{namespace=%q}%s))`, ns, promRateRange())
-	return c.sigCompat(ctx, ns, signals.RedisRejectedConnectionsRate, old)
+	return c.sig(ctx, ns, signals.RedisRejectedConnectionsRate)
 }
