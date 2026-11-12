@@ -20,6 +20,7 @@ func BootstrapControlPlaneMetrics() kubeobs.RequestObserver {
 	if sharedCPMetrics == nil {
 		sharedCPMetrics = newControlPlaneMetrics()
 	}
+	kubeobs.RegisterThrottleLatency(sharedCPMetrics)
 	return sharedCPMetrics
 }
 

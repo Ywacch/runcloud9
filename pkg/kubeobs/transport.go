@@ -10,6 +10,9 @@ import (
 type RequestObserver interface {
 	ObserveRequest(verb, resource, caller string, seconds float64)
 	ObserveThrottle(waitSeconds float64)
+	// ObserveThrottleWait records one client-go rate-limiter wait, including a
+	// wait of zero. verb and resource match Classify. caller is already normalized.
+	ObserveThrottleWait(verb, resource, caller string, seconds float64)
 }
 
 type roundTripper struct {

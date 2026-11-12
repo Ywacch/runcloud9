@@ -63,6 +63,10 @@ func (o *recordingObserver) ObserveThrottle(waitSeconds float64) {
 	}
 }
 
+func (o *recordingObserver) ObserveThrottleWait(verb, resource, caller string, seconds float64) {
+	o.requests = append(o.requests, observedRequest{verb, resource, caller, seconds})
+}
+
 func TestWrap_RecordsCaller(t *testing.T) {
 	t.Parallel()
 

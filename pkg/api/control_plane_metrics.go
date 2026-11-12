@@ -45,6 +45,7 @@ type controlPlaneMetrics struct {
 	k8sRequestsTotal        *prometheus.CounterVec
 	k8sRequestSeconds       *prometheus.HistogramVec
 	k8sThrottleWaitsTotal   prometheus.Counter
+	k8sThrottleWaitSeconds  *prometheus.HistogramVec
 	promQueriesTotal        *prometheus.CounterVec
 	collectSeconds          *prometheus.HistogramVec
 	wsFrameBytes            prometheus.Histogram
@@ -144,6 +145,12 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		Name: "cloud9_k8s_throttle_waits_total",
 		Help: "Client-side rate limiter waits longer than 1ms.",
 	})
+	m.k8sThrottleWaitSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name: "cloud9_k8s_throttle_wait_seconds",
+		Help: "Client-side rate limiter wait before a Kubernetes API request, including waits of zero. " +
+			"A wait over 50ms is cloud9_k8s_throttle_wait_seconds_count minus the le=\"0.05\" bucket.",
+		Buckets: []float64{0.001, 0.01, 0.05, 0.25, 1, 5},
+	}, []string{"verb", "resource", "caller"})
 	m.promQueriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "cloud9_prom_queries_total",
 		Help: "Prometheus instant queries by path, logical caller, and deployment template.",
@@ -208,6 +215,7 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		m.k8sRequestsTotal,
 		m.k8sRequestSeconds,
 		m.k8sThrottleWaitsTotal,
+		m.k8sThrottleWaitSeconds,
 		m.promQueriesTotal,
 		m.collectSeconds,
 		m.wsFrameBytes,
@@ -390,6 +398,22 @@ func (m *controlPlaneMetrics) ObserveThrottle(waitSeconds float64) {
 		return
 	}
 	m.k8sThrottleWaitsTotal.Add(1)
+}
+
+func (m *controlPlaneMetrics) ObserveThrottleWait(verb, resource, caller string, seconds float64) {
+	if m == nil || seconds < 0 {
+		return
+	}
+	if verb == "" {
+		verb = "unknown"
+	}
+	if resource == "" {
+		resource = "unknown"
+	}
+	if caller == "" {
+		caller = "unknown"
+	}
+	m.k8sThrottleWaitSeconds.WithLabelValues(verb, resource, caller).Observe(seconds)
 }
 
 func (m *controlPlaneMetrics) incAdmit(result string) {
