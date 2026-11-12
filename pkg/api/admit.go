@@ -212,6 +212,11 @@ type admitSnapshot struct {
 	monthly int
 }
 
+// admissionOccupancySource is implemented by the session registry decorator.
+type admissionOccupancySource interface {
+	AdmissionOccupancy() store.AdmissionOccupancy
+}
+
 // loadAdmitSnapshot reads the rows the admit decision needs.
 // Independent reads run together. The caller still holds admitMu, so the
 // following insert stays ordered with other admits.
@@ -229,16 +234,24 @@ func (h *Handler) loadAdmitSnapshot(ctx context.Context, userID string, maxSessi
 		snap.active, listErr = h.store.ListActiveDeployments(ctx, userID)
 	}()
 	if h.roomBudget != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			row, err := h.store.SumActiveAdmissionWeights(ctx)
-			sumErr = err
+		if occSrc, ok := h.store.(admissionOccupancySource); ok {
+			row := occSrc.AdmissionOccupancy()
 			snap.occ = admission.Occupancy{
 				CPUMillicores: row.CPUMillicores,
 				MemoryMi:      row.MemoryMi,
 			}
-		}()
+		} else {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				row, err := h.store.SumActiveAdmissionWeights(ctx)
+				sumErr = err
+				snap.occ = admission.Occupancy{
+					CPUMillicores: row.CPUMillicores,
+					MemoryMi:      row.MemoryMi,
+				}
+			}()
+		}
 	}
 	if maxSessionsPerMonth > 0 {
 		wg.Add(1)

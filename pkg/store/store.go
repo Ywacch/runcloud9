@@ -142,6 +142,8 @@ type DeploymentRow struct {
 	CreatedAt      time.Time      `json:"created_at"`
 	ComparisonID   *string        `json:"comparison_id"`
 	RunRole        *string        `json:"run_role"`
+	AdmittedCPUm   *int64         `json:"admitted_cpu_m"`
+	AdmittedMemMi  *int64         `json:"admitted_mem_mi"`
 }
 
 // NewDeploymentStore creates a store using the Supabase URL and service role key.
@@ -356,7 +358,7 @@ func (s *DeploymentStore) ListActiveDeployments(ctx context.Context, userID stri
 func (s *DeploymentStore) ListActiveForRegistry(ctx context.Context) ([]DeploymentRow, error) {
 	s.observe("list_active_for_registry")
 	data, _, err := s.client.From("cloud_deployments").
-		Select("id,user_id,namespace,template,archetype,status,design,metrics_summary,expires_at,created_at,comparison_id,run_role", "exact", false).
+		Select("id,user_id,namespace,template,archetype,status,design,metrics_summary,expires_at,created_at,comparison_id,run_role,admitted_cpu_m,admitted_mem_mi", "exact", false).
 		In("status", []string{"running", "provisioning", "queued", "terminating"}).
 		Execute()
 	if err != nil {

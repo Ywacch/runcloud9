@@ -175,14 +175,22 @@ func (h *Handler) drainDeployQueue(ctx context.Context) {
 	}
 
 	var occ admission.Occupancy
-	occRow, err := h.store.SumActiveAdmissionWeights(ctx)
-	if err != nil {
-		log.Printf("deploy queue: sum occupancy: %v", err)
-		return
-	}
-	occ = admission.Occupancy{
-		CPUMillicores: occRow.CPUMillicores,
-		MemoryMi:      occRow.MemoryMi,
+	if occSrc, ok := h.store.(admissionOccupancySource); ok {
+		occRow := occSrc.AdmissionOccupancy()
+		occ = admission.Occupancy{
+			CPUMillicores: occRow.CPUMillicores,
+			MemoryMi:      occRow.MemoryMi,
+		}
+	} else {
+		occRow, err := h.store.SumActiveAdmissionWeights(ctx)
+		if err != nil {
+			log.Printf("deploy queue: sum occupancy: %v", err)
+			return
+		}
+		occ = admission.Occupancy{
+			CPUMillicores: occRow.CPUMillicores,
+			MemoryMi:      occRow.MemoryMi,
+		}
 	}
 	occ = h.promoteQueuedPass(ctx, queued, &occ, true)
 	h.promoteQueuedPass(ctx, queued, &occ, false)
