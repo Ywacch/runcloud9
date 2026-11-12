@@ -196,6 +196,28 @@ func TestControlPlaneMetrics_GETMetrics(t *testing.T) {
 	}
 }
 
+func TestControlPlaneMetrics_ThrottleWaitHistogram(t *testing.T) {
+	t.Parallel()
+	m := newControlPlaneMetrics()
+	m.ObserveThrottleWait("get", "namespaces", "unknown", 0.003)
+	m.ObserveThrottleWait("delete", "namespaces", "teardown", 0.06)
+
+	getLabels := map[string]string{"verb": "get", "resource": "namespaces", "caller": "unknown"}
+	deleteLabels := map[string]string{"verb": "delete", "resource": "namespaces", "caller": "teardown"}
+	if got := histogramBucket(t, m, "cloud9_k8s_throttle_wait_seconds", getLabels, 0.001); got != 0 {
+		t.Fatalf("get le=0.001: got %v, want 0", got)
+	}
+	if got := histogramBucket(t, m, "cloud9_k8s_throttle_wait_seconds", getLabels, 0.01); got != 1 {
+		t.Fatalf("get le=0.01: got %v, want 1", got)
+	}
+	if got := histogramBucket(t, m, "cloud9_k8s_throttle_wait_seconds", deleteLabels, 0.05); got != 0 {
+		t.Fatalf("delete le=0.05: got %v, want 0", got)
+	}
+	if got := histogramBucket(t, m, "cloud9_k8s_throttle_wait_seconds", deleteLabels, 0.25); got != 1 {
+		t.Fatalf("delete le=0.25: got %v, want 1", got)
+	}
+}
+
 func counterValue(t *testing.T, m *controlPlaneMetrics, name string, labels map[string]string) float64 {
 	t.Helper()
 	families, err := m.registry.Gather()
@@ -214,6 +236,32 @@ func counterValue(t *testing.T, m *controlPlaneMetrics, name string, labels map[
 		}
 	}
 	t.Fatalf("counter %s labels %v not found", name, labels)
+	return 0
+}
+
+func histogramBucket(t *testing.T, m *controlPlaneMetrics, name string, labels map[string]string, le float64) uint64 {
+	t.Helper()
+	families, err := m.registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range families {
+		if mf.GetName() != name {
+			continue
+		}
+		for _, metric := range mf.GetMetric() {
+			if !labelsMatch(metric.GetLabel(), labels) {
+				continue
+			}
+			for _, bucket := range metric.GetHistogram().GetBucket() {
+				if bucket.GetUpperBound() == le {
+					return bucket.GetCumulativeCount()
+				}
+			}
+			t.Fatalf("histogram %s labels %v missing bucket %v", name, labels, le)
+		}
+	}
+	t.Fatalf("histogram %s labels %v not found", name, labels)
 	return 0
 }
 
