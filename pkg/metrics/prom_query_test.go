@@ -45,39 +45,6 @@ func TestExecutePromInstant_CountsDirectQuery(t *testing.T) {
 	}
 }
 
-func TestExecutePromInstant_SamplePath(t *testing.T) {
-	t.Parallel()
-
-	var calls []promQueryRecord
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status": "success",
-			"data": map[string]any{
-				"resultType": "vector",
-				"result":     []any{},
-			},
-		})
-	}))
-	t.Cleanup(srv.Close)
-
-	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
-	c.SetPromQueryObserver(func(path, caller, template string) {
-		calls = append(calls, promQueryRecord{path, caller, template})
-	})
-
-	ctx := WithPromMeta(context.Background(), "", "collect", "cluster_sample")
-	_, err := c.executePromInstant(ctx, `up`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(calls) != 1 || calls[0].path != "cluster_sample" {
-		t.Fatalf("calls: want cluster_sample once, got %+v", calls)
-	}
-	if calls[0].template != "none" || calls[0].caller != "collect" {
-		t.Fatalf("defaults: got %+v", calls[0])
-	}
-}
-
 func TestExecutePromInstant_EmptyURLDoesNotCount(t *testing.T) {
 	t.Parallel()
 
@@ -97,32 +64,29 @@ func TestExecutePromInstant_EmptyURLDoesNotCount(t *testing.T) {
 	}
 }
 
-func TestExecutePromInstant_DirectAndSamplePathsDiffer(t *testing.T) {
+func TestQueryScalar_HitsPrometheus(t *testing.T) {
 	t.Parallel()
 
-	var calls []promQueryRecord
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"status": "success",
 			"data": map[string]any{
 				"resultType": "vector",
-				"result":     []any{},
+				"result": []map[string]any{
+					{"metric": map[string]string{}, "value": []any{float64(1), "4"}},
+				},
 			},
 		})
 	}))
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
-	c.SetPromQueryObserver(func(path, caller, template string) {
-		calls = append(calls, promQueryRecord{path, caller, template})
-	})
-
-	_, _ = c.executePromInstant(WithPromMeta(context.Background(), "t", "collect", "direct"), `up`)
-	_, _ = c.executePromInstant(WithPromMeta(context.Background(), "", "collect", "cluster_sample"), `up`)
-	if len(calls) != 2 {
-		t.Fatalf("calls: want 2, got %d", len(calls))
+	val, present, err := c.queryScalar(context.Background(), `sum(up)`)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if calls[0].path == calls[1].path {
-		t.Fatalf("paths should differ: %+v", calls)
+	if !present || val != 4 {
+		t.Fatalf("queryScalar: present=%v val=%v, want present true val 4", present, val)
 	}
 }

@@ -12,19 +12,6 @@ import (
 	"github.com/ywacch/cloud9/pkg/metrics/signals"
 )
 
-type stubCompare struct {
-	match, mismatch int
-}
-
-func (s *stubCompare) observe(signal, result string) {
-	switch result {
-	case "match":
-		s.match++
-	case "mismatch":
-		s.mismatch++
-	}
-}
-
 type hubTestQuerier struct {
 	fn func(promql string) ([]hub.Sample, error)
 }
@@ -143,43 +130,5 @@ func TestSig_MissingZero(t *testing.T) {
 	v, ok := c.sig(context.Background(), "ns-a", signals.AppRequestRate)
 	if !ok || v != 0 {
 		t.Fatalf("got %v ok=%v", v, ok)
-	}
-}
-
-func TestSigCompat_Mismatch(t *testing.T) {
-	t.Setenv("METRICS_SIGNAL_COMPARE", "1")
-
-	const oldPromQL = "old-query"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("query") == oldPromQL {
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"status": "success",
-				"data": map[string]any{
-					"resultType": "vector",
-					"result": []any{
-						map[string]any{
-							"metric": map[string]string{},
-							"value":  []any{1, "10"},
-						},
-					},
-				},
-			})
-			return
-		}
-		_ = json.NewEncoder(w).Encode(promVectorResp("ns-a", "app-server", "1"))
-	}))
-	t.Cleanup(srv.Close)
-
-	cmp := &stubCompare{}
-	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
-	c.SetMetricsHub(testHubWithRequestRate(t, "ns-a", 1))
-	c.SetSignalCompareObserver(cmp.observe)
-
-	v, ok := c.sigCompat(context.Background(), "ns-a", signals.AppRequestRate, oldPromQL)
-	if !ok || v != 1 {
-		t.Fatalf("sigCompat value=%v ok=%v", v, ok)
-	}
-	if cmp.mismatch != 1 || cmp.match != 0 {
-		t.Fatalf("compare counts: match=%d mismatch=%d", cmp.match, cmp.mismatch)
 	}
 }

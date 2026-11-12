@@ -51,29 +51,19 @@ func (c *MetricsCollector) appServerReplicaSeries(ctx context.Context, ns string
 	memBytes map[string]int64,
 ) {
 	ctx = withPromCaller(ctx, "replica")
-	nsSel := fmt.Sprintf(`namespace=%q`, ns)
-	podSel := fmt.Sprintf(`namespace=%q,pod=~"app-server.*"`, ns)
 	podRe := "app-server.*"
-	liveRange := promRateRange()
 
-	rps = c.sigByPodWithLegacy(ctx, ns, signals.AppRequestRatePod,
-		fmt.Sprintf(`sum by (pod) (rate(http_requests_total{%s}%s))`, nsSel, liveRange))
-	p50 = c.sigByPodWithLegacy(ctx, ns, signals.AppLatencyP50Pod,
-		fmt.Sprintf(`histogram_quantile(0.50, sum by (pod, le) (rate(http_request_duration_seconds_bucket{%s}%s)))`, nsSel, liveRange))
-	p95 = c.sigByPodWithLegacy(ctx, ns, signals.AppLatencyP95Pod,
-		fmt.Sprintf(`histogram_quantile(0.95, sum by (pod, le) (rate(http_request_duration_seconds_bucket{%s}%s)))`, nsSel, liveRange))
-	p99 = c.sigByPodWithLegacy(ctx, ns, signals.AppLatencyP99Pod,
-		fmt.Sprintf(`histogram_quantile(0.99, sum by (pod, le) (rate(http_request_duration_seconds_bucket{%s}%s)))`, nsSel, liveRange))
-	cpu = c.sigByPodWithLegacy(ctx, ns, signals.AppProcessCPUPod,
-		fmt.Sprintf(`sum by (pod) (rate(process_cpu_seconds_total{namespace=%q,pod=~%q}%s))`, ns, podRe, liveRange))
-	errRate = c.sigByPodWithLegacy(ctx, ns, signals.AppErrorRatePod,
-		fmt.Sprintf(`sum by (pod) (rate(http_requests_total{%s,status=~"5.."}%s))`, nsSel, liveRange))
-	totalReqs = c.sigByPodWithLegacy(ctx, ns, signals.AppHTTPRequestsTotalPod,
-		fmt.Sprintf(`sum by (pod) (http_requests_total{%s})`, podSel))
-	totalErrs5xx = c.sigByPodWithLegacy(ctx, ns, signals.AppHTTP5xxTotalPod,
-		fmt.Sprintf(`sum by (pod) (http_requests_total{%s,status=~"5.."})`, podSel))
+	rps = c.sigByPod(ctx, ns, signals.AppRequestRatePod)
+	p50 = c.sigByPod(ctx, ns, signals.AppLatencyP50Pod)
+	p95 = c.sigByPod(ctx, ns, signals.AppLatencyP95Pod)
+	p99 = c.sigByPod(ctx, ns, signals.AppLatencyP99Pod)
+	cpu = c.sigByPod(ctx, ns, signals.AppProcessCPUPod)
+	errRate = c.sigByPod(ctx, ns, signals.AppErrorRatePod)
+	totalReqs = c.sigByPod(ctx, ns, signals.AppHTTPRequestsTotalPod)
+	totalErrs5xx = c.sigByPod(ctx, ns, signals.AppHTTP5xxTotalPod)
 	memBytes = c.metricsAPIPodContainerMemory(ctx, ns, podRe, "app-server")
 
+	nsSel := fmt.Sprintf(`namespace=%q`, ns)
 	sessionRange := sessionP99PromRange(c.sessionAcc.Elapsed(ns, time.Now()))
 	p50Session = httpPodLatencyQuantile(ctx, c, nsSel, sessionRange, 0.50)
 	p95Session = httpPodLatencyQuantile(ctx, c, nsSel, sessionRange, 0.95)
@@ -186,24 +176,15 @@ func (c *MetricsCollector) workerReplicaSeries(ctx context.Context, ns string) (
 ) {
 	ctx = withPromCaller(ctx, "replica")
 	podRe := "worker.*"
-	liveRange := promRateRange()
 
-	rps = c.sigByPodWithLegacy(ctx, ns, signals.WorkerProcessedRatePod,
-		fmt.Sprintf(`sum by (pod) (rate({__name__=~".*_worker_processed_total",namespace=%q}%s))`, ns, liveRange))
-	p50 = c.sigByPodWithLegacy(ctx, ns, signals.WorkerLatencyP50Pod,
-		fmt.Sprintf(`histogram_quantile(0.50, sum by (pod, le) (rate({__name__=~".*_worker_processing_duration_seconds_bucket",namespace=%q}%s)))`, ns, liveRange))
-	p95 = c.sigByPodWithLegacy(ctx, ns, signals.WorkerLatencyP95Pod,
-		fmt.Sprintf(`histogram_quantile(0.95, sum by (pod, le) (rate({__name__=~".*_worker_processing_duration_seconds_bucket",namespace=%q}%s)))`, ns, liveRange))
-	p99 = c.sigByPodWithLegacy(ctx, ns, signals.WorkerLatencyP99Pod,
-		fmt.Sprintf(`histogram_quantile(0.99, sum by (pod, le) (rate({__name__=~".*_worker_processing_duration_seconds_bucket",namespace=%q}%s)))`, ns, liveRange))
-	cpu = c.sigByPodWithLegacy(ctx, ns, signals.WorkerProcessCPUPod,
-		fmt.Sprintf(`sum by (pod) (rate(process_cpu_seconds_total{namespace=%q,pod=~%q}%s))`, ns, podRe, liveRange))
-	errRate = c.sigByPodWithLegacy(ctx, ns, signals.WorkerErrorsRatePod,
-		fmt.Sprintf(`sum by (pod) (rate({__name__=~".*_worker_errors_total",namespace=%q}%s))`, ns, liveRange))
-	totalProcessed = c.sigByPodWithLegacy(ctx, ns, signals.WorkerProcessedTotalPod,
-		fmt.Sprintf(`sum by (pod) ({__name__=~".*_worker_processed_total",namespace=%q})`, ns))
-	totalErrors = c.sigByPodWithLegacy(ctx, ns, signals.WorkerErrorsTotalPod,
-		fmt.Sprintf(`sum by (pod) ({__name__=~".*_worker_errors_total",namespace=%q})`, ns))
+	rps = c.sigByPod(ctx, ns, signals.WorkerProcessedRatePod)
+	p50 = c.sigByPod(ctx, ns, signals.WorkerLatencyP50Pod)
+	p95 = c.sigByPod(ctx, ns, signals.WorkerLatencyP95Pod)
+	p99 = c.sigByPod(ctx, ns, signals.WorkerLatencyP99Pod)
+	cpu = c.sigByPod(ctx, ns, signals.WorkerProcessCPUPod)
+	errRate = c.sigByPod(ctx, ns, signals.WorkerErrorsRatePod)
+	totalProcessed = c.sigByPod(ctx, ns, signals.WorkerProcessedTotalPod)
+	totalErrors = c.sigByPod(ctx, ns, signals.WorkerErrorsTotalPod)
 	memBytes = c.metricsAPIPodContainerMemory(ctx, ns, podRe, "worker")
 
 	sessionRange := sessionP99PromRange(c.sessionAcc.Elapsed(ns, time.Now()))
