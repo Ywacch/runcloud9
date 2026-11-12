@@ -146,6 +146,29 @@ func (r *Registry) GetDeployment(ctx context.Context, namespace string) (store.D
 	return row, nil
 }
 
+// AdmissionOccupancy sums admitted weights for provisioning, running, and terminating rows.
+// Queued rows are excluded. The read holds the registry lock.
+func (r *Registry) AdmissionOccupancy() store.AdmissionOccupancy {
+	if r == nil {
+		return store.AdmissionOccupancy{}
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var occ store.AdmissionOccupancy
+	for _, row := range r.active {
+		switch row.Status {
+		case "provisioning", "running", "terminating":
+			if row.AdmittedCPUm != nil {
+				occ.CPUMillicores += *row.AdmittedCPUm
+			}
+			if row.AdmittedMemMi != nil {
+				occ.MemoryMi += *row.AdmittedMemMi
+			}
+		}
+	}
+	return occ
+}
+
 // ListActiveDeployments returns cached active rows without calling Supabase.
 func (r *Registry) ListActiveDeployments(ctx context.Context, userID string) ([]store.ActiveDeploymentRow, error) {
 	if r == nil {
@@ -407,17 +430,21 @@ func deploymentRowFromCreate(params store.CreateDeploymentParams, id, status str
 	if params.RunRole != "" {
 		runRole = &params.RunRole
 	}
+	cpu := params.AdmittedCPUm
+	mem := params.AdmittedMemMi
 	return store.DeploymentRow{
-		ID:           id,
-		UserID:       params.UserID,
-		Namespace:    params.Namespace,
-		Template:     params.Template,
-		Archetype:    params.Archetype,
-		Status:       status,
-		Design:       params.Design,
-		ExpiresAt:    params.ExpiresAt,
-		CreatedAt:    now,
-		ComparisonID: comparisonID,
-		RunRole:      runRole,
+		ID:            id,
+		UserID:        params.UserID,
+		Namespace:     params.Namespace,
+		Template:      params.Template,
+		Archetype:     params.Archetype,
+		Status:        status,
+		Design:        params.Design,
+		ExpiresAt:     params.ExpiresAt,
+		CreatedAt:     now,
+		ComparisonID:  comparisonID,
+		RunRole:       runRole,
+		AdmittedCPUm:  &cpu,
+		AdmittedMemMi: &mem,
 	}
 }
