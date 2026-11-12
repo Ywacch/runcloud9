@@ -352,6 +352,23 @@ func (s *DeploymentStore) ListActiveDeployments(ctx context.Context, userID stri
 	return rows, nil
 }
 
+// ListActiveForRegistry returns full deployment rows for active statuses in one query.
+func (s *DeploymentStore) ListActiveForRegistry(ctx context.Context) ([]DeploymentRow, error) {
+	s.observe("list_active_for_registry")
+	data, _, err := s.client.From("cloud_deployments").
+		Select("id,user_id,namespace,template,archetype,status,design,metrics_summary,expires_at,created_at,comparison_id,run_role", "exact", false).
+		In("status", []string{"running", "provisioning", "queued", "terminating"}).
+		Execute()
+	if err != nil {
+		return nil, fmt.Errorf("store.ListActiveForRegistry: %w", err)
+	}
+	var rows []DeploymentRow
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return nil, fmt.Errorf("store.ListActiveForRegistry: parse: %w", err)
+	}
+	return rows, nil
+}
+
 // ListQueuedDeployments returns all queued rows oldest-first (global FIFO).
 func (s *DeploymentStore) ListQueuedDeployments(ctx context.Context) ([]QueuedDeploymentRow, error) {
 	s.observe("list_queued_deployments")

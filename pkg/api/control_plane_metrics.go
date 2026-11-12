@@ -56,6 +56,9 @@ type controlPlaneMetrics struct {
 	hubUnlabeledSeries      *prometheus.CounterVec
 	signalCompareTotal      *prometheus.CounterVec
 	sideWorkInflight        prometheus.Gauge
+	sessionRegistryRows     prometheus.Gauge
+	sessionRegistryResync   prometheus.Histogram
+	sessionRegistryFallback *prometheus.CounterVec
 }
 
 func newControlPlaneMetrics() *controlPlaneMetrics {
@@ -194,6 +197,19 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		Name: "cloud9_sidework_inflight",
 		Help: "Direct scrape and diagnostics tasks holding a side-work slot.",
 	})
+	m.sessionRegistryRows = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "cloud9_session_registry_rows",
+		Help: "Active rows held in the session registry after load or write.",
+	})
+	m.sessionRegistryResync = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "cloud9_session_registry_resync_seconds",
+		Help:    "Duration of one session registry Load.",
+		Buckets: controlPlaneDurationBuckets,
+	})
+	m.sessionRegistryFallback = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloud9_session_registry_fallback_total",
+		Help: "Session registry GetDeployment fallbacks by result.",
+	}, []string{"result"})
 
 	reg.MustRegister(
 		m.admitTotal,
@@ -226,6 +242,9 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		m.hubUnlabeledSeries,
 		m.signalCompareTotal,
 		m.sideWorkInflight,
+		m.sessionRegistryRows,
+		m.sessionRegistryResync,
+		m.sessionRegistryFallback,
 	)
 	for _, name := range []string{"pod", "deployment", "statefulset", "hpa", "endpoints", "endpointslice"} {
 		m.informerQueueDepth.WithLabelValues(name).Set(1)
@@ -254,7 +273,31 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		m.signalCompareTotal.WithLabelValues(s, "match")
 		m.signalCompareTotal.WithLabelValues(s, "mismatch")
 	}
+	for _, result := range []string{"fetched", "inactive", "error"} {
+		m.sessionRegistryFallback.WithLabelValues(result)
+	}
 	return m
+}
+
+func (m *controlPlaneMetrics) SetSessionRegistryRows(n int) {
+	if m == nil {
+		return
+	}
+	m.sessionRegistryRows.Set(float64(n))
+}
+
+func (m *controlPlaneMetrics) ObserveSessionRegistryResync(seconds float64) {
+	if m == nil || seconds < 0 {
+		return
+	}
+	m.sessionRegistryResync.Observe(seconds)
+}
+
+func (m *controlPlaneMetrics) IncSessionRegistryFallback(result string) {
+	if m == nil || result == "" {
+		return
+	}
+	m.sessionRegistryFallback.WithLabelValues(result).Inc()
 }
 
 func (m *controlPlaneMetrics) observeSignalCompare(signal, result string) {

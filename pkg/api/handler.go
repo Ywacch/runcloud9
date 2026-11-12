@@ -39,7 +39,7 @@ import (
 // touching global state.
 type Handler struct {
 	deployers            map[string]deployer.ComponentDeployer
-	store                deploymentStore
+	store                HandlerDeploymentStore
 	scheduler            *teardown.Scheduler
 	seeder               seederService
 	metricsCollector     *metrics.MetricsCollector
@@ -72,7 +72,8 @@ type Handler struct {
 	reconcileLBOpts      *deployer.ReconcileLBUpstreamOptions
 }
 
-type deploymentStore interface {
+// HandlerDeploymentStore is the store surface required by the HTTP handler.
+type HandlerDeploymentStore interface {
 	ListActiveDeployments(ctx context.Context, userID string) ([]store.ActiveDeploymentRow, error)
 	ListUserDeploymentHistory(ctx context.Context, userID string, limit int) ([]store.DeploymentHistoryRow, error)
 	ListQueuedDeployments(ctx context.Context) ([]store.QueuedDeploymentRow, error)
@@ -109,7 +110,7 @@ var wsUpgrader = websocket.Upgrader{
 
 func NewHandler(
 	deployers map[string]deployer.ComponentDeployer,
-	store deploymentStore,
+	store HandlerDeploymentStore,
 	scheduler *teardown.Scheduler,
 	seed *seeder.Seeder,
 	metricsCollector *metrics.MetricsCollector,

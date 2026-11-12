@@ -21,6 +21,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/metrics/hub"
 	"github.com/ywacch/cloud9/pkg/metrics/signals"
 	"github.com/ywacch/cloud9/pkg/seeder"
+	"github.com/ywacch/cloud9/pkg/sessionreg"
 	"github.com/ywacch/cloud9/pkg/store"
 	"github.com/ywacch/cloud9/pkg/teardown"
 	"github.com/ywacch/cloud9/pkg/templates"
@@ -157,7 +158,7 @@ func wireClusterStateMetrics(col *metrics.MetricsCollector, cache *clusterstate.
 // If the server restarts mid-deployment, time.AfterFunc timers are gone.
 // We scan for running/provisioning deployments and either fire teardown now (if expired)
 // or re-register a timer for the remaining duration.
-func recoverDeployments(ctx context.Context, s *store.DeploymentStore, sched *teardown.Scheduler, col *metrics.MetricsCollector) {
+func recoverDeployments(ctx context.Context, s api.HandlerDeploymentStore, sched *teardown.Scheduler, col *metrics.MetricsCollector) {
 	rows, err := s.GetStaleDeployments(ctx)
 	if err != nil {
 		log.Printf("recovery: failed to fetch stale deployments: %v", err)
@@ -284,6 +285,20 @@ func main() {
 
 	templates.InitRegistry(deploymentStore.SupabaseClient())
 
+	var handlerStore api.HandlerDeploymentStore = deploymentStore
+	if sessionreg.Enabled(os.Getenv("SESSION_REGISTRY")) {
+		reg := sessionreg.New(deploymentStore, time.Now)
+		reg.SetObserver(api.SessionRegistryObserver())
+		if err := reg.Load(context.Background()); err != nil {
+			log.Printf("session registry: initial load failed: %v", err)
+		}
+		reg.Start(clusterCtx)
+		handlerStore = reg
+		log.Println("session registry: on")
+	} else {
+		log.Println("session registry: off")
+	}
+
 	var lg loadgen.LoadGenerator
 	if os.Getenv("DEPLOYER") == "k8s" {
 		lg = loadgen.NewPodLoadGenerator(clientset)
@@ -332,7 +347,7 @@ func main() {
 		}
 	}
 
-	handler := api.NewHandler(deployers, deploymentStore, scheduler, seed, metricsCollector, diagnosticsCollector, clientset, lg, eventBus)
+	handler := api.NewHandler(deployers, handlerStore, scheduler, seed, metricsCollector, diagnosticsCollector, clientset, lg, eventBus)
 	if clusterCache != nil {
 		handler.SetClusterState(clusterCache)
 	}
@@ -361,7 +376,7 @@ func main() {
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
-	recoverDeployments(context.Background(), deploymentStore, scheduler, metricsCollector)
+	recoverDeployments(context.Background(), handlerStore, scheduler, metricsCollector)
 	handler.StartTeardownMaintenance(context.Background())
 	handler.StartDeployQueue(context.Background())
 	handler.StartChaosPartitionSweep(context.Background())

@@ -142,7 +142,7 @@ func resolvePlaygroundProxyIdentity(
 }
 
 type deploymentUserPoolFetcher struct {
-	store     deploymentStore
+	store     HandlerDeploymentStore
 	clientset kubernetes.Interface
 }
 

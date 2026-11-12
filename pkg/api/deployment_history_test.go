@@ -17,7 +17,7 @@ func TestHandleListDeploymentHistory_validation(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		store      deploymentStore
+		store      HandlerDeploymentStore
 		userID     string
 		query      string
 		wantStatus int
