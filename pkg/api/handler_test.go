@@ -2121,6 +2121,7 @@ type fakeDeploymentStore struct {
 	events             []store.AdmissionEvent
 	promotionRows      []store.InferredMechanismPromotionRow
 	promotionSummaries []store.InferredMechanismPromotionSummary
+	fleet              []store.DeploymentRow
 }
 
 func newFakeDeploymentStore() *fakeDeploymentStore {
@@ -2129,6 +2130,14 @@ func newFakeDeploymentStore() *fakeDeploymentStore {
 		active:       make([]store.ActiveDeploymentRow, 0),
 		admittedByNS: make(map[string]store.AdmissionOccupancy),
 	}
+}
+
+func (f *fakeDeploymentStore) Fleet() []store.DeploymentRow {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]store.DeploymentRow, len(f.fleet))
+	copy(out, f.fleet)
+	return out
 }
 
 func (f *fakeDeploymentStore) ListActiveDeployments(_ context.Context, userID string) ([]store.ActiveDeploymentRow, error) {

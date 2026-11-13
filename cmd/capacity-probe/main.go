@@ -89,12 +89,17 @@ func main() {
 		log.Fatal(err)
 	}
 
+	hub := newFleetHub(client, *pollEvery)
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	go hub.run(hubCtx)
+	defer hubCancel()
+
 	tracker := &deploymentTracker{}
 	defer func() {
-		// DELETE returns after the row write. The poll waits until terminated.
+		// DELETE returns after the row write. The poll waits until the session is gone.
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer cancel()
-		cleanupTracked(cleanupCtx, client, tracker)
+		cleanupTracked(cleanupCtx, client, tracker, hub)
 	}()
 
 	for i, wave := range manifest.Waves {
@@ -122,7 +127,7 @@ func main() {
 			}
 		}
 
-		wr := runWave(ctx, client, tracker, wave, plans, *pollEvery, *timeout, sampler)
+		wr := runWave(ctx, client, tracker, wave, plans, *pollEvery, *timeout, sampler, hub)
 		report.Waves = append(report.Waves, wr)
 		log.Printf("wave %s done success=%d/%d peak_provisions=%d p50=%dms p95=%dms",
 			wr.Name, wr.SuccessCount, wr.RequestedCount, wr.PeakSimultaneousProv, wr.P50TimeToRunningMS, wr.P95TimeToRunningMS)
@@ -140,7 +145,7 @@ func main() {
 			return
 		}
 
-		cleanupTracked(ctx, client, tracker)
+		cleanupTracked(ctx, client, tracker, hub)
 		tracker = &deploymentTracker{}
 
 		if i < len(manifest.Waves)-1 {

@@ -67,7 +67,7 @@ func planWave(wave Wave, baseDir, tier string) ([]plannedDeploy, DeploymentWeigh
 	return plans, total, nil
 }
 
-func runWave(ctx context.Context, client *apiClient, tracker *deploymentTracker, wave Wave, plans []plannedDeploy, pollEvery, timeout time.Duration, sampler *clusterSampler) WaveReport {
+func runWave(ctx context.Context, client *apiClient, tracker *deploymentTracker, wave Wave, plans []plannedDeploy, pollEvery, timeout time.Duration, sampler *clusterSampler, hub *fleetHub) WaveReport {
 	mode := wave.effectiveMode()
 	results := make([]DeploymentResult, len(plans))
 	var wg sync.WaitGroup
@@ -83,7 +83,7 @@ func runWave(ctx context.Context, client *apiClient, tracker *deploymentTracker,
 
 	startOne := func(p plannedDeploy) {
 		defer wg.Done()
-		results[p.index] = createAndWait(ctx, client, tracker, p, pollEvery, timeout)
+		results[p.index] = createAndWait(ctx, client, tracker, p, pollEvery, timeout, hub)
 	}
 
 	switch mode {
@@ -125,7 +125,7 @@ func runWave(ctx context.Context, client *apiClient, tracker *deploymentTracker,
 	return summarizeWave(wave.Name, mode, results, samples)
 }
 
-func createAndWait(ctx context.Context, client *apiClient, tracker *deploymentTracker, p plannedDeploy, pollEvery, timeout time.Duration) DeploymentResult {
+func createAndWait(ctx context.Context, client *apiClient, tracker *deploymentTracker, p plannedDeploy, pollEvery, timeout time.Duration, hub *fleetHub) DeploymentResult {
 	res := DeploymentResult{
 		Index:     p.index,
 		Design:    p.design,
@@ -177,6 +177,8 @@ func createAndWait(ctx context.Context, client *apiClient, tracker *deploymentTr
 
 	deadline := time.Now().Add(timeout)
 	phases := map[string]struct{}{}
+	var lastGen int
+	var misses int
 	for {
 		if time.Now().After(deadline) {
 			res.TerminalStatus = "failed"
@@ -194,6 +196,31 @@ func createAndWait(ctx context.Context, client *apiClient, tracker *deploymentTr
 			return res
 		case <-time.After(pollEvery):
 		}
+		if hub != nil {
+			status, gen, present, unavailable := hub.snapshot(created.DeploymentID)
+			if !unavailable {
+				if gen == 0 || gen == lastGen {
+					continue
+				}
+				lastGen = gen
+				if !present {
+					misses++
+					if misses >= 2 {
+						res.TerminalStatus = "terminated"
+						res.FailureReason = "deployment disappeared while provisioning"
+						res.TerminalAt = time.Now().UTC()
+						res.ProvisionPhases = phaseList(phases)
+						return res
+					}
+					continue
+				}
+				misses = 0
+				if finishFromStatus(&res, status, nil, phases) {
+					return res
+				}
+				continue
+			}
+		}
 		st, code, err := client.GetDeployment(ctx, created.DeploymentID)
 		if isAuthFailure(code) {
 			res.TerminalStatus = "failed"
@@ -202,39 +229,47 @@ func createAndWait(ctx context.Context, client *apiClient, tracker *deploymentTr
 			res.ProvisionPhases = phaseList(phases)
 			return res
 		}
+		if code == http.StatusNotFound {
+			res.TerminalStatus = "terminated"
+			res.FailureReason = "deployment disappeared while provisioning"
+			res.TerminalAt = time.Now().UTC()
+			res.ProvisionPhases = phaseList(phases)
+			return res
+		}
 		if err != nil {
-			if code == http.StatusNotFound {
-				res.TerminalStatus = "terminated"
-				res.FailureReason = "deployment disappeared while provisioning"
-				res.TerminalAt = time.Now().UTC()
-				res.ProvisionPhases = phaseList(phases)
-				return res
-			}
 			continue
 		}
-		if phase := stringFromAny(st.MetricsSummary, "provision_phase"); phase != "" {
-			phases[phase] = struct{}{}
-		}
-		switch st.Status {
-		case "running":
-			res.TerminalStatus = "running"
-			res.TerminalAt = time.Now().UTC()
-			res.TimeToRunningMS = res.TerminalAt.Sub(res.CreatedAt).Milliseconds()
-			res.ProvisionPhases = phaseList(phases)
-			return res
-		case "failed":
-			res.TerminalStatus = "failed"
-			res.FailureReason = failureReason(st.MetricsSummary)
-			res.TerminalAt = time.Now().UTC()
-			res.ProvisionPhases = phaseList(phases)
-			return res
-		case "terminated":
-			res.TerminalStatus = "terminated"
-			res.FailureReason = "terminated before running"
-			res.TerminalAt = time.Now().UTC()
-			res.ProvisionPhases = phaseList(phases)
+		if finishFromStatus(&res, st.Status, st.MetricsSummary, phases) {
 			return res
 		}
+	}
+}
+
+func finishFromStatus(res *DeploymentResult, status string, summary map[string]any, phases map[string]struct{}) bool {
+	if phase := stringFromAny(summary, "provision_phase"); phase != "" {
+		phases[phase] = struct{}{}
+	}
+	switch status {
+	case "running":
+		res.TerminalStatus = "running"
+		res.TerminalAt = time.Now().UTC()
+		res.TimeToRunningMS = res.TerminalAt.Sub(res.CreatedAt).Milliseconds()
+		res.ProvisionPhases = phaseList(phases)
+		return true
+	case "failed":
+		res.TerminalStatus = "failed"
+		res.FailureReason = failureReason(summary)
+		res.TerminalAt = time.Now().UTC()
+		res.ProvisionPhases = phaseList(phases)
+		return true
+	case "terminated":
+		res.TerminalStatus = "terminated"
+		res.FailureReason = "terminated before running"
+		res.TerminalAt = time.Now().UTC()
+		res.ProvisionPhases = phaseList(phases)
+		return true
+	default:
+		return false
 	}
 }
 
@@ -250,7 +285,7 @@ const cleanupDeleteParallel = 64
 // after DELETE has been accepted.
 const cleanupWaitBudget = 15 * time.Minute
 
-func cleanupTracked(ctx context.Context, client *apiClient, tracker *deploymentTracker) {
+func cleanupTracked(ctx context.Context, client *apiClient, tracker *deploymentTracker, hub *fleetHub) {
 	items := tracker.snapshot()
 	if len(items) == 0 {
 		return
@@ -292,13 +327,23 @@ func cleanupTracked(ctx context.Context, client *apiClient, tracker *deploymentT
 	var workerLags []time.Duration
 	deadline := time.Now().Add(cleanupWaitBudget)
 	for {
+		snap, gen, unavail := hub.view()
+		useFleet := hub != nil && !unavail && gen > 0
 		remaining := 0
 		for _, item := range items {
 			if _, ok := seen[item.ID]; ok {
 				continue
 			}
-			st, code, err := client.GetDeployment(ctx, item.ID)
-			done := (err != nil && code == http.StatusNotFound) || (err == nil && st.Status == "terminated")
+			var done bool
+			var summary map[string]any
+			if useFleet {
+				_, present := snap[item.ID]
+				done = !present
+			} else {
+				st, code, err := client.GetDeployment(ctx, item.ID)
+				done = code == http.StatusNotFound || (err == nil && st.Status == "terminated")
+				summary = st.MetricsSummary
+			}
 			if !done {
 				remaining++
 				continue
@@ -313,7 +358,7 @@ func cleanupTracked(ctx context.Context, client *apiClient, tracker *deploymentT
 			now := time.Now()
 			drain := now.Sub(accepted)
 			drainLags = append(drainLags, drain)
-			worker, hasWorker := workerLag(st.MetricsSummary, now)
+			worker, hasWorker := workerLag(summary, now)
 			if hasWorker {
 				workerLags = append(workerLags, worker)
 				log.Printf("cleanup %s accept-to-gone=%s worker=%s", item.ID, drain.Round(time.Millisecond), worker.Round(time.Millisecond))

@@ -228,3 +228,20 @@ func TestUpdateStatus_RemovesTerminated(t *testing.T) {
 		t.Fatalf("inner get calls = %d want 0 after inactive", fake.getCalls)
 	}
 }
+
+func TestFleet_CopiesActive(t *testing.T) {
+	r := newTestRegistry(newFakeStore())
+	r.mu.Lock()
+	r.active["ns-a"] = store.DeploymentRow{ID: "a", Namespace: "ns-a", Status: "running"}
+	r.mu.Unlock()
+
+	got := r.Fleet()
+	if len(got) != 1 || got[0].Status != "running" {
+		t.Fatalf("fleet = %+v", got)
+	}
+	got[0].Status = "failed"
+	again := r.Fleet()
+	if again[0].Status != "running" {
+		t.Fatalf("copy mutated cache: %+v", again)
+	}
+}
