@@ -95,14 +95,8 @@ jobs:
           # The API takes a coordination Lease before it listens. A rolling
           # update deadlocks: the new pod cannot become Ready while the old
           # pod still holds the lease. Recreate deletes the old pod first.
-          kubectl create role cloud9-api-lease -n "$NAMESPACE" \
-            --verb=get,create,update,patch \
-            --resource=leases.coordination.k8s.io \
-            --dry-run=client -o yaml | kubectl apply -f -
-          kubectl create rolebinding cloud9-api-lease -n "$NAMESPACE" \
-            --role=cloud9-api-lease \
-            --serviceaccount="$NAMESPACE:cloud9-api" \
-            --dry-run=client -o yaml | kubectl apply -f -
+          # The lease Role lives in k8s/base/cloud9-api.yaml. Apply it once
+          # from an account that can patch Roles. This job cannot.
           kubectl patch deployment "$DEPLOYMENT_NAME" -n "$NAMESPACE" --type=json \
             -p='[{"op":"add","path":"/spec/strategy","value":{"type":"Recreate"}}]'
           kubectl set image deployment/"$DEPLOYMENT_NAME" \
