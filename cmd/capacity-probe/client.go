@@ -116,6 +116,46 @@ func (c *apiClient) GetDeployment(ctx context.Context, id string) (deploymentSta
 	return out, status, nil
 }
 
+type fleetItem struct {
+	ID        string `json:"id"`
+	Namespace string `json:"namespace"`
+	Status    string `json:"status"`
+	Template  string `json:"template"`
+	ExpiresAt string `json:"expiresAt"`
+	CreatedAt string `json:"createdAt"`
+}
+
+// ListFleet reads GET /internal/fleet. HTTP 404 means the route is disabled.
+func (c *apiClient) ListFleet(ctx context.Context) ([]fleetItem, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/internal/fleet", nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, resp.StatusCode, fmt.Errorf("GET /internal/fleet: status %d", resp.StatusCode)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, resp.StatusCode, fmt.Errorf("GET /internal/fleet: status %d", resp.StatusCode)
+	}
+	var items []fleetItem
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &items); err != nil {
+			return nil, resp.StatusCode, fmt.Errorf("GET /internal/fleet: decode: %w", err)
+		}
+	}
+	return items, resp.StatusCode, nil
+}
+
 func (c *apiClient) DeleteDeployment(ctx context.Context, id string) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, deleteRequestTimeout)
 	defer cancel()

@@ -108,6 +108,20 @@ func (r *Registry) Start(ctx context.Context) {
 	}()
 }
 
+// Fleet returns a copy of the active rows. Callers may mutate the copy.
+func (r *Registry) Fleet() []store.DeploymentRow {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]store.DeploymentRow, 0, len(r.active))
+	for _, row := range r.active {
+		out = append(out, row)
+	}
+	return out
+}
+
 // GetDeployment returns a cached active row or falls back to the inner store.
 func (r *Registry) GetDeployment(ctx context.Context, namespace string) (store.DeploymentRow, error) {
 	if r == nil || r.DeploymentStore == nil {

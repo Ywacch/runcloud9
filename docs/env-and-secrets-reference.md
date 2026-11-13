@@ -39,6 +39,7 @@ Use this doc as the source of truth for required/optional environment variables 
 | `API_RATE_LIMIT_EXPENSIVE_BURST` | No | `3` | Burst for expensive routes. |
 | `API_RATE_LIMIT_RELEASE_RPS` | No | `100` | Per-user rate for `DELETE /deployments`. Separate from the standard and create buckets. |
 | `API_RATE_LIMIT_RELEASE_BURST` | No | `128` | Burst for `DELETE /deployments`. A 100-delete wave fits in one burst. |
+| `FLEET_LIST_USER_ID` | No | empty (route 404) | User id allowed to call `GET /internal/fleet`. Any other authenticated user gets 403. Set this to the capacity-probe account before a ladder run. |
 | `TEARDOWN_WORKERS` | No | `8` | How many namespace deletions run at once after DELETE has returned. |
 | `API_RATE_LIMIT_PUBLIC_RPS` | No | `60` | Per-IP rate for `/health` and `/templates`. |
 | `API_RATE_LIMIT_PUBLIC_BURST` | No | `120` | Burst for public routes. |
