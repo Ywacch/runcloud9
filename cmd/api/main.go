@@ -241,7 +241,11 @@ func main() {
 	if clientset != nil {
 		identity := strings.TrimSpace(os.Getenv("HOSTNAME"))
 		if identity == "" {
-			log.Fatal("HOSTNAME is required for API lease identity when DEPLOYER=k8s")
+			var err error
+			identity, err = os.Hostname()
+			if err != nil || identity == "" {
+				log.Fatal("HOSTNAME or system hostname is required for API lease identity when DEPLOYER=k8s")
+			}
 		}
 		if err := apilease.Hold(clusterCtx, clientset, apilease.Config{
 			Namespace:  "cloud9-system",
