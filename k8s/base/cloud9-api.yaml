@@ -61,6 +61,30 @@ roleRef:
   kind: ClusterRole
   name: cloud9-api-deployer
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cloud9-api-lease
+  namespace: cloud9-system
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cloud9-api-lease
+  namespace: cloud9-system
+subjects:
+  - kind: ServiceAccount
+    name: cloud9-api
+    namespace: cloud9-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cloud9-api-lease
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -68,6 +92,8 @@ metadata:
   namespace: cloud9-system
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: cloud9-api
@@ -109,6 +135,10 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
           env:
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: ENV
               value: "production"
             - name: DEPLOYER
