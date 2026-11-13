@@ -12,6 +12,7 @@ import (
 	"github.com/getsentry/sentry-go"
 	sentryhttp "github.com/getsentry/sentry-go/http"
 	"github.com/ywacch/cloud9/pkg/api"
+	"github.com/ywacch/cloud9/pkg/apilease"
 	"github.com/ywacch/cloud9/pkg/clusterstate"
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/diagnostics"
@@ -237,6 +238,23 @@ func main() {
 
 	clusterCtx, clusterCancel := context.WithCancel(context.Background())
 	defer clusterCancel()
+	if clientset != nil {
+		identity := strings.TrimSpace(os.Getenv("HOSTNAME"))
+		if identity == "" {
+			log.Fatal("HOSTNAME is required for API lease identity when DEPLOYER=k8s")
+		}
+		if err := apilease.Hold(clusterCtx, clientset, apilease.Config{
+			Namespace:  "cloud9-system",
+			Name:       "cloud9-api",
+			Identity:   identity,
+			Duration:   30 * time.Second,
+			RenewEvery: 10 * time.Second,
+			Now:        time.Now,
+		}); err != nil {
+			log.Fatalf("api lease: %v", err)
+		}
+		log.Println("api lease: held")
+	}
 	var clusterCache *clusterstate.Cache
 	if clusterstate.Enabled(os.Getenv("CLUSTERSTATE")) {
 		if kubeConfig == nil {
