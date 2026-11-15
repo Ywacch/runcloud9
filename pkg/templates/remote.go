@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"log"
 
-	"github.com/supabase-community/supabase-go"
+	postgrest "github.com/supabase-community/postgrest-go"
 	"github.com/ywacch/cloud9/pkg/introspect"
 )
 
@@ -162,7 +162,7 @@ const cloudTemplatesSelect = "id,name,description,components,bottleneck,availabl
 // embedded YAML. Optional jsonb columns loadgen, prometheus_metrics, invariant_checkers, and jobs
 // supply premium template load/metrics/invariant/job config. If storytelling is missing, the select
 // fails and premium rows are skipped.
-func FetchRemoteTemplates(client *supabase.Client) ([]TemplateSpec, error) {
+func FetchRemoteTemplates(client *postgrest.Client) ([]TemplateSpec, error) {
 	if client == nil {
 		return []TemplateSpec{}, nil
 	}

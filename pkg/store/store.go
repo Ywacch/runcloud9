@@ -8,7 +8,8 @@ import (
 	"time"
 
 	postgrest "github.com/supabase-community/postgrest-go"
-	"github.com/supabase-community/supabase-go"
+
+	"github.com/ywacch/cloud9/pkg/suparest"
 )
 
 // RequestObserver is invoked once per Supabase PostgREST call in the store.
@@ -16,7 +17,7 @@ type RequestObserver func(op string)
 
 // DeploymentStore wraps Supabase client for cloud_deployments table operations.
 type DeploymentStore struct {
-	client          *supabase.Client
+	client          *postgrest.Client
 	requestObserver RequestObserver
 }
 
@@ -148,7 +149,7 @@ type DeploymentRow struct {
 
 // NewDeploymentStore creates a store using the Supabase URL and service role key.
 func NewDeploymentStore(supabaseURL, serviceRoleKey string) (*DeploymentStore, error) {
-	client, err := supabase.NewClient(supabaseURL, serviceRoleKey, nil)
+	client, err := suparest.New(supabaseURL, serviceRoleKey)
 	if err != nil {
 		return nil, fmt.Errorf("store: new client: %w", err)
 	}
@@ -156,7 +157,7 @@ func NewDeploymentStore(supabaseURL, serviceRoleKey string) (*DeploymentStore, e
 }
 
 // SupabaseClient exposes the client for bootstrap code (e.g. premium template registry).
-func (s *DeploymentStore) SupabaseClient() *supabase.Client {
+func (s *DeploymentStore) SupabaseClient() *postgrest.Client {
 	if s == nil {
 		return nil
 	}
