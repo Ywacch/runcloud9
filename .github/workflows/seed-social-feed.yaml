@@ -85,4 +85,4 @@ jobs:
       - name: Upload seed dump
         run: |
           gcloud storage cp social-feed.dump \
-            gs://runcloud9-505411-seed-data/social-feed/social-feed.dump
+            gs://runcloud9-514803-seed-data/social-feed/social-feed.dump
