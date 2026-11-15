@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/supabase-community/supabase-go"
+	postgrest "github.com/supabase-community/postgrest-go"
 	"github.com/ywacch/cloud9/pkg/engines"
 	"github.com/ywacch/cloud9/pkg/introspect"
 	"gopkg.in/yaml.v3"
@@ -210,7 +210,7 @@ func init() {
 
 // InitRegistry merges embedded free templates with premium rows from Supabase.
 // Call once at process startup after the Supabase client exists. If client is nil, only free templates load.
-func InitRegistry(client *supabase.Client) {
+func InitRegistry(client *postgrest.Client) {
 	// Rebuild free templates at InitRegistry time so image tags reflect the latest
 	// manifest/env resolution loaded during process startup.
 	free := loadEmbeddedTemplates()

@@ -11,7 +11,8 @@ import (
 	"time"
 
 	postgrest "github.com/supabase-community/postgrest-go"
-	"github.com/supabase-community/supabase-go"
+
+	"github.com/ywacch/cloud9/pkg/suparest"
 )
 
 type deploymentRow struct {
@@ -64,7 +65,7 @@ func main() {
 		log.Fatal("SUPABASE_URL and SUPABASE_SERVICE_KEY are required")
 	}
 
-	client, err := supabase.NewClient(url, key, nil)
+	client, err := suparest.New(url, key)
 	if err != nil {
 		log.Fatalf("supabase client: %v", err)
 	}
@@ -82,7 +83,7 @@ func main() {
 	}
 }
 
-func fetchRows(client *supabase.Client, windowDays int) ([]deploymentRow, error) {
+func fetchRows(client *postgrest.Client, windowDays int) ([]deploymentRow, error) {
 	cutoff := time.Now().UTC().Add(-time.Duration(windowDays) * 24 * time.Hour).Format(time.RFC3339)
 	data, _, err := client.From("cloud_deployments").
 		Select("namespace,template,status,created_at,metrics_summary", "exact", false).
