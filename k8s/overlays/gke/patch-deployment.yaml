@@ -8,17 +8,17 @@ spec:
     spec:
       containers:
         - name: cloud9-api
-          image: us-central1-docker.pkg.dev/runcloud9-505411/cloud9-images/cloud9-api:latest
+          image: us-central1-docker.pkg.dev/runcloud9-514803/cloud9-images/cloud9-api:latest
           imagePullPolicy: IfNotPresent
           env:
             - name: SEED_BUCKET_NAME
-              value: "runcloud9-505411-seed-data"
+              value: "runcloud9-514803-seed-data"
             - name: DDC_BUCKET
-              value: "runcloud9-505411-diagnostics"
+              value: "runcloud9-514803-diagnostics"
             - name: PROMETHEUS_URL
               value: "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
             - name: TEMPLATE_IMAGE_REGISTRY
-              value: "us-central1-docker.pkg.dev/runcloud9-505411/cloud9-images"
+              value: "us-central1-docker.pkg.dev/runcloud9-514803/cloud9-images"
             # One worker per session in a 50-wide wave, so every delete starts in the first round.
             # Diagnostics slot count stays at the process default of 8.
             - name: TEARDOWN_WORKERS
