@@ -1,10 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -65,7 +67,7 @@ func TestHandleMetricsStream_SSEWritesFrameAndPing(t *testing.T) {
 	defer cancel()
 	req := httptest.NewRequest(http.MethodGet, "/deployments/"+ns+"/metrics", nil).WithContext(ctx)
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSSETestResponse()
 
 	done := make(chan struct{})
 	go func() {
@@ -79,7 +81,7 @@ func TestHandleMetricsStream_SSEWritesFrameAndPing(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	var body string
 	for time.Now().Before(deadline) {
-		body = rec.Body.String()
+		body = rec.bodyString()
 		if strings.Contains(body, "id:") && strings.Contains(body, "data:") && strings.Contains(body, ": ping") {
 			break
 		}
@@ -126,7 +128,7 @@ func TestHandleMetricsStream_LastEventIDSendsNewerSnapshot(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
 		req.Header.Set("Accept", "text/event-stream")
 		req.Header.Set("Last-Event-ID", ts.Add(-time.Second).Format(time.RFC3339Nano))
-		rec := httptest.NewRecorder()
+		rec := newSSETestResponse()
 
 		done := make(chan struct{})
 		go func() {
@@ -136,7 +138,7 @@ func TestHandleMetricsStream_LastEventIDSendsNewerSnapshot(t *testing.T) {
 
 		deadline := time.Now().Add(500 * time.Millisecond)
 		for time.Now().Before(deadline) {
-			if strings.Contains(rec.Body.String(), "data:") {
+			if strings.Contains(rec.bodyString(), "data:") {
 				break
 			}
 			time.Sleep(5 * time.Millisecond)
@@ -144,7 +146,7 @@ func TestHandleMetricsStream_LastEventIDSendsNewerSnapshot(t *testing.T) {
 		cancel()
 		<-done
 
-		body := rec.Body.String()
+		body := rec.bodyString()
 		if !strings.Contains(body, "data:") {
 			t.Fatalf("expected immediate frame, body:\n%s", body)
 		}
@@ -276,6 +278,41 @@ func TestStreamConnectionsGauge(t *testing.T) {
 	waitUntil(t, 500*time.Millisecond, func() bool {
 		return gaugeValue(t, m, "cloud9_stream_connections", labels) == 0
 	})
+}
+
+// sseTestResponse is an http.ResponseWriter safe to read while streamMetricsSSE writes.
+// httptest.ResponseRecorder is not safe for that pattern under -race.
+type sseTestResponse struct {
+	mu     sync.Mutex
+	header http.Header
+	body   bytes.Buffer
+	code   int
+}
+
+func newSSETestResponse() *sseTestResponse {
+	return &sseTestResponse{header: make(http.Header)}
+}
+
+func (r *sseTestResponse) Header() http.Header { return r.header }
+
+func (r *sseTestResponse) WriteHeader(code int) {
+	r.mu.Lock()
+	r.code = code
+	r.mu.Unlock()
+}
+
+func (r *sseTestResponse) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.body.Write(p)
+}
+
+func (r *sseTestResponse) Flush() {}
+
+func (r *sseTestResponse) bodyString() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.body.String()
 }
 
 func waitCollectPendingCleared(t *testing.T, c *metrics.MetricsCollector, ns string) {
