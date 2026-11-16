@@ -100,6 +100,16 @@ type MetricsCollector struct {
 	sideWorkCadence       time.Duration
 }
 
+// SetPublisherCollectHookForTest replaces Collect inside session publishers. For tests only.
+func (c *MetricsCollector) SetPublisherCollectHookForTest(
+	hook func(ctx context.Context, namespace, template string, topo TopologyFlags) (*DeploymentMetrics, error),
+) {
+	if c == nil {
+		return
+	}
+	c.publisherCollectHook = hook
+}
+
 // NewMetricsCollector wires Prometheus scraping and optional event/threshold pipelines.
 // metricsClient may be nil; DB/MQ/LB container usage then falls back to kube requests when cAdvisor is empty.
 func NewMetricsCollector(prometheusURL string, lg loadgen.LoadGenerator, clientset kubernetes.Interface, metricsClient PodMetricsProvider, eventBus *EventBus) *MetricsCollector {
