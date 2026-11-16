@@ -37,6 +37,7 @@ type controlPlaneMetrics struct {
 	teardownDiagnostics     *prometheus.CounterVec
 	orphanNamespaces        prometheus.Gauge
 	websocketLive           prometheus.Gauge
+	streamConnections       *prometheus.GaugeVec
 	informerQueueDepth      *prometheus.GaugeVec
 	informerEventAge        *prometheus.GaugeVec
 	informerEventMu         sync.Mutex
@@ -123,6 +124,10 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		Name: "cloud9_websocket_live",
 		Help: "Active per-session metrics publisher loops.",
 	})
+	m.streamConnections = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "cloud9_stream_connections",
+		Help: "Open browser streams to metrics or logs by transport and kind.",
+	}, []string{"transport", "kind"})
 	m.informerQueueDepth = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "cloud9_informer_queue_depth",
 		Help: "Shared informer workqueue depth (0 until informer path is enabled).",
@@ -225,6 +230,7 @@ func newControlPlaneMetrics() *controlPlaneMetrics {
 		m.teardownDiagnostics,
 		m.orphanNamespaces,
 		m.websocketLive,
+		m.streamConnections,
 		m.informerQueueDepth,
 		m.informerEventAge,
 		m.metricsQueriesTotal,
@@ -567,6 +573,20 @@ func (h *Handler) refreshWebsocketLiveGauge() {
 		return
 	}
 	h.cpMetrics.setWebsocketLive(float64(h.metricsCollector.PublisherCount()))
+}
+
+func (m *controlPlaneMetrics) incStreamConnection(transport, kind string) {
+	if m == nil || m.streamConnections == nil {
+		return
+	}
+	m.streamConnections.WithLabelValues(transport, kind).Inc()
+}
+
+func (m *controlPlaneMetrics) decStreamConnection(transport, kind string) {
+	if m == nil || m.streamConnections == nil {
+		return
+	}
+	m.streamConnections.WithLabelValues(transport, kind).Dec()
 }
 
 // RefreshWebsocketLiveGauge updates cloud9_websocket_live from the metrics publisher map.

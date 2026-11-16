@@ -102,53 +102,76 @@ var componentLogTargets = map[string][]componentLogTarget{
 // Discovery is repeated while ctx is active so pods that appear after connect
 // (Postgres replicas finishing init, late Redis) still get a follower.
 func StreamLogs(ctx context.Context, conn *websocket.Conn, clientset kubernetes.Interface, namespace string) {
-	// Hijacked request contexts often stay live after the client closes the
-	// socket. Cancel when the reader or writer exits so pod log follows stop.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	sink := newWSLineSink(conn)
+	go runLogWebSocketReader(ctx, conn, cancel)
+	defer conn.Close()
+
+	_ = streamLogsCore(ctx, sink, clientset, namespace, wskeepalive.PingPeriod)
+}
+
+// StreamWithSink streams pod logs to sink until ctx is cancelled. The caller
+// owns response headers for SSE.
+func StreamWithSink(ctx context.Context, sink LineSink, clientset kubernetes.Interface, namespace string, pingInterval time.Duration) {
+	if pingInterval <= 0 {
+		pingInterval = wskeepalive.PingPeriod
+	}
+	_ = streamLogsCore(ctx, sink, clientset, namespace, pingInterval)
+}
+
+func runLogWebSocketReader(ctx context.Context, conn *websocket.Conn, cancel context.CancelFunc) {
+	defer cancel()
+	conn.SetReadLimit(512 * 1024)
+	_ = conn.SetReadDeadline(time.Now().Add(wskeepalive.PongWait))
+	conn.SetPongHandler(func(string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(wskeepalive.PongWait))
+		return nil
+	})
+	for {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+	}
+}
+
+func streamLogsCore(ctx context.Context, sink LineSink, clientset kubernetes.Interface, namespace string, pingInterval time.Duration) error {
 	writeCh := make(chan LogLine, logBufferSize)
 
+	writerDone := make(chan struct{})
 	go func() {
-		defer cancel()
-		ticker := time.NewTicker(wskeepalive.PingPeriod)
+		defer close(writerDone)
+		ticker := time.NewTicker(pingInterval)
 		defer ticker.Stop()
-		defer conn.Close()
-
 		for {
 			select {
-			case line := <-writeCh:
-				_ = conn.SetWriteDeadline(time.Now().Add(wskeepalive.WriteWait))
-				if err := conn.WriteJSON(line); err != nil {
-					slog.Warn("log ws write failed", "namespace", namespace, "error", err)
+			case line, ok := <-writeCh:
+				if !ok {
+					return
+				}
+				if err := sink.WriteLine(line); err != nil {
+					slog.Warn("log stream write failed", "namespace", namespace, "error", err)
 					return
 				}
 			case <-ticker.C:
-				_ = conn.SetWriteDeadline(time.Now().Add(wskeepalive.WriteWait))
-				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				if err := sink.Ping(); err != nil {
 					return
 				}
 			case <-ctx.Done():
-				_ = conn.WriteMessage(websocket.CloseMessage,
-					websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 				return
 			}
 		}
 	}()
 
-	go func() {
-		defer cancel()
-		conn.SetReadLimit(512 * 1024)
-		_ = conn.SetReadDeadline(time.Now().Add(wskeepalive.PongWait))
-		conn.SetPongHandler(func(string) error {
-			_ = conn.SetReadDeadline(time.Now().Add(wskeepalive.PongWait))
-			return nil
-		})
-		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
-				return
-			}
-		}
+	defer func() {
+		close(writeCh)
+		<-writerDone
 	}()
 
 	started := newStreamSet()
@@ -169,7 +192,7 @@ func StreamLogs(ctx context.Context, conn *websocket.Conn, clientset kubernetes.
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		case <-ticker.C:
 			startNew(discoverPodLogStreams(ctx, clientset, namespace))
 		}

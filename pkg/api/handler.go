@@ -23,7 +23,6 @@ import (
 	"github.com/ywacch/cloud9/pkg/inference"
 	"github.com/ywacch/cloud9/pkg/loadgen"
 	"github.com/ywacch/cloud9/pkg/loadgen/vu"
-	"github.com/ywacch/cloud9/pkg/logs"
 	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/metrics/hub"
 	"github.com/ywacch/cloud9/pkg/seeder"
@@ -303,18 +302,20 @@ func (h *Handler) handleMetricsStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := wsUpgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Printf("ws upgrade failed: %v", err)
+	if wantsSSE(r) {
+		if h.cpMetrics != nil {
+			h.cpMetrics.incStreamConnection("sse", "metrics")
+			defer h.cpMetrics.decStreamConnection("sse", "metrics")
+		}
+		h.streamMetricsSSE(w, r, row, metricsSSEOptions{})
 		return
 	}
 
-	ctx, cancel := cancelWhenSocketCloses(r.Context(), conn)
-	defer cancel()
-	design, _ := deployer.DesignFromMap(row.Design)
-	topo := MetricsTopologyFromDeploymentDesign(design, row.Template)
-	metrics.StreamMetrics(ctx, conn, h.metricsCollector, namespace, row.Template, topo)
-	h.refreshWebsocketLiveGauge()
+	if h.cpMetrics != nil {
+		h.cpMetrics.incStreamConnection("ws", "metrics")
+		defer h.cpMetrics.decStreamConnection("ws", "metrics")
+	}
+	h.streamMetricsWebSocket(w, r, row)
 }
 
 func (h *Handler) handleGetDeployment(w http.ResponseWriter, r *http.Request) {
@@ -421,15 +422,20 @@ func (h *Handler) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := wsUpgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Printf("log ws upgrade failed: %v", err)
+	if wantsSSE(r) {
+		if h.cpMetrics != nil {
+			h.cpMetrics.incStreamConnection("sse", "logs")
+			defer h.cpMetrics.decStreamConnection("sse", "logs")
+		}
+		h.streamLogsSSE(w, r, namespace)
 		return
 	}
 
-	ctx, cancel := cancelWhenSocketCloses(r.Context(), conn)
-	defer cancel()
-	logs.StreamLogs(ctx, conn, h.clientset, namespace)
+	if h.cpMetrics != nil {
+		h.cpMetrics.incStreamConnection("ws", "logs")
+		defer h.cpMetrics.decStreamConnection("ws", "logs")
+	}
+	h.streamLogsWebSocket(w, r, namespace)
 }
 
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {

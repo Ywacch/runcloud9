@@ -91,6 +91,11 @@ func (c *MetricsCollector) observeFrameBytes(n int) {
 	c.frameBytesObserver(n)
 }
 
+// ObserveSerializedFrameBytes records the size of a metrics frame sent to a client.
+func (c *MetricsCollector) ObserveSerializedFrameBytes(n int) {
+	c.observeFrameBytes(n)
+}
+
 func parsePromValue(v any) float64 {
 	valStr, ok := v.(string)
 	if !ok {
