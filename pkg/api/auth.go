@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
 	"net/http"
 	"os"
@@ -121,6 +122,11 @@ func requireAuth(next http.Handler) http.Handler {
 			}
 		}, jwt.WithValidMethods(validJWTAlgs(mode)))
 		if err != nil || !token.Valid {
+			if err != nil {
+				log.Printf("auth: jwt verification failed: %v", err)
+			} else {
+				log.Printf("auth: jwt verification failed: token invalid")
+			}
 			writeError(w, http.StatusUnauthorized, "invalid token")
 			return
 		}
@@ -142,12 +148,24 @@ func requireAuth(next http.Handler) http.Handler {
 	})
 }
 
+func jwtHeaderKid(kidVal any) string {
+	switch v := kidVal.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case []any:
+		if len(v) > 0 {
+			return jwtHeaderKid(v[0])
+		}
+	}
+	return strings.TrimSpace(fmt.Sprint(kidVal))
+}
+
 func getSupabaseJWK(ctx context.Context, supabaseURL string, kidVal any) (any, error) {
 	if supabaseURL == "" {
 		return nil, fmt.Errorf("supabase url is not configured")
 	}
-	kid, _ := kidVal.(string)
-	if strings.TrimSpace(kid) == "" {
+	kid := jwtHeaderKid(kidVal)
+	if kid == "" || kid == "<nil>" {
 		return nil, fmt.Errorf("missing kid in token header")
 	}
 	keys, err := supabaseJWKSCache.getKeys(ctx, supabaseURL)

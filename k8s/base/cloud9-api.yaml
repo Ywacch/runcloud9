@@ -161,11 +161,14 @@ spec:
                 secretKeyRef:
                   name: cloud9-api-secrets
                   key: supabase-service-key
+            - name: JWT_VERIFY_MODE
+              value: "jwks_only"
             - name: SUPABASE_JWT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: cloud9-api-secrets
                   key: supabase-jwt-secret
+                  optional: true
             - name: ALLOWED_ORIGINS
               valueFrom:
                 secretKeyRef:

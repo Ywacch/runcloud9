@@ -10,7 +10,8 @@ Use this doc as the source of truth for required/optional environment variables 
 |---|---|---|---|
 | `SUPABASE_URL` | Yes | None | Supabase project URL used by API auth and deployment store. |
 | `SUPABASE_SERVICE_KEY` | Yes | None | Service role key for deployment persistence and updates. |
-| `SUPABASE_JWT_SECRET` | Production yes (current mode) | None | JWT verification secret for HS256-compatible auth path. |
+| `JWT_VERIFY_MODE` | No | `hybrid` | `jwks_only` (ES256 via Supabase JWKS), `hybrid`, or `hs256_only`. Production defaults to `jwks_only` in `k8s/base/cloud9-api.yaml`. |
+| `SUPABASE_JWT_SECRET` | Production when `JWT_VERIFY_MODE` is `hybrid` or `hs256_only` | None | Legacy HS256 JWT secret. Not used when `JWT_VERIFY_MODE=jwks_only`. |
 | `ENV` | No | Empty/non-production | Runtime mode (`production` enables stricter checks). |
 | `DEPLOYER` | No | `local` | `k8s` enables real cluster deployer; otherwise LocalDeployer. |
 | `K8S_CLIENT_QPS` | No | `400` | Client-go REST rate limit sustained QPS. The orchestration client, the metrics client, and the informer client each get a bucket at this QPS. Invalid or non-positive falls back to the default. |
