@@ -1,0 +1,14 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cloud9-reaper
+  namespace: cloud9-system
+spec:
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: reaper
+              image: us-central1-docker.pkg.dev/runcloud9-514803/cloud9-images/cloud9-api:latest
+              imagePullPolicy: IfNotPresent

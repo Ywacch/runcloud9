@@ -23,6 +23,10 @@ type Registry struct {
 	obs      Observer
 	wg       sync.WaitGroup
 
+	nsSnapMu        sync.Mutex
+	namespaceSnap   map[string]struct{}
+	namespaceSnapOn bool
+
 	readOverride  readOverride
 	writeOverride writeOverride
 }
@@ -58,6 +62,39 @@ func (r *Registry) SetObserver(obs Observer) {
 	r.obs = obs
 }
 
+// SetNamespaces supplies namespace names from the latest Kubernetes list.
+// Nil disables orphan marking for the next Load.
+func (r *Registry) SetNamespaces(names map[string]struct{}) {
+	if r == nil {
+		return
+	}
+	r.nsSnapMu.Lock()
+	defer r.nsSnapMu.Unlock()
+	if names == nil {
+		r.namespaceSnap = nil
+		r.namespaceSnapOn = false
+		return
+	}
+	r.namespaceSnap = make(map[string]struct{}, len(names))
+	for k := range names {
+		r.namespaceSnap[k] = struct{}{}
+	}
+	r.namespaceSnapOn = true
+}
+
+func (r *Registry) namespaceSnapshot() (map[string]struct{}, bool) {
+	r.nsSnapMu.Lock()
+	defer r.nsSnapMu.Unlock()
+	if !r.namespaceSnapOn || r.namespaceSnap == nil {
+		return nil, false
+	}
+	out := make(map[string]struct{}, len(r.namespaceSnap))
+	for k := range r.namespaceSnap {
+		out[k] = struct{}{}
+	}
+	return out, true
+}
+
 // Load replaces the active map from one Supabase read.
 func (r *Registry) Load(ctx context.Context) error {
 	if r == nil {
@@ -72,8 +109,18 @@ func (r *Registry) Load(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	snap, snapOK := r.namespaceSnapshot()
 	next := make(map[string]store.DeploymentRow, len(rows))
 	for _, row := range rows {
+		if snapOK && orphanCandidate(row.Status) {
+			if _, ok := snap[row.Namespace]; !ok {
+				if err := r.UpdateStatus(ctx, row.Namespace, "terminated"); err != nil {
+					next[row.Namespace] = row
+					continue
+				}
+				continue
+			}
+		}
 		next[row.Namespace] = row
 	}
 	r.mu.Lock()
@@ -87,14 +134,21 @@ func (r *Registry) Load(ctx context.Context) error {
 }
 
 // Start runs Load immediately, then every 60s until ctx is cancelled.
-func (r *Registry) Start(ctx context.Context) {
+// beforeLoad runs before each Load (for example to refresh a namespace snapshot).
+func (r *Registry) Start(ctx context.Context, beforeLoad func(context.Context)) {
 	if r == nil {
 		return
 	}
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
-		_ = r.Load(ctx)
+		runLoad := func(ctx context.Context) {
+			if beforeLoad != nil {
+				beforeLoad(ctx)
+			}
+			_ = r.Load(ctx)
+		}
+		runLoad(ctx)
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -102,7 +156,7 @@ func (r *Registry) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_ = r.Load(ctx)
+				runLoad(ctx)
 			}
 		}
 	}()
@@ -405,6 +459,15 @@ func (r *Registry) setRowsGauge(n int) {
 func (r *Registry) setRowsGaugeLocked(n int) {
 	if r.obs != nil {
 		r.obs.SetSessionRegistryRows(n)
+	}
+}
+
+func orphanCandidate(status string) bool {
+	switch status {
+	case "running", "provisioning", "terminating":
+		return true
+	default:
+		return false
 	}
 }
 

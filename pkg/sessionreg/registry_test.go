@@ -229,6 +229,39 @@ func TestUpdateStatus_RemovesTerminated(t *testing.T) {
 	}
 }
 
+func TestLoad_MarksMissingNamespaceTerminated(t *testing.T) {
+	fake := newFakeStore()
+	fake.list = []store.DeploymentRow{{
+		Namespace: "ns-missing",
+		Status:    "running",
+	}}
+	fake.byNS["ns-missing"] = store.DeploymentRow{Namespace: "ns-missing", Status: "running"}
+	r := newTestRegistry(fake)
+	r.SetNamespaces(map[string]struct{}{"other-ns": {}})
+
+	if err := r.Load(context.Background()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if fake.updateCalls != 1 || fake.lastUpdateSt != "terminated" {
+		t.Fatalf("UpdateStatus calls=%d status=%q want terminated", fake.updateCalls, fake.lastUpdateSt)
+	}
+	if _, err := r.GetDeployment(context.Background(), "ns-missing"); err == nil {
+		t.Fatal("expected row gone from cache after orphan")
+	}
+
+	fake.updateCalls = 0
+	fake.list = []store.DeploymentRow{{
+		Namespace: "ns-missing",
+		Status:    "terminated",
+	}}
+	if err := r.Load(context.Background()); err != nil {
+		t.Fatalf("second Load: %v", err)
+	}
+	if fake.updateCalls != 0 {
+		t.Fatalf("second Load UpdateStatus calls = %d want 0", fake.updateCalls)
+	}
+}
+
 func TestFleet_CopiesActive(t *testing.T) {
 	r := newTestRegistry(newFakeStore())
 	r.mu.Lock()
