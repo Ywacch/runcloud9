@@ -655,7 +655,7 @@ func (h *Handler) orchestrate(
 	var deployed []deployer.DeploymentNode
 
 	if h.clientset != nil {
-		if err := deployer.EnsureNamespaceResourceQuota(ctx, h.clientset, namespace, design, resourceQuotaTier); err != nil {
+		if err := deployer.EnsureNamespaceResourceQuota(ctx, h.clientset, namespace, design, resourceQuotaTier, sessionExpiresAt); err != nil {
 			return nil, fmt.Errorf("resource quota: %w", err)
 		}
 	}

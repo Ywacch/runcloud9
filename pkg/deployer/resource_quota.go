@@ -3,6 +3,7 @@ package deployer
 import (
 	"context"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -15,12 +16,15 @@ const namespaceResourceQuotaName = "cloud9-deployment-quota"
 // EnsureNamespaceResourceQuota creates the deployment namespace (if needed) and applies
 // a ResourceQuota sized to the design's requested workloads plus sidecar/proxy overhead
 // and GKE Autopilot admission slack.
+// A non-zero expiresAt sets cloud9.io/expires-at on create so a later label update
+// does not race the first writer of the namespace object.
 func EnsureNamespaceResourceQuota(
 	ctx context.Context,
 	clientset kubernetes.Interface,
 	namespace string,
 	design DeploymentDesign,
 	userTier string,
+	expiresAt time.Time,
 ) error {
 	if clientset == nil {
 		return fmt.Errorf("ensure namespace resource quota: kubernetes client is nil")
@@ -29,11 +33,20 @@ func EnsureNamespaceResourceQuota(
 		return fmt.Errorf("ensure namespace resource quota: namespace is required")
 	}
 
+	nsLabels := map[string]string{}
+	if v := namespaceExpiresAtLabelValue(expiresAt); v != "" {
+		nsLabels[NamespaceExpiresAtLabel] = v
+	}
 	_, err := clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: namespace, Labels: nsLabels},
 	}, metav1.CreateOptions{})
 	if err != nil && !errors.IsAlreadyExists(err) {
 		return fmt.Errorf("create namespace: %w", err)
+	}
+	if errors.IsAlreadyExists(err) {
+		if err := setNamespaceExpiresAtLabel(ctx, clientset, namespace, expiresAt); err != nil {
+			return fmt.Errorf("set namespace expiry label: %w", err)
+		}
 	}
 
 	limits := QuotaResourceLimits(design, userTier)
