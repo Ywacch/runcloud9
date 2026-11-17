@@ -44,6 +44,7 @@ func provisionStagger(paid bool) time.Duration {
 func (h *Handler) runBackgroundProvision(
 	design deployer.DeploymentDesign,
 	namespace, userID, quotaTier string,
+	sessionExpiresAt time.Time,
 	sessionMins int,
 ) {
 	var paid bool
@@ -141,7 +142,7 @@ func (h *Handler) runBackgroundProvision(
 		cancel()
 	}()
 
-	result, err := h.orchestrate(workCtx, design, namespace, quotaTier)
+	result, err := h.orchestrate(workCtx, design, namespace, quotaTier, sessionExpiresAt)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || h.provisionWritesBlocked(namespace) {
 			log.Printf("orchestration canceled for namespace=%s", namespace)

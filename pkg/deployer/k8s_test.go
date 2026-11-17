@@ -95,6 +95,50 @@ func TestTemplateLiveProbe_ConservativeThresholds(t *testing.T) {
 	}
 }
 
+func TestDeploy_SetsExpiryLabel(t *testing.T) {
+	fakeClient := fake.NewSimpleClientset()
+	d := NewK8sDeployer(fakeClient, "db")
+	expires := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	cfg := DeployConfig{
+		Namespace: "cloud9-expiry",
+		Node:      DeploymentNode{ID: "n1", Type: "db", Name: "PostgreSQL"},
+		ExpiresAt: expires,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_ = d.Deploy(ctx, cfg)
+
+	ns, err := fakeClient.CoreV1().Namespaces().Get(context.Background(), cfg.Namespace, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+	got := ns.Labels[NamespaceExpiresAtLabel]
+	want := namespaceExpiresAtLabelValue(expires)
+	if got != want {
+		t.Fatalf("label = %q want %q", got, want)
+	}
+}
+
+func TestDeploy_SetsExpiryLabel_ZeroSkipsLabel(t *testing.T) {
+	fakeClient := fake.NewSimpleClientset()
+	d := NewK8sDeployer(fakeClient, "db")
+	cfg := DeployConfig{
+		Namespace: "cloud9-no-expiry",
+		Node:      DeploymentNode{ID: "n1", Type: "db", Name: "PostgreSQL"},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_ = d.Deploy(ctx, cfg)
+
+	ns, err := fakeClient.CoreV1().Namespaces().Get(context.Background(), cfg.Namespace, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+	if _, ok := ns.Labels[NamespaceExpiresAtLabel]; ok {
+		t.Fatalf("unexpected label on namespace: %v", ns.Labels)
+	}
+}
+
 func TestK8sDeployer_Deploy_CreatesNamespaceAndDeployment(t *testing.T) {
 	// UNDERSTAND: fake.NewSimpleClientset() is an in-memory K8s API.
 	// Create/Delete/Get calls work but no pods actually run.

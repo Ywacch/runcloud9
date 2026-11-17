@@ -81,7 +81,7 @@ func TestRunBackgroundProvision_RecordsDoorWaitWhenBlocked(t *testing.T) {
 	design := deployer.DeploymentDesign{Template: "url-shortener"}
 	done := make(chan struct{})
 	go func() {
-		h.runBackgroundProvision(design, ns, "u1", "explorer", 9)
+		h.runBackgroundProvision(design, ns, "u1", "explorer", time.Now().Add(9*time.Minute), 9)
 		close(done)
 	}()
 

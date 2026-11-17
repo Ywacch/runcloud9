@@ -3,6 +3,7 @@ package deployer
 import (
 	"context"
 	"log"
+	"time"
 )
 
 type DeploymentDesign struct {
@@ -32,10 +33,15 @@ type DeploymentConn struct {
 // DeployConfig is what the orchestrator passes to each ComponentDeployer.
 // It carries the namespace (isolates this deployment in K8s) and the
 // specific node being deployed.
+// NamespaceExpiresAtLabel is unix seconds (UTC) when the session namespace may be reaped.
+const NamespaceExpiresAtLabel = "cloud9.io/expires-at"
+
 type DeployConfig struct {
 	Namespace string
 	Node      DeploymentNode
 	Design    DeploymentDesign // full design for context (e.g. connections)
+	// ExpiresAt labels the session namespace when non-zero. Zero skips the label.
+	ExpiresAt time.Time
 	// OnWaitProgress is invoked while waiting for pods to become Ready (nil = no-op).
 	OnWaitProgress func(nodeID string, pods []PodWaitProgress)
 	// AfterPrimaryReady runs when the primary can accept seed writes for this

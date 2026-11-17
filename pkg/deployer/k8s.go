@@ -101,11 +101,18 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 	ctx = kubeobs.WithCaller(ctx, "deployer")
 
 	// namespace creation is idempotent-ish. each deployment gets a unique namespace from the timestamp
+	nsLabels := map[string]string{}
+	if v := namespaceExpiresAtLabelValue(cfg.ExpiresAt); v != "" {
+		nsLabels[NamespaceExpiresAtLabel] = v
+	}
 	_, err := k.clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: cfg.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: cfg.Namespace, Labels: nsLabels},
 	}, metav1.CreateOptions{})
 	if err != nil && !errors.IsAlreadyExists(err) {
 		return fmt.Errorf("create namespace: %w", err)
+	}
+	if err := k.ensureNamespaceExpiresAtLabel(ctx, cfg.Namespace, cfg.ExpiresAt); err != nil {
+		return fmt.Errorf("set namespace expiry label: %w", err)
 	}
 	// Apply namespace egress guardrails before any workloads are created.
 	// Baseline is deny-all egress plus minimal allow rules (DNS + same-namespace traffic).
@@ -1037,6 +1044,38 @@ func envMapToK8s(m map[string]string) []corev1.EnvVar {
 		vars = append(vars, corev1.EnvVar{Name: k, Value: v})
 	}
 	return vars
+}
+
+func namespaceExpiresAtLabelValue(expiresAt time.Time) string {
+	if expiresAt.IsZero() {
+		return ""
+	}
+	return strconv.FormatInt(expiresAt.UTC().Unix(), 10)
+}
+
+func (k *K8sDeployer) ensureNamespaceExpiresAtLabel(ctx context.Context, namespace string, expiresAt time.Time) error {
+	val := namespaceExpiresAtLabelValue(expiresAt)
+	if val == "" {
+		return nil
+	}
+	if k == nil || k.clientset == nil {
+		return fmt.Errorf("kubernetes client is required to set namespace expiry label")
+	}
+	ns, err := k.clientset.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get namespace: %w", err)
+	}
+	if ns.Labels != nil && ns.Labels[NamespaceExpiresAtLabel] == val {
+		return nil
+	}
+	if ns.Labels == nil {
+		ns.Labels = map[string]string{}
+	}
+	ns.Labels[NamespaceExpiresAtLabel] = val
+	if _, err := k.clientset.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("update namespace: %w", err)
+	}
+	return nil
 }
 
 var _ ComponentDeployer = (*K8sDeployer)(nil)

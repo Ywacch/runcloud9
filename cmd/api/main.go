@@ -311,10 +311,24 @@ func main() {
 	if sessionreg.Enabled(os.Getenv("SESSION_REGISTRY")) {
 		reg := sessionreg.New(deploymentStore, time.Now)
 		reg.SetObserver(api.SessionRegistryObserver())
+		prepareRegistryLoad := func(ctx context.Context) {
+			if clientset == nil {
+				reg.SetNamespaces(nil)
+				return
+			}
+			names, err := deployer.NamespaceNameSet(ctx, clientset)
+			if err != nil {
+				log.Printf("session registry: namespace list failed: %v", err)
+				reg.SetNamespaces(nil)
+				return
+			}
+			reg.SetNamespaces(names)
+		}
+		prepareRegistryLoad(context.Background())
 		if err := reg.Load(context.Background()); err != nil {
 			log.Printf("session registry: initial load failed: %v", err)
 		}
-		reg.Start(clusterCtx)
+		reg.Start(clusterCtx, prepareRegistryLoad)
 		handlerStore = reg
 		log.Println("session registry: on")
 	} else {

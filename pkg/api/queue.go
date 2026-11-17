@@ -335,7 +335,7 @@ func (h *Handler) promoteQueuedLocked(ctx context.Context, head store.QueuedDepl
 	_ = h.store.UpdateExpiresAt(ctx, head.Namespace, runExpiresAt)
 
 	log.Printf("deploy queue: promoting namespace=%s to provisioning", head.Namespace)
-	go h.runBackgroundProvision(design, head.Namespace, userID, quotaTier, sessionMins)
+	go h.runBackgroundProvision(design, head.Namespace, userID, quotaTier, runExpiresAt, sessionMins)
 	return true
 }
 

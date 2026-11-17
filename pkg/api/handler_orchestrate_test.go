@@ -103,7 +103,7 @@ func TestOrchestrate_SeedingStartsDuringBlockedCacheInSameLayer(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := h.orchestrate(context.Background(), design, ns, "explorer")
+		_, err := h.orchestrate(context.Background(), design, ns, "explorer", time.Time{})
 		done <- err
 	}()
 
@@ -174,7 +174,7 @@ func TestOrchestrate_SeedingStartsAfterDBBeforeLaterLayers(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := h.orchestrate(context.Background(), design, ns, "explorer")
+		_, err := h.orchestrate(context.Background(), design, ns, "explorer", time.Time{})
 		done <- err
 	}()
 
@@ -271,7 +271,7 @@ func TestOrchestrate_AppLayerStartsBeforeRebaselineCompletes(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := h.orchestrate(context.Background(), design, ns, "explorer")
+		_, err := h.orchestrate(context.Background(), design, ns, "explorer", time.Time{})
 		done <- err
 	}()
 
@@ -332,7 +332,7 @@ func TestOrchestrate_SeedFailureNonFatalWithStatus(t *testing.T) {
 		},
 	}
 
-	res, err := h.orchestrate(context.Background(), design, ns, "explorer")
+	res, err := h.orchestrate(context.Background(), design, ns, "explorer", time.Time{})
 	if err != nil {
 		t.Fatalf("orchestrate returned error: %v", err)
 	}
@@ -382,7 +382,7 @@ func TestOrchestrate_LoadgenFailureNonFatalWithStatus(t *testing.T) {
 		},
 	}
 
-	res, err := h.orchestrate(context.Background(), design, ns, "explorer")
+	res, err := h.orchestrate(context.Background(), design, ns, "explorer", time.Time{})
 	if err != nil {
 		t.Fatalf("orchestrate returned error: %v", err)
 	}
@@ -427,7 +427,7 @@ func TestOrchestrate_LoadgenSkippedWithoutClientset(t *testing.T) {
 		},
 	}
 
-	if _, err := h.orchestrate(context.Background(), design, ns, "explorer"); err != nil {
+	if _, err := h.orchestrate(context.Background(), design, ns, "explorer", time.Time{}); err != nil {
 		t.Fatalf("orchestrate returned error: %v", err)
 	}
 
@@ -466,7 +466,7 @@ func TestOrchestrate_LoadgenReadyWithClientset(t *testing.T) {
 		},
 	}
 
-	if _, err := h.orchestrate(context.Background(), design, ns, "explorer"); err != nil {
+	if _, err := h.orchestrate(context.Background(), design, ns, "explorer", time.Time{}); err != nil {
 		t.Fatalf("orchestrate returned error: %v", err)
 	}
 

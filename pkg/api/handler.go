@@ -631,7 +631,7 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Continue orchestration in the background after returning the response.
-	go h.runBackgroundProvision(design, namespace, userID, resourceQuotaTier, sessionMinutes)
+	go h.runBackgroundProvision(design, namespace, userID, resourceQuotaTier, sessionExpiresAt, sessionMinutes)
 }
 
 // orchestrate deploys nodes in dependency layers; nodes within a layer run in parallel.
@@ -649,6 +649,7 @@ func (h *Handler) orchestrate(
 	design deployer.DeploymentDesign,
 	namespace string,
 	resourceQuotaTier string,
+	sessionExpiresAt time.Time,
 ) (*deployer.DeploymentResult, error) {
 
 	var deployed []deployer.DeploymentNode
@@ -731,6 +732,7 @@ func (h *Handler) orchestrate(
 					Namespace: namespace,
 					Node:      node,
 					Design:    design,
+					ExpiresAt: sessionExpiresAt,
 					OnWaitProgress: func(nodeID string, pods []deployer.PodWaitProgress) {
 						provisionMu.Lock()
 						replicaStatus[nodeID] = pods
