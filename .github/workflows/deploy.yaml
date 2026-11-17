@@ -107,6 +107,14 @@ jobs:
           kubectl set image deployment/"$DEPLOYMENT_NAME" \
             "$IMAGE_NAME"="$IMAGE:$SHA" \
             -n "$NAMESPACE"
+          # Same image as the API. The reaper binary is /cloud9-reaper in that
+          # image. :latest with IfNotPresent keeps a node cache that predates
+          # the binary, so the CronJob must track this immutable tag.
+          if kubectl get cronjob cloud9-reaper -n "$NAMESPACE" >/dev/null 2>&1; then
+            kubectl set image cronjob/cloud9-reaper \
+              reaper="$IMAGE:$SHA" \
+              -n "$NAMESPACE"
+          fi
           # Drop the emergency skip only after the new image is in the pod
           # template. Unsetting it first restarts the current image, whose tag
           # check treats an existing OCI index as a missing tag.

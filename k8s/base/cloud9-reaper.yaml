@@ -45,7 +45,7 @@ spec:
           containers:
             - name: reaper
               image: ghcr.io/your-org/cloud9-api:latest
-              imagePullPolicy: IfNotPresent
+              imagePullPolicy: Always
               command: ["/cloud9-reaper"]
               args: ["-grace", "5m"]
               resources:
