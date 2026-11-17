@@ -1054,28 +1054,53 @@ func namespaceExpiresAtLabelValue(expiresAt time.Time) string {
 }
 
 func (k *K8sDeployer) ensureNamespaceExpiresAtLabel(ctx context.Context, namespace string, expiresAt time.Time) error {
+	if k == nil || k.clientset == nil {
+		if namespaceExpiresAtLabelValue(expiresAt) == "" {
+			return nil
+		}
+		return fmt.Errorf("kubernetes client is required to set namespace expiry label")
+	}
+	return setNamespaceExpiresAtLabel(ctx, k.clientset, namespace, expiresAt)
+}
+
+// setNamespaceExpiresAtLabel writes cloud9.io/expires-at.
+// A zero expiresAt is a no-op. A matching label returns without an update.
+// Conflict retries re-read the namespace. GKE can mutate the object between get and update.
+func setNamespaceExpiresAtLabel(ctx context.Context, client kubernetes.Interface, namespace string, expiresAt time.Time) error {
 	val := namespaceExpiresAtLabelValue(expiresAt)
 	if val == "" {
 		return nil
 	}
-	if k == nil || k.clientset == nil {
+	if client == nil {
 		return fmt.Errorf("kubernetes client is required to set namespace expiry label")
 	}
-	ns, err := k.clientset.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("get namespace: %w", err)
-	}
-	if ns.Labels != nil && ns.Labels[NamespaceExpiresAtLabel] == val {
+	const attempts = 3
+	var last error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("set namespace expiry label: %w", err)
+		}
+		ns, err := client.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("get namespace: %w", err)
+		}
+		if ns.Labels != nil && ns.Labels[NamespaceExpiresAtLabel] == val {
+			return nil
+		}
+		if ns.Labels == nil {
+			ns.Labels = map[string]string{}
+		}
+		ns.Labels[NamespaceExpiresAtLabel] = val
+		if _, err := client.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{}); err != nil {
+			if errors.IsConflict(err) {
+				last = err
+				continue
+			}
+			return fmt.Errorf("update namespace: %w", err)
+		}
 		return nil
 	}
-	if ns.Labels == nil {
-		ns.Labels = map[string]string{}
-	}
-	ns.Labels[NamespaceExpiresAtLabel] = val
-	if _, err := k.clientset.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("update namespace: %w", err)
-	}
-	return nil
+	return fmt.Errorf("update namespace: %w", last)
 }
 
 var _ ComponentDeployer = (*K8sDeployer)(nil)
