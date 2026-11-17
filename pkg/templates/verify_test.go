@@ -37,6 +37,10 @@ func TestVerifyPublishedTags(t *testing.T) {
 			http.Error(w, "auth", http.StatusUnauthorized)
 			return
 		}
+		if !strings.Contains(r.Header.Get("Accept"), "application/vnd.oci.image.index.v1+json") {
+			http.NotFound(w, r)
+			return
+		}
 		switch r.URL.Path {
 		case "/v2/proj/repo/loadgen/manifests/git-ok":
 			w.WriteHeader(http.StatusOK)
@@ -69,6 +73,30 @@ func TestVerifyPublishedTags(t *testing.T) {
 
 	if err := verifyPublishedTags(ctx, registry, map[string]string{"loadgen": "git-ok"}, client, tokenFn); err != nil {
 		t.Fatalf("present tag: %v", err)
+	}
+}
+
+func TestVerifyPublishedTags_RetriesWhenAcceptIsRejected(t *testing.T) {
+	const token = "test-token"
+	var accepts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		accepts = append(accepts, r.Header.Get("Accept"))
+		if r.Header.Get("Accept") != "*/*" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	err := verifyPublishedTags(context.Background(), srv.URL+"/proj/repo", map[string]string{
+		"loadgen": "git-ok",
+	}, srv.Client(), func(context.Context, *http.Client) (string, error) { return token, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(accepts) != 2 || accepts[1] != "*/*" {
+		t.Fatalf("accept sequence = %#v", accepts)
 	}
 }
 
