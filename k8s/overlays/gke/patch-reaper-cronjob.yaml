@@ -11,4 +11,4 @@ spec:
           containers:
             - name: reaper
               image: us-central1-docker.pkg.dev/runcloud9-514803/cloud9-images/cloud9-api:latest
-              imagePullPolicy: IfNotPresent
+              imagePullPolicy: Always
