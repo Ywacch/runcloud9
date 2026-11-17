@@ -13,6 +13,10 @@ import (
 
 const metadataTokenURL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
 
+// manifestAccept lists the manifest types Artifact Registry actually stores.
+// A narrower Accept makes the registry return 404 for an existing OCI index.
+const manifestAccept = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"
+
 // publishedImageNames are the template images this repo builds and pushes.
 // ticket-drop is pinned in the manifest but published from another repository.
 var publishedImageNames = []string{
@@ -127,12 +131,22 @@ func manifestURL(registry, name, tag string) (string, error) {
 }
 
 func tagStatus(ctx context.Context, client *http.Client, token, manifestURL string) (int, error) {
+	status, err := tagRequest(ctx, client, token, manifestURL, manifestAccept)
+	if err != nil || status != http.StatusNotFound {
+		return status, err
+	}
+	// Artifact Registry returns 404 when Accept omits the stored manifest type.
+	// A second request with */* distinguishes "tag missing" from "wrong Accept".
+	return tagRequest(ctx, client, token, manifestURL, "*/*")
+}
+
+func tagRequest(ctx context.Context, client *http.Client, token, manifestURL, accept string) (int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, manifestURL, nil)
 	if err != nil {
 		return 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json")
+	req.Header.Set("Accept", accept)
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, err
