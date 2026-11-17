@@ -47,6 +47,7 @@ Use this doc as the source of truth for required/optional environment variables 
 | `TEMPLATE_IMAGE_REGISTRY` | No | Empty | Registry prefix for deployable images. |
 | `TEMPLATE_IMAGE_TAG` | No | `v1` fallback | Global fallback tag for deployable images. |
 | `IMAGE_VERSIONS_FILE` | No | `config/image-versions.json` (best-effort load) | Per-image immutable tag manifest path. |
+| `VERIFY_TEMPLATE_IMAGES` | No | on in cluster | Set to `0` to start even when a manifest tag is missing from Artifact Registry. |
 | `SENTRY_DSN` | No | Empty | Sentry DSN for backend error reporting. |
 | `KUBECONFIG` | No | `~/.kube/config` | Kubernetes config path when running out-of-cluster. |
 

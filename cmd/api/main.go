@@ -36,6 +36,32 @@ import (
 // version is set at link time (Dockerfile / CI) for Sentry release tagging.
 var version = "dev"
 
+// checkTemplateImages refuses to serve when the in-cluster manifest names tags
+// Artifact Registry does not have. Set VERIFY_TEMPLATE_IMAGES=0 to skip.
+func checkTemplateImages() {
+	if os.Getenv("VERIFY_TEMPLATE_IMAGES") == "0" {
+		log.Printf("template images: tag check disabled")
+		return
+	}
+	if os.Getenv("KUBERNETES_SERVICE_HOST") == "" {
+		return
+	}
+	registry := strings.TrimSpace(os.Getenv("TEMPLATE_IMAGE_REGISTRY"))
+	if registry == "" {
+		log.Fatal("template images: TEMPLATE_IMAGE_REGISTRY is required in cluster")
+	}
+	tags, err := templates.PublishedImageTags(templates.VersionManifest())
+	if err != nil {
+		log.Fatalf("template images: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	if err := templates.VerifyPublishedTags(ctx, registry, tags); err != nil {
+		log.Fatalf("template images: %v", err)
+	}
+	log.Printf("template images: manifest tags exist in %s", registry)
+}
+
 // buildDeployers returns the deployer map, k8s clientset, and optional metrics clientset.
 // os.Getenv returns empty string if var not set.
 // Default to local so tests and local dev without minikube still work.
@@ -215,6 +241,7 @@ func main() {
 			log.Printf("loaded image version manifest from %s", defaultVersionsFile)
 		}
 	}
+	checkTemplateImages()
 
 	sentryHTTP := false
 	if dsn := os.Getenv("SENTRY_DSN"); dsn != "" {

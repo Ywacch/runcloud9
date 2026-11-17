@@ -70,6 +70,11 @@ jobs:
           done
           python3 scripts/ci/bump-image-versions.py config/image-versions.json "$short" ${{ steps.templates.outputs.images }}
 
+      - name: Verify template image tags exist
+        env:
+          TEMPLATE_IMAGE_REGISTRY: us-central1-docker.pkg.dev/runcloud9-514803/cloud9-images
+        run: bash scripts/ci/verify-image-tags.sh config/image-versions.json
+
       - name: Build and push API image
         env:
           SHA: ${{ github.sha }}

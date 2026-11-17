@@ -39,6 +39,18 @@ func LoadVersionManifest(path string) error {
 	return nil
 }
 
+// VersionManifest returns a copy of the loaded image tag map.
+// The map is empty when no manifest has been loaded.
+func VersionManifest() map[string]string {
+	imageVersionsMu.RLock()
+	defer imageVersionsMu.RUnlock()
+	out := make(map[string]string, len(imageVersions))
+	for name, tag := range imageVersions {
+		out[name] = tag
+	}
+	return out
+}
+
 // ImageTag resolves an image tag with priority:
 // 1) loaded manifest entry for image name
 // 2) TEMPLATE_IMAGE_TAG env
