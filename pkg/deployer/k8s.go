@@ -346,8 +346,9 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 		internalRedisDep := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Name: "redis-internal", Namespace: cfg.Namespace},
 			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr(replicas),
-				Selector: &metav1.LabelSelector{MatchLabels: redisLabels},
+				RevisionHistoryLimit: revisionHistoryLimitZero(),
+				Replicas:             ptr(replicas),
+				Selector:             &metav1.LabelSelector{MatchLabels: redisLabels},
 				Template: corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{
 						Labels: redisLabels,
@@ -447,8 +448,9 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 		proxyDep := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Name: "cache-proxy", Namespace: cfg.Namespace},
 			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr(replicas),
-				Selector: &metav1.LabelSelector{MatchLabels: proxyLabels},
+				RevisionHistoryLimit: revisionHistoryLimitZero(),
+				Replicas:             ptr(replicas),
+				Selector:             &metav1.LabelSelector{MatchLabels: proxyLabels},
 				Template: corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{
 						Labels: proxyLabels,
@@ -514,8 +516,9 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: depName, Namespace: cfg.Namespace},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr(replicas),
-			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			RevisionHistoryLimit: revisionHistoryLimitZero(),
+			Replicas:             ptr(replicas),
+			Selector:             &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: labels,
@@ -586,8 +589,9 @@ func (k *K8sDeployer) deployMemcachedCacheAside(ctx context.Context, cfg DeployC
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "memcached", Namespace: cfg.Namespace},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr(replicas),
-			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			RevisionHistoryLimit: revisionHistoryLimitZero(),
+			Replicas:             ptr(replicas),
+			Selector:             &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: labels,
@@ -670,8 +674,9 @@ func (k *K8sDeployer) deployAppServer(ctx context.Context, cfg DeployConfig, _ c
 		dep := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Name: depName, Namespace: cfg.Namespace},
 			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr(group.Count),
-				Selector: &metav1.LabelSelector{MatchLabels: labels},
+				RevisionHistoryLimit: revisionHistoryLimitZero(),
+				Replicas:             ptr(group.Count),
+				Selector:             &metav1.LabelSelector{MatchLabels: labels},
 				Template: corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: appAnnotations},
 					Spec: corev1.PodSpec{
@@ -764,8 +769,9 @@ func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, _ core
 		dep := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Name: depName, Namespace: cfg.Namespace},
 			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr(group.Count),
-				Selector: &metav1.LabelSelector{MatchLabels: labels},
+				RevisionHistoryLimit: revisionHistoryLimitZero(),
+				Replicas:             ptr(group.Count),
+				Selector:             &metav1.LabelSelector{MatchLabels: labels},
 				Template: corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: workerAnnotations},
 					Spec: corev1.PodSpec{
@@ -920,8 +926,9 @@ func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, 
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: spec.AppLabel, Namespace: cfg.Namespace},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr(replicas),
-			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			RevisionHistoryLimit: revisionHistoryLimitZero(),
+			Replicas:             ptr(replicas),
+			Selector:             &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: podAnnotations},
 				Spec: corev1.PodSpec{
@@ -984,6 +991,11 @@ func (k *K8sDeployer) Teardown(ctx context.Context, namespace string) error {
 		return err
 	}
 	return nil
+}
+
+// revisionHistoryLimitZero is the history kept on every session Deployment and StatefulSet.
+func revisionHistoryLimitZero() *int32 {
+	return ptr(0)
 }
 
 func ptr(i int32) *int32 { return &i }

@@ -285,11 +285,12 @@ func dbReplicaStatefulSetSpecNamed(
 	return &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Name: stsName, Namespace: cfg.Namespace},
 		Spec: appsv1.StatefulSetSpec{
-			ServiceName:         dbReplicaHeadlessServiceName,
-			Replicas:            ptr(replicas),
-			PodManagementPolicy: appsv1.ParallelPodManagement,
-			Selector:            &metav1.LabelSelector{MatchLabels: labels},
-			Template:            dbReplicaPodTemplateSpec(cfg, resources, size),
+			RevisionHistoryLimit: revisionHistoryLimitZero(),
+			ServiceName:          dbReplicaHeadlessServiceName,
+			Replicas:             ptr(replicas),
+			PodManagementPolicy:  appsv1.ParallelPodManagement,
+			Selector:             &metav1.LabelSelector{MatchLabels: labels},
+			Template:             dbReplicaPodTemplateSpec(cfg, resources, size),
 		},
 	}
 }

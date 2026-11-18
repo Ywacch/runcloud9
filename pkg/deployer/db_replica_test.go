@@ -60,6 +60,9 @@ func TestDBReplicaStatefulSetSpec_readReplicaShape(t *testing.T) {
 	if sts.Spec.ServiceName != dbReplicaHeadlessServiceName {
 		t.Fatalf("serviceName: got %q want %q", sts.Spec.ServiceName, dbReplicaHeadlessServiceName)
 	}
+	if sts.Spec.RevisionHistoryLimit == nil || *sts.Spec.RevisionHistoryLimit != 0 {
+		t.Fatalf("revisionHistoryLimit: got %v want 0", sts.Spec.RevisionHistoryLimit)
+	}
 	if got := sts.Spec.Selector.MatchLabels["app"]; got != dbReplicaAppLabel {
 		t.Fatalf("selector app: got %q want %q", got, dbReplicaAppLabel)
 	}

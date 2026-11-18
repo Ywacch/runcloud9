@@ -268,8 +268,9 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "lb", Namespace: cfg.Namespace},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr(replicas),
-			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			RevisionHistoryLimit: revisionHistoryLimitZero(),
+			Replicas:             ptr(replicas),
+			Selector:             &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{

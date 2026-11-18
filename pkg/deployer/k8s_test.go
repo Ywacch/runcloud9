@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -407,5 +408,84 @@ func TestPodConditionReady_CountsMultiple(t *testing.T) {
 	}
 	if ready != 3 {
 		t.Fatalf("ready count = %d want 3", ready)
+	}
+}
+
+func assertDeploymentRevisionHistoryLimitZero(t *testing.T, dep *appsv1.Deployment) {
+	t.Helper()
+	if dep == nil || dep.Spec.RevisionHistoryLimit == nil || *dep.Spec.RevisionHistoryLimit != 0 {
+		var got any
+		if dep != nil && dep.Spec.RevisionHistoryLimit != nil {
+			got = *dep.Spec.RevisionHistoryLimit
+		}
+		name := ""
+		if dep != nil {
+			name = dep.Name
+		}
+		t.Fatalf("deployment %q revisionHistoryLimit: got %v want 0", name, got)
+	}
+}
+
+func TestDeploy_RevisionHistoryLimitZero(t *testing.T) {
+	design := urlShortenerDefaultDesign()
+	ns := "cloud9-rev-hist"
+	fakeClient := fake.NewSimpleClientset()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	var dbNode, appNode DeploymentNode
+	for _, n := range design.Nodes {
+		switch n.Type {
+		case "db":
+			dbNode = n
+		case "app-server":
+			appNode = n
+		}
+	}
+
+	dDB := NewK8sDeployer(fakeClient, "db")
+	_ = dDB.Deploy(ctx, DeployConfig{Namespace: ns, Node: dbNode, Design: design})
+	dbDep, err := fakeClient.AppsV1().Deployments(ns).Get(context.Background(), "postgres", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get postgres deployment: %v", err)
+	}
+	assertDeploymentRevisionHistoryLimitZero(t, dbDep)
+
+	dApp := NewK8sDeployer(fakeClient, "app-server")
+	_ = dApp.Deploy(ctx, DeployConfig{Namespace: ns, Node: appNode, Design: design})
+	appDep, err := fakeClient.AppsV1().Deployments(ns).Get(context.Background(), "app-server", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get app-server deployment: %v", err)
+	}
+	assertDeploymentRevisionHistoryLimitZero(t, appDep)
+}
+
+func TestDeploy_KeepsReaderServices(t *testing.T) {
+	design := urlShortenerDefaultDesign()
+	ns := "cloud9-svc-readers"
+	fakeClient := fake.NewSimpleClientset()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	var dbNode, appNode DeploymentNode
+	for _, n := range design.Nodes {
+		switch n.Type {
+		case "db":
+			dbNode = n
+		case "app-server":
+			appNode = n
+		}
+	}
+
+	dDB := NewK8sDeployer(fakeClient, "db")
+	_ = dDB.Deploy(ctx, DeployConfig{Namespace: ns, Node: dbNode, Design: design})
+	if _, err := fakeClient.CoreV1().Services(ns).Get(context.Background(), "db", metav1.GetOptions{}); err != nil {
+		t.Fatalf("db service: %v", err)
+	}
+
+	dApp := NewK8sDeployer(fakeClient, "app-server")
+	_ = dApp.Deploy(ctx, DeployConfig{Namespace: ns, Node: appNode, Design: design})
+	if _, err := fakeClient.CoreV1().Services(ns).Get(context.Background(), "app-server", metav1.GetOptions{}); err != nil {
+		t.Fatalf("app-server service: %v", err)
 	}
 }
