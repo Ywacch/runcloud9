@@ -40,8 +40,9 @@ func DeployLoadgen(ctx context.Context, clientset kubernetes.Interface, namespac
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: loadgenDeployName, Namespace: namespace},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr(int32(1)),
-			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			RevisionHistoryLimit: revisionHistoryLimitZero(),
+			Replicas:             ptr(int32(1)),
+			Selector:             &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
