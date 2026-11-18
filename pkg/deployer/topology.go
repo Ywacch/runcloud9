@@ -613,6 +613,11 @@ func DeriveEnvVars(node DeploymentNode, design DeploymentDesign) map[string]stri
 
 	mergeJobEnvIntoDerive(node, design, env)
 
+	// stub-weight has no database. The app image listens for probes only.
+	if design.Template == "stub-weight" && node.Type == "app-server" {
+		env["CLOUD9_LISTEN_ONLY"] = "1"
+	}
+
 	return env
 }
 
