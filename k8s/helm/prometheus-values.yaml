@@ -1,12 +1,13 @@
 # kubernetes-pods keep regex must match signals.PrometheusKeepRegex (TestPrometheusValues_MatchesKeepList).
 #
-# UNDERSTAND: scrapeInterval controls how often Prometheus polls each pod's /metrics endpoint.
-# Default is 15s — too slow for a 10-minute session demo.
-# 5s gives dashboard updates that feel live without hammering pods.
+# Base values for every cluster. On GKE Standard also pass prometheus-values-standard.yaml
+# (platform pool nodeSelector). Autopilot uses this file alone; the kubelet scrape fails there.
 #
-# Resource caps below target GKE Autopilot trial clusters: unspecified sidecars get
-# 500m/2Gi defaults and block scheduling. kube-state-metrics stays enabled — Cloud9
-# queries kube_pod_container_resource_* for USE panels and Autopilot fallbacks.
+# scrapeInterval is 5s so a 10-minute session demo feels live (default 15s is too slow).
+#
+# Resource caps target Autopilot trial clusters where unspecified sidecars default to
+# 500m/2Gi and block scheduling. kube-state-metrics stays enabled for
+# kube_pod_container_resource_* fallbacks and USE panels.
 
 defaultRules:
   create: false
@@ -89,6 +90,26 @@ prometheus:
           limits:
             cpu: 100m
             memory: 128Mi
+
+# GKE Standard: kubelet cAdvisor for db/mq/lb container CPU and memory (see pkg/metrics/collector.go).
+# Keep only the two series the collector queries; the chart default retains far more and scales badly.
+kubelet:
+  enabled: true
+  serviceMonitor:
+    probes: false
+    resource: false
+    cAdvisor: true
+    metricRelabelings:
+      - sourceLabels: [__name__]
+        regex: .+
+        action: drop
+    cAdvisorMetricRelabelings:
+      - sourceLabels: [__name__]
+        regex: container_cpu_usage_seconds_total|container_memory_working_set_bytes
+        action: keep
+      - sourceLabels: [container]
+        regex: "|POD"
+        action: drop
 
 # UNDERSTAND: we use annotation-based scraping (not PodMonitor CRDs) because
 # deployment namespaces are created dynamically. Adding a PodMonitor per namespace

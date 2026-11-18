@@ -1,0 +1,19 @@
+# GKE Standard overlay: run monitoring stack on the platform node pool (cloud9.io/pool=platform).
+# Pass after prometheus-values.yaml:
+#   helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+#     --namespace monitoring --create-namespace \
+#     --values k8s/helm/prometheus-values.yaml \
+#     --values k8s/helm/prometheus-values-standard.yaml
+
+prometheus:
+  prometheusSpec:
+    nodeSelector:
+      cloud9.io/pool: platform
+
+prometheusOperator:
+  nodeSelector:
+    cloud9.io/pool: platform
+
+kube-state-metrics:
+  nodeSelector:
+    cloud9.io/pool: platform
