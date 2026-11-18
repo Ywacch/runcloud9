@@ -43,6 +43,8 @@ type Config struct {
 	CacheTTL        time.Duration
 	Stampede        bool
 	Port            string
+	// ListenOnly serves probes and /metrics without Postgres. Set for stub-weight sessions.
+	ListenOnly bool
 }
 
 type Server struct {
@@ -78,9 +80,10 @@ func loadConfig() Config {
 	}
 
 	dbHost := os.Getenv("DB_HOST")
-	if cacheMode != "proxy" && dbHost == "" {
-		// UNDERSTAND: DB_HOST is required — every URL shortener deployment has Postgres in redis mode.
-		// In proxy mode the caching-proxy owns DB access.
+	listenOnly := os.Getenv("CLOUD9_LISTEN_ONLY") == "1"
+	// DB_HOST is required in redis mode. Proxy mode uses the caching-proxy.
+	// Listen-only mode is the stub-weight session: probes only, no database.
+	if missingDBIsFatal(listenOnly, cacheMode, dbHost) {
 		slog.Error("DB_HOST missing")
 		os.Exit(1)
 	}
@@ -102,7 +105,16 @@ func loadConfig() Config {
 		CacheTTL:        time.Duration(ttlSecs) * time.Second,
 		Stampede:        os.Getenv("STAMPEDE_PROTECTION") == "true",
 		Port:            envOrDefault("PORT", "8080"),
+		ListenOnly:      listenOnly,
 	}
+}
+
+// missingDBIsFatal reports that the process must exit because Postgres is required and DB_HOST is empty.
+func missingDBIsFatal(listenOnly bool, cacheMode, dbHost string) bool {
+	if listenOnly || cacheMode == "proxy" {
+		return false
+	}
+	return dbHost == ""
 }
 
 func readConsistencyFromEnv(raw string) readrouter.RoutingPolicy {
@@ -189,20 +201,20 @@ func withRecovery(next http.Handler) http.Handler {
 
 func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
+	mux.Handle("/health/live", withRecovery(http.HandlerFunc(s.handleLive)))
+	mux.Handle("/health/ready", withRecovery(http.HandlerFunc(s.handleReady)))
+	mux.Handle("/metrics", promhttp.Handler())
+	if s.cfg.ListenOnly {
+		return mux
+	}
 
 	mux.Handle("/shorten", withRecovery(withMetrics("/shorten", http.HandlerFunc(s.handleShorten))))
 	mux.Handle("/r/", withRecovery(withMetrics("/r", http.HandlerFunc(s.handleRedirect))))
 	mux.Handle("/stats/", withRecovery(withMetrics("/stats", http.HandlerFunc(s.handleStats))))
 	mux.Handle("/health", withRecovery(http.HandlerFunc(s.handleHealth)))
-	mux.Handle("/health/live", withRecovery(http.HandlerFunc(s.handleLive)))
-	mux.Handle("/health/ready", withRecovery(http.HandlerFunc(s.handleReady)))
 	mux.Handle("/cache-stats", withRecovery(http.HandlerFunc(s.handleCacheStats)))
 	mux.Handle("/code-pool", withRecovery(http.HandlerFunc(s.handleCodePool)))
 	mux.Handle("/trace/samples", withRecovery(trace.SamplesHandler(trace.DefaultStore())))
-
-	// promhttp.Handler() serves the Prometheus exposition format
-	// that Prometheus scrapes. This is separate from /cache-stats (our JSON endpoint).
-	mux.Handle("/metrics", promhttp.Handler())
 
 	return mux
 }
@@ -625,6 +637,9 @@ func (s *Server) allocateCodeDB(ctx context.Context, longURL string) (string, er
 }
 
 func newServer(ctx context.Context, cfg Config) (*Server, error) {
+	if cfg.ListenOnly {
+		return &Server{cfg: cfg}, nil
+	}
 	if cfg.CacheMode == "proxy" {
 		if cfg.CacheHost == "" {
 			return nil, fmt.Errorf("CACHE_HOST is required in proxy mode")

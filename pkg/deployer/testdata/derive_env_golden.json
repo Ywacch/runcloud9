@@ -481,7 +481,9 @@
   {
     "case": "stub-weight/preset",
     "nodeId": "app-1",
-    "env": {}
+    "env": {
+      "CLOUD9_LISTEN_ONLY": "1"
+    }
   },
   {
     "case": "url-shortener/preset",

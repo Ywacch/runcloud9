@@ -498,8 +498,18 @@ func TestDeploy_StubWeightSkipsDatabase(t *testing.T) {
 	d := NewK8sDeployer(fakeClient, "app-server")
 	_ = d.Deploy(ctx, DeployConfig{Namespace: ns, Node: appNode, Design: design})
 
-	if _, err := fakeClient.AppsV1().Deployments(ns).Get(context.Background(), "app-server", metav1.GetOptions{}); err != nil {
+	appDep, err := fakeClient.AppsV1().Deployments(ns).Get(context.Background(), "app-server", metav1.GetOptions{})
+	if err != nil {
 		t.Fatalf("app-server deployment: %v", err)
+	}
+	var listenOnly string
+	for _, e := range appDep.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == "CLOUD9_LISTEN_ONLY" {
+			listenOnly = e.Value
+		}
+	}
+	if listenOnly != "1" {
+		t.Fatalf("CLOUD9_LISTEN_ONLY: got %q want 1", listenOnly)
 	}
 	_, pgErr := fakeClient.AppsV1().Deployments(ns).Get(context.Background(), "postgres", metav1.GetOptions{})
 	if !apierrors.IsNotFound(pgErr) {
