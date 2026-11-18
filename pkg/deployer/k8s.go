@@ -381,6 +381,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 				},
 			},
 		}
+		applySessionPodPriority(&internalRedisDep.Spec.Template.Spec)
 		_, err := k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, internalRedisDep, metav1.CreateOptions{})
 		if err != nil {
 			return fmt.Errorf("create internal redis deployment: %w", err)
@@ -475,6 +476,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 				},
 			},
 		}
+		applySessionPodPriority(&proxyDep.Spec.Template.Spec)
 		_, err = k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, proxyDep, metav1.CreateOptions{})
 		if err != nil {
 			return fmt.Errorf("create cache proxy deployment: %w", err)
@@ -553,6 +555,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 		},
 	}
 
+	applySessionPodPriority(&dep.Spec.Template.Spec)
 	_, err := k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("create deployment: %w", err)
@@ -626,6 +629,7 @@ func (k *K8sDeployer) deployMemcachedCacheAside(ctx context.Context, cfg DeployC
 		},
 	}
 
+	applySessionPodPriority(&dep.Spec.Template.Spec)
 	if _, err := k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil {
 		return fmt.Errorf("create memcached deployment: %w", err)
 	}
@@ -694,6 +698,7 @@ func (k *K8sDeployer) deployAppServer(ctx context.Context, cfg DeployConfig, _ c
 				},
 			},
 		}
+		applySessionPodPriority(&dep.Spec.Template.Spec)
 		if _, err := k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil {
 			return fmt.Errorf("create deployment %s: %w", depName, err)
 		}
@@ -780,6 +785,7 @@ func (k *K8sDeployer) deployWorker(ctx context.Context, cfg DeployConfig, _ core
 				},
 			},
 		}
+		applySessionPodPriority(&dep.Spec.Template.Spec)
 		if _, err := k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil {
 			return fmt.Errorf("create worker deployment %s: %w", depName, err)
 		}
@@ -939,6 +945,7 @@ func (k *K8sDeployer) deployFromRegistry(ctx context.Context, cfg DeployConfig, 
 		},
 	}
 
+	applySessionPodPriority(&dep.Spec.Template.Spec)
 	_, err := k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("create deployment: %w", err)

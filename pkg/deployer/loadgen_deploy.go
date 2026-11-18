@@ -60,6 +60,7 @@ func DeployLoadgen(ctx context.Context, clientset kubernetes.Interface, namespac
 		},
 	}
 
+	applySessionPodPriority(&dep.Spec.Template.Spec)
 	_, err := clientset.AppsV1().Deployments(namespace).Create(ctx, dep, metav1.CreateOptions{})
 	if err != nil && !errors.IsAlreadyExists(err) {
 		return fmt.Errorf("create loadgen deployment: %w", err)
