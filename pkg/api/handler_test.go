@@ -67,8 +67,8 @@ func TestHandleGetTemplates(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 4 {
-		t.Fatalf("want 4 templates, got %d", len(list))
+	if len(list) != 5 {
+		t.Fatalf("want 5 templates, got %d", len(list))
 	}
 	if list[0].ID != "url-shortener" || !list[0].Available || list[0].SupportsWorker {
 		t.Fatalf("url-shortener: %+v", list[0])
@@ -81,6 +81,9 @@ func TestHandleGetTemplates(t *testing.T) {
 	}
 	if list[3].ID != "social-feed-pull" || !list[3].Available || list[3].SupportsWorker {
 		t.Fatalf("social-feed-pull: %+v", list[3])
+	}
+	if list[4].ID != "stub-weight" || list[4].Available {
+		t.Fatalf("stub-weight: %+v", list[4])
 	}
 }
 
