@@ -361,6 +361,7 @@ func (k *K8sDeployer) createDBReadReplicaObjects(ctx context.Context, cfg Deploy
 		stsName := dbReplicaStatefulSetNameForGroup(i, group.Size)
 		resources := dbResourcesForSize(group.Size)
 		sts := dbReplicaStatefulSetSpecNamed(cfg, stsName, resources, group.Count, group.Size)
+		applySessionPodPriority(&sts.Spec.Template.Spec)
 		if _, err := k.clientset.AppsV1().StatefulSets(cfg.Namespace).Create(ctx, sts, metav1.CreateOptions{}); err != nil {
 			return 0, fmt.Errorf("create postgres-replica statefulset %s: %w", stsName, err)
 		}

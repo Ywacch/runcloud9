@@ -287,6 +287,7 @@ func (k *K8sDeployer) deployLB(ctx context.Context, cfg DeployConfig, resources 
 			},
 		},
 	}
+	applySessionPodPriority(&dep.Spec.Template.Spec)
 	if _, err := k.clientset.AppsV1().Deployments(cfg.Namespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil {
 		return fmt.Errorf("create lb deployment: %w", err)
 	}

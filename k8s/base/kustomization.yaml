@@ -4,3 +4,4 @@ resources:
   - cloud9-api.yaml
   - cloud9-api-ingress.yaml
   - cloud9-reaper.yaml
+  - cloud9-balloon.yaml
