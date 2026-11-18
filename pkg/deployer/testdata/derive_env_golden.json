@@ -479,6 +479,11 @@
     }
   },
   {
+    "case": "stub-weight/preset",
+    "nodeId": "app-1",
+    "env": {}
+  },
+  {
     "case": "url-shortener/preset",
     "nodeId": "app-1",
     "env": {

@@ -301,6 +301,17 @@ func validateProxyQueries(design DeploymentDesign, tmpl *templates.TemplateSpec)
 }
 
 func validateAppServerEnv(design DeploymentDesign, tmpl *templates.TemplateSpec) error {
+	if tmpl != nil && tmpl.ID == "stub-weight" {
+		for _, node := range design.Nodes {
+			if node.Type == "db" {
+				return fmt.Errorf(
+					"stub-weight does not provision a database — remove database node %q",
+					node.Name,
+				)
+			}
+		}
+		return nil
+	}
 	mode := appDatabaseMode(tmpl)
 	for _, node := range design.Nodes {
 		if node.Type != "app-server" {

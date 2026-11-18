@@ -111,12 +111,55 @@ func TestIsDeployable(t *testing.T) {
 	if !IsDeployable("ecommerce") || IsDeployable("nope") {
 		t.Fatal("ecommerce should be deployable; unknown should not be deployable")
 	}
+	if !IsDeployable("stub-weight") {
+		t.Fatal("stub-weight should be deployable while hidden from the catalog")
+	}
 }
 
 func TestRegistryLen(t *testing.T) {
 	t.Parallel()
-	if len(Registry()) != 4 {
-		t.Fatalf("want 4 templates, got %d", len(Registry()))
+	if len(Registry()) != 5 {
+		t.Fatalf("want 5 templates, got %d", len(Registry()))
+	}
+}
+
+func TestRegistry_StubWeightHidden(t *testing.T) {
+	t.Parallel()
+	sw := GetTemplate("stub-weight")
+	if sw == nil {
+		t.Fatal("stub-weight template missing")
+	}
+	if sw.Available {
+		t.Fatal("stub-weight must not be available in the student catalog")
+	}
+	if !sw.Deployable {
+		t.Fatal("stub-weight must be deployable for internal ladder use")
+	}
+	if !IsDeployable("stub-weight") {
+		t.Fatal("IsDeployable(stub-weight) should be true")
+	}
+	if sw.Components != 1 {
+		t.Fatalf("components: got %d want 1", sw.Components)
+	}
+	if sw.Preset == nil || len(sw.Preset.Nodes) != 1 {
+		t.Fatalf("preset: want one node, got %+v", sw.Preset)
+	}
+	if sw.Preset.Nodes[0].Type != "compute" {
+		t.Fatalf("preset node type: got %q want compute", sw.Preset.Nodes[0].Type)
+	}
+	if sw.SeedConfig != nil {
+		t.Fatal("stub-weight must not define seed config")
+	}
+}
+
+func TestRegistry_URLShortenerUnchanged(t *testing.T) {
+	t.Parallel()
+	u := GetTemplate("url-shortener")
+	if u == nil || !u.Available || !u.Deployable {
+		t.Fatalf("url-shortener availability unchanged: %+v", u)
+	}
+	if u.Name != "URL Shortener" || u.Components != 3 {
+		t.Fatalf("url-shortener metadata: %+v", u)
 	}
 }
 

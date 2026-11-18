@@ -510,10 +510,6 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("template %q is not registered — select a valid template", design.Template))
 		return
 	}
-	if !tmpl.Available {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("template %q is not yet available", design.Template))
-		return
-	}
 	if !tmpl.Deployable {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("template %q is not yet deployable — it can only be used in simulation mode", design.Template))
 		return
@@ -527,6 +523,10 @@ func (h *Handler) handleCreateDeployment(w http.ResponseWriter, r *http.Request)
 	userRecord, err := h.loadUserRecord(r.Context(), userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load user")
+		return
+	}
+	if !tmpl.Available && !userRecord.IsInternal {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("template %q is not yet available", design.Template))
 		return
 	}
 	effectiveTier := store.ResolveEffectiveTier(userRecord)

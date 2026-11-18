@@ -9,6 +9,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -458,6 +459,63 @@ func TestDeploy_RevisionHistoryLimitZero(t *testing.T) {
 		t.Fatalf("get app-server deployment: %v", err)
 	}
 	assertDeploymentRevisionHistoryLimitZero(t, appDep)
+}
+
+func stubWeightDefaultDesign() DeploymentDesign {
+	d := DeploymentDesign{
+		Template:  "stub-weight",
+		Archetype: "stub-weight",
+		Nodes: []DeploymentNode{
+			{
+				ID:   "app-1",
+				Type: "app-server",
+				Name: "App Server",
+				Config: map[string]interface{}{
+					"replicas":     1,
+					"instanceSize": "small",
+				},
+			},
+		},
+	}
+	NormalizeDesign(&d)
+	return d
+}
+
+func TestDeploy_StubWeightSkipsDatabase(t *testing.T) {
+	design := stubWeightDefaultDesign()
+	ns := "cloud9-stub-weight"
+	fakeClient := fake.NewSimpleClientset()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	var appNode DeploymentNode
+	for _, n := range design.Nodes {
+		if n.Type == "app-server" {
+			appNode = n
+		}
+	}
+
+	d := NewK8sDeployer(fakeClient, "app-server")
+	_ = d.Deploy(ctx, DeployConfig{Namespace: ns, Node: appNode, Design: design})
+
+	if _, err := fakeClient.AppsV1().Deployments(ns).Get(context.Background(), "app-server", metav1.GetOptions{}); err != nil {
+		t.Fatalf("app-server deployment: %v", err)
+	}
+	_, pgErr := fakeClient.AppsV1().Deployments(ns).Get(context.Background(), "postgres", metav1.GetOptions{})
+	if !apierrors.IsNotFound(pgErr) {
+		t.Fatalf("postgres deployment: got %v want NotFound", pgErr)
+	}
+
+	policies, err := fakeClient.NetworkingV1().NetworkPolicies(ns).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("list network policies: %v", err)
+	}
+	if len(policies.Items) < 2 {
+		t.Fatalf("expected baseline network policies, got %d", len(policies.Items))
+	}
+	if _, err := fakeClient.CoreV1().Services(ns).Get(context.Background(), "app-server", metav1.GetOptions{}); err != nil {
+		t.Fatalf("app-server service: %v", err)
+	}
 }
 
 func TestDeploy_KeepsReaderServices(t *testing.T) {

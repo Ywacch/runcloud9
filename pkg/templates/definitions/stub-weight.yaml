@@ -1,0 +1,27 @@
+id: stub-weight
+name: Stub weight
+description: >-
+  Control-plane load shape for capacity ladders. One app-server namespace with
+  quota and network policy, without database, cache, worker, or loadgen.
+components: 1
+bottleneck: "Admission and quota only"
+available: false
+premium: false
+tags: [internal]
+simulatable: false
+deployable: true
+imageKey: url-shortener
+appDatabaseMode: non-proxy
+topology:
+  - type: compute
+    position: [0, 0]
+preset:
+  nodes:
+    - id: app-1
+      type: compute
+      position: [0, 0.3, 0]
+      label: App Server
+      config:
+        replicas: 1
+        instanceSize: small
+  edges: []

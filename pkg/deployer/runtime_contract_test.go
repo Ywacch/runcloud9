@@ -401,6 +401,24 @@ func TestValidateRuntimeContract_Table(t *testing.T) {
 			},
 			wantErr: "not supported for db engine",
 		},
+		{
+			name:       "stub-weight app only",
+			templateID: "stub-weight",
+			design:     stubWeightDefaultDesign(),
+		},
+		{
+			name:       "stub-weight rejects database node",
+			templateID: "stub-weight",
+			design: DeploymentDesign{
+				Template: "stub-weight",
+				Nodes: []DeploymentNode{
+					{ID: "app1", Type: "app-server", Name: "App Server"},
+					{ID: "db1", Type: "db", Name: "PostgreSQL"},
+				},
+				Connections: []DeploymentConn{{SourceID: "app1", TargetID: "db1"}},
+			},
+			wantErr: "does not provision a database",
+		},
 	}
 
 	for _, tc := range tests {

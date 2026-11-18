@@ -261,6 +261,7 @@ func loadEmbeddedTemplates() []TemplateSpec {
 		"ecommerce":        1,
 		"social-feed":      2,
 		"social-feed-pull": 3,
+		"stub-weight":      4,
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		oi, okI := order[out[i].ID]
