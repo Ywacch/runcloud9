@@ -105,7 +105,7 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8080"
         # Path defaults to /metrics in kube-prometheus additionalScrapeConfigs (prometheus-values.yaml).
-        # Autopilot deletes this pod for node scale-down. One API process must stay up through teardown.
+        # Cluster autoscaler may evict this pod on node scale-down. One API process must stay up through teardown.
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
       serviceAccountName: cloud9-api
@@ -118,11 +118,10 @@ spec:
             - containerPort: 8080
           resources:
             requests:
-              # Autopilot raises this request to the limit. Keep them equal.
+              # Keep CPU request equal to limit so scheduling matches the capacity we expect on the platform pool.
               cpu: "500m"
               memory: "512Mi"
-              # GKE Autopilot may normalize request/limit to the request value for ephemeral
-              # storage; use 2Gi for both so the live pod does not stay capped at 512Mi (evictions).
+              # Set ephemeral-storage on request and limit so the kubelet does not apply a smaller default cap.
               ephemeral-storage: "2Gi"
             limits:
               cpu: "500m"
