@@ -142,7 +142,7 @@ RunCloud9 tags signal groups with their collection path and nominal lag:
 
 - **`direct`** — live process poll, about 2 seconds behind. Nginx connections and RabbitMQ queue depth use this.
 - **`rate`** — Prometheus scrape plus a PromQL rate window, nominally about 15 seconds. Request rate, latency, cache hit rate, and most process CPU use this.
-- **`metrics_api`** — Kubernetes Metrics API, which updates in roughly 15 to 60 second steps on GKE Autopilot. Database, load-balancer, and queue container CPU and memory often use this.
+- **`metrics_api`** — Kubernetes Metrics API, which updates in roughly 15 to 60 second steps. Used when cAdvisor series are unavailable.
 - **`estimated`** — no live series was available; the value is the Kubernetes resource request, not a measurement.
 
 Freshness is per signal group, not per component. A database component can show Prometheus-backed query throughput and Metrics API-backed container CPU in the same frame.
@@ -264,7 +264,7 @@ Supported chaos scenarios: pod deletion, cache flush.
 
 ## Operational notes
 
-- GKE Autopilot is the primary production target. The base manifests are provider-neutral; GKE-specific settings live in the overlay.
+- GKE Standard (zonal) is the primary production target. The base manifests are provider-neutral; GKE-specific settings live in the overlay.
 - The API service account holds broad cluster permissions by design. Isolate it on shared infrastructure.
 - The in-memory rate limiter is per-process. Multiple API replicas need shared rate-limit state.
 - Only the templates in [`pkg/templates/definitions`](pkg/templates/definitions) reproduce from this repository alone. Supabase can supply additional templates.

@@ -27,7 +27,7 @@
 `gcloud` is the CLI for Google Cloud Platform. In Cloud9 it is used to:
 - Manage the GCP project and billing
 - Create and manage IAM service accounts and credentials
-- Connect `kubectl` to the GKE Autopilot cluster
+- Connect `kubectl` to the zonal GKE Standard cluster
 - Manage Artifact Registry (push/pull Docker images)
 
 ### Prerequisites
@@ -150,7 +150,7 @@ gcloud compute regions describe us-central1 \
 
 ### Purpose
 Terraform provisions and manages all GCP infrastructure as code. In Cloud9:
-- Creates the GKE Autopilot cluster
+- Creates the zonal GKE Standard cluster and VPC
 - Creates the GCS bucket for seed data dumps
 - All infrastructure is reproducible from `terraform apply`
 
@@ -166,7 +166,7 @@ terraform version  # verify
 ### Directory structure
 ```
 infra/
-├── main.tf        # GKE cluster + GCS bucket resources
+├── main.tf        # GCS bucket; cluster in gke_standard.tf
 ├── variables.tf   # project_id, region, cluster_name etc
 ├── outputs.tf     # cluster_name, kubeconfig_command, seed_bucket_name
 └── versions.tf    # provider version pins
@@ -201,8 +201,8 @@ terraform state list
 ```bash
 cd infra && terraform apply
 gcloud container clusters get-credentials cloud9 \
-  --region us-central1 --project ganymede-cloud
-kubectl config use-context gke_ganymede-cloud_us-central1_cloud9
+  --zone us-central1-a --project ganymede-cloud
+kubectl config use-context gke_ganymede-cloud_us-central1-a_cloud9
 ```
 
 ### Troubleshooting
@@ -211,7 +211,7 @@ kubectl config use-context gke_ganymede-cloud_us-central1_cloud9
 |-------|-------|-----|
 | `403 compute.instanceGroupManagers.get` | SA missing compute.viewer role | Add `roles/compute.viewer` to cloud9-terraform SA |
 | `terraform apply` destroys and recreates cluster | State mismatch | Add compute.viewer before first apply |
-| `Error: services "kube-prometheus-stack-coredns" is forbidden` | kube-system is managed on Autopilot | Add `coreDns.enabled: false` to Helm values |
+| `Error: services "kube-prometheus-stack-coredns" is forbidden` | kube-system is managed on GKE | Add `coreDns.enabled: false` to Helm values |
 | `*.tfstate` committed accidentally | gitignore miss | Add to .gitignore, run `git rm --cached *.tfstate` |
 
 ### Important notes
@@ -317,7 +317,7 @@ kubectl exec -n <namespace> deploy/postgres -- \
 
 #### Nodes
 ```bash
-# List nodes (Autopilot: empty until first pod scheduled)
+# List nodes (platform pool always; session pool when labs run)
 kubectl get nodes
 
 # Node resource usage
@@ -354,12 +354,12 @@ kubectl delete secret -n monitoring -l owner=helm,name=kube-prometheus-stack
 | Pod ContainerCreating (stuck) | `kubectl describe pod -n <ns> <pod>` | FailedMount — missing secret |
 | Namespace stuck Terminating | `kubectl get ns` | Finalizers blocking deletion |
 
-### GKE Autopilot-specific behaviour
-- `kubectl get nodes` returns empty before any pods are scheduled — this is normal
-- First pod in a new namespace triggers node provisioning (~2-3 minutes cold start)
-- Autopilot enforces minimum resource requests: 250m CPU, 512Mi memory per container
-- `kube-system` namespace is managed — you cannot patch resources there
-- hostPath volumes are restricted — affects node-exporter in kube-prometheus-stack
+### GKE Standard behaviour
+- Cluster is zonal (`us-central1-a` by default); CI and deploy use `--zone`, not `--region`
+- Platform node pool runs `cloud9-api`, monitoring, and the reaper; session pool scales with labs
+- Session cold start may wait on cluster autoscaler (~2–3 minutes when the session pool is empty)
+- `kube-system` is managed — you cannot patch resources there
+- Install monitoring with `prometheus-values.yaml` plus `prometheus-values-standard.yaml` for kubelet cAdvisor scrape
 
 ---
 
@@ -412,10 +412,11 @@ helm repo update
 Committed to the repo. Key settings:
 - `scrapeInterval: "5s"` — faster scraping for live demo feel
 - `additionalScrapeConfigs` — enables annotation-based pod discovery
-- `coreDns.enabled: false` — required for GKE Autopilot (kube-system is managed)
-- `nodeExporter.enabled: false` — hostPath mounts not allowed on Autopilot
-- `admissionWebhooks.enabled: false` — webhook job fails on Autopilot
-- `grafana.resources` — reduced from defaults to fit on Autopilot nodes
+- `coreDns.enabled: false` — kube-system is managed on GKE
+- `nodeExporter.enabled: false` — hostPath node-exporter not used on our Standard install
+- `admissionWebhooks.enabled: false` — webhook patch job is disabled in values
+- `grafana.resources` — reduced from defaults to fit the platform pool
+- On Standard, also apply `prometheus-values-standard.yaml` for kubelet scrape and platform scheduling
 
 ### Troubleshooting
 
@@ -555,11 +556,11 @@ prometheus.io/path: "/metrics"
 ```
 These are set by `K8sDeployer` in `pkg/deployer/k8s.go`.
 
-### Known limitations on GKE Autopilot
-- **Live metrics freshness tiers:** See **Live metrics freshness (2026-07)** in `ganymede_extensions.md`. Tier B (PromQL rates) is tunable; Tier C (DB/LB/MQ container CPU via Metrics API) is ~15–60s and not fixable by polling faster on Autopilot.
-- `container_cpu_usage_seconds_total` may return empty — Autopilot does not expose kubelet/cAdvisor series to self-managed Prometheus for user workloads. **Mitigation (implemented):** `cloud9-api` falls back to the Kubernetes Metrics API (`metrics.k8s.io`) for DB/MQ/LB container CPU/memory — same data as `kubectl top`. Requires ClusterRole `get`/`list` on `pods.metrics.k8s.io` (see `k8s/base/cloud9-api.yaml`). GKE Managed Prometheus remains an optional future path for historical PromQL dashboards.
-- Do **not** use `process_cpu_seconds_total` on postgres pods for DB utilization — Prometheus scrapes `postgres-exporter`; that metric reflects the sidecar, not the `postgres` container. See `ganymede_appendix.md` (2026-07-02 entry).
-- `node-exporter` cannot run on Autopilot — hostPath mounts to `/proc`, `/sys` are blocked.
+### Metrics on GKE Standard
+- **Live metrics freshness tiers:** See **Live metrics freshness (2026-07)** in `ganymede_extensions.md`. Tier B (PromQL rates) is tunable; Tier C (Metrics API) is ~15–60s when used as fallback.
+- With `prometheus-values-standard.yaml`, `container_cpu_usage_seconds_total` and `container_memory_working_set_bytes` scrape from kubelet cAdvisor for session workloads (primary path for DB/MQ/LB CPU on Standard).
+- **Fallback (implemented):** `cloud9-api` still uses Metrics API → kube requests when cAdvisor series are missing. Requires ClusterRole `get`/`list` on `pods.metrics.k8s.io` (see `k8s/base/cloud9-api.yaml`).
+- Do **not** use `process_cpu_seconds_total` on postgres pods for DB utilization — that metric reflects the exporter sidecar, not the `postgres` container.
 
 ### Troubleshooting
 
@@ -567,7 +568,7 @@ These are set by `K8sDeployer` in `pkg/deployer/k8s.go`.
 |---------|-------|-----|
 | App-server not in Targets | Status → Targets → kubernetes-pods | Verify pod has scrape annotations; check `additionalScrapeConfigs` in values |
 | Metrics return no data | Run `up{namespace=~"cloud9.*"}` | If empty, scraping not working — check annotations and Prometheus config |
-| `container_cpu_usage_seconds_total` empty | GKE Autopilot limitation | Expected for user workloads — collector uses Metrics API fallback for DB/MQ/LB; app-server still uses `process_*` from `/metrics` |
+| `container_cpu_usage_seconds_total` empty | Missing kubelet scrape or new namespace | On Standard, confirm `prometheus-values-standard.yaml`; collector falls back to Metrics API / requests |
 | Inspector DB CPU low but `kubectl top` high | `process_*` measured exporter sidecar | Fixed in collector — uses `container="postgres"` via Metrics API; redeploy `cloud9-api` + apply RBAC |
 | Grafana login fails | Wrong password | Default is `cloud9-dev` set in values file |
 
@@ -923,9 +924,9 @@ kubectl delete namespace cloud9-url-shortener-<id>
 ```
 
 ### Cost awareness
-- GKE Autopilot charges per pod CPU/memory — only when pods are running
-- Monitoring stack (Prometheus + Grafana) runs 24/7 — ~$0.30/day
-- Each 9-minute deployment costs ~$0.05-0.08
+- GKE Standard bills node VMs (platform pool 24/7; session pool scales with labs)
+- Monitoring stack on the platform pool runs 24/7
+- Each short lab session adds session-pool node time while namespaces run
 - `terraform destroy` stops all charges but takes 5 minutes to reprovision
 - $300 free credits cover the entire project at this usage level
 

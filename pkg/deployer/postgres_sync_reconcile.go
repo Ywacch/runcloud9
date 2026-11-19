@@ -28,7 +28,7 @@ func DatabaseNodeConfig(design DeploymentDesign) (map[string]any, bool) {
 
 // ReconcilePostgresSynchronousReplication re-applies synchronous replication GUCs after
 // primary pod recreation. emptyDir PGDATA wipes postgresql.auto.conf; the primary boots
-// async until this runs. Call after chaos pod_kill on the database or Autopilot reschedule.
+// async until this runs. Call after chaos pod_kill on the database or node reschedule.
 func ReconcilePostgresSynchronousReplication(ctx context.Context, clientset kubernetes.Interface, namespace string, nodeConfig map[string]any) error {
 	mode, err := parseReplicationMode(nodeConfig)
 	if err != nil {
