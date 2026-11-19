@@ -17,7 +17,7 @@ jobs:
     env:
       PROJECT_ID: runcloud9-514803
       CLUSTER_NAME: cloud9
-      CLUSTER_REGION: us-central1
+      CLUSTER_LOCATION: us-central1-a
       GAR_HOST: us-central1-docker.pkg.dev
       GAR_REPO: cloud9-images
       IMAGE_NAME: cloud9-api
@@ -90,7 +90,7 @@ jobs:
           docker push "$IMAGE:latest"
 
       - name: Get GKE credentials
-        run: gcloud container clusters get-credentials "$CLUSTER_NAME" --region "$CLUSTER_REGION" --project "$PROJECT_ID"
+        run: gcloud container clusters get-credentials "$CLUSTER_NAME" --zone "$CLUSTER_LOCATION" --project "$PROJECT_ID"
 
       # PriorityClasses and the pause Deployment are not part of the API
       # image rollout. Session pods reference cloud9-session; apply before

@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloud9-api
+  namespace: cloud9-system
+spec:
+  template:
+    spec:
+      nodeSelector:
+        cloud9.io/pool: platform
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cloud9-reaper
+  namespace: cloud9-system
+spec:
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          nodeSelector:
+            cloud9.io/pool: platform

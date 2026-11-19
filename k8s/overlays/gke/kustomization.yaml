@@ -8,5 +8,6 @@ patches:
   - path: patch-serviceaccount.yaml
   - path: patch-deployment.yaml
   - path: patch-reaper-cronjob.yaml
+  - path: patch-platform-pool.yaml
   - path: patch-service.yaml
   - path: patch-ingress.yaml
