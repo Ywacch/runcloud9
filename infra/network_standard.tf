@@ -1,0 +1,44 @@
+# VPC for the zonal GKE Standard cluster (GS-1). Autopilot uses its own networking.
+resource "google_compute_network" "standard" {
+  name                    = "${var.cluster_name}-standard-vpc"
+  auto_create_subnetworks = false
+}
+
+resource "google_compute_subnetwork" "standard" {
+  name          = "${var.cluster_name}-standard-subnet"
+  ip_cidr_range = var.standard_subnet_cidr
+  region        = var.region
+  network       = google_compute_network.standard.id
+
+  private_ip_google_access = true
+
+  secondary_ip_range {
+    range_name    = "pods"
+    ip_cidr_range = var.standard_pods_cidr
+  }
+
+  secondary_ip_range {
+    range_name    = "services"
+    ip_cidr_range = var.standard_services_cidr
+  }
+}
+
+resource "google_compute_router" "standard" {
+  name    = "${var.cluster_name}-standard-router"
+  region  = var.region
+  network = google_compute_network.standard.id
+}
+
+resource "google_compute_router_nat" "standard" {
+  name   = "${var.cluster_name}-standard-nat"
+  router = google_compute_router.standard.name
+  region = var.region
+
+  nat_ip_allocate_option             = "AUTO_ONLY"
+  source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
+
+  log_config {
+    enable = false
+    filter = "ERRORS_ONLY"
+  }
+}
