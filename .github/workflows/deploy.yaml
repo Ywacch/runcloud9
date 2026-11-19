@@ -92,6 +92,12 @@ jobs:
       - name: Get GKE credentials
         run: gcloud container clusters get-credentials "$CLUSTER_NAME" --region "$CLUSTER_REGION" --project "$PROJECT_ID"
 
+      # PriorityClasses and the pause Deployment are not part of the API
+      # image rollout. Session pods reference cloud9-session; apply before
+      # the new API creates workloads. Manifest replicas stay at 0.
+      - name: Apply balloon and session priority manifest
+        run: kubectl apply -f k8s/base/cloud9-balloon.yaml
+
       - name: Deploy to GKE
         env:
           SHA: ${{ github.sha }}
