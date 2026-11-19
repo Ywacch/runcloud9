@@ -148,7 +148,7 @@ func ProxyCacheOverhead(design DeploymentDesign) ResourceBudget {
 }
 
 // QuotaResourceLimits returns namespace ResourceQuota hard limits for a design.
-// Includes GKE Autopilot admission slack so admitted pod limits fit the quota envelope.
+// Includes admission slack (autopilotAdmissionOverhead, GS-8) so admitted pod limits fit the quota envelope.
 func QuotaResourceLimits(design DeploymentDesign, userTier string) ResourceBudget {
 	total := SumDesignResources(design, userTier)
 	mergeBudget(&total, SidecarOverhead(design))
@@ -307,9 +307,8 @@ var (
 	autopilotSlackPerContainer    = resource.MustParse("128Mi")
 )
 
-// autopilotAdmissionOverhead adds memory slack for GKE Autopilot limit admission adjustments.
-// Manifest requests can be admitted higher than requested (see ganymede_appendix); namespace
-// ResourceQuota must account for admitted limits, not only SumDesignResources requests.
+// autopilotAdmissionOverhead adds memory slack for historical GKE admission adjustments (GS-8).
+// Namespace ResourceQuota must account for admitted limits, not only SumDesignResources requests.
 func autopilotAdmissionOverhead(design DeploymentDesign, userTier string) ResourceBudget {
 	var total ResourceBudget
 	for _, node := range design.Nodes {

@@ -28,11 +28,11 @@ import (
 )
 
 /*
-GKE Autopilot cAdvisor limitations
+Container CPU and memory sources
 
-On GKE Autopilot, self-managed Prometheus (kube-prometheus-stack) often cannot scrape
-cAdvisor series (container_cpu_usage_seconds_total, container_memory_working_set_bytes)
-because Autopilot does not expose the kubelet metrics endpoint to non-system workloads.
+On GKE Standard, kube-prometheus-stack can scrape kubelet cAdvisor
+(container_cpu_usage_seconds_total, container_memory_working_set_bytes) for session workloads.
+On clusters where cAdvisor is unavailable, the same fallbacks apply.
 
 Fallback chain per component:
   - App-server: process_cpu_seconds_total / process_resident_memory_bytes from app /metrics.
@@ -52,7 +52,7 @@ type MetricsCollector struct {
 	scrapeClient            *http.Client // short timeout for in-cluster LB / RabbitMQ HTTP scrapes
 	loadgen                 loadgen.LoadGenerator
 	clientset               kubernetes.Interface // optional: LB metadata from ConfigMap
-	metricsClient           PodMetricsProvider   // optional: metrics.k8s.io for container CPU/mem on Autopilot
+	metricsClient           PodMetricsProvider   // optional: metrics.k8s.io when cAdvisor is unavailable
 	debugMetrics            bool
 	eventBus                *EventBus
 	thresholds              *ThresholdDetector
@@ -587,8 +587,7 @@ func (c *MetricsCollector) kubeLimitMem(ctx context.Context, ns, podRe, containe
 	return c.kubeLimitMemExcluding(ctx, ns, podRe, "", container)
 }
 
-// queryProcessCPU uses process_cpu_seconds_total from the app's /metrics (works on GKE Autopilot
-// where cAdvisor series are often unavailable to self-managed Prometheus).
+// queryProcessCPU uses process_cpu_seconds_total from the app's /metrics (primary path for app-server CPU).
 func (c *MetricsCollector) queryProcessCPU(ctx context.Context, ns, podRe, fallbackContainer string) (float64, bool) {
 	primary := fmt.Sprintf(
 		`sum(rate(process_cpu_seconds_total{namespace=%q,pod=~%q}%s))`,
@@ -907,7 +906,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 		kubeEstCPU, _ := c.queryCPUPair(ctx, ns, "redis.*", "redis")
 		c.debugCompare("cache", "cpu", redisCPUFromExporter, kubeEstCPU, "redis_cpu_user+sys", "kube_requests")
 	}
-	// Cache-proxy is a Go process; use scrape-side process_* series (works on Autopilot without cAdvisor).
+	// Cache-proxy is a Go process; use scrape-side process_* series.
 	cacheCPU2, cacheProxyPresent, _ := c.queryScalar(ctx, fmt.Sprintf(
 		`sum(rate(process_cpu_seconds_total{namespace=%q,pod=~%q}%s))`,
 		ns, "cache-proxy.*", promRateRange(),

@@ -11,7 +11,7 @@ variable "region" {
 }
 
 variable "cluster_name" {
-  description = "GKE cluster name (Autopilot regional and Standard zonal may share this name)"
+  description = "GKE Standard cluster name"
   type        = string
   default     = "cloud9"
 }

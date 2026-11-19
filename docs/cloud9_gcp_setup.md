@@ -1,5 +1,5 @@
 # Cloud9 — GCP & Terraform Setup Guide
-> Run these steps once to provision the GKE Autopilot cluster and GCS bucket.  
+> Run these steps once to provision the zonal GKE Standard cluster and GCS bucket.  
 > Keep this doc updated if infrastructure changes.
 
 This guide is GCP-specific. For provider-agnostic self-host steps and canonical runtime config, see:
@@ -101,16 +101,16 @@ terraform init
 # Preview changes
 terraform plan
 
-# Apply — takes 7-10 minutes for GKE Autopilot
+# Apply — allow roughly 15–20 minutes (Standard cluster + node pools + bucket)
 terraform apply
 # Type 'yes' when prompted
 ```
 
 Expected outputs after apply:
 ```
-cluster_location    = "us-central1"
+cluster_location    = "us-central1-a"
 cluster_name        = "cloud9"
-kubeconfig_command  = "gcloud container clusters get-credentials cloud9 --region us-central1 --project ganymede-cloud"
+kubeconfig_command  = "gcloud container clusters get-credentials cloud9 --zone us-central1-a --project ganymede-cloud"
 seed_bucket_name    = "cloud9-seed-data"
 ```
 
@@ -119,14 +119,14 @@ seed_bucket_name    = "cloud9-seed-data"
 ## 4. Connect kubectl to GKE
 
 ```bash
-# Configure kubectl to use GKE cluster
-gcloud container clusters get-credentials cloud9 --region us-central1 --project ganymede-cloud
+# Configure kubectl to use the Standard cluster
+gcloud container clusters get-credentials cloud9 --zone us-central1-a --project ganymede-cloud
 
 # Verify context
 kubectl config current-context
-# Expected: gke_ganymede-cloud_us-central1_cloud9
+# Expected: gke_ganymede-cloud_us-central1-a_cloud9
 
-# Verify cluster (Autopilot shows no nodes until pods are scheduled — that's normal)
+# Verify cluster (platform pool nodes should appear; session pool scales with labs)
 kubectl get nodes
 kubectl get ns
 ```
@@ -140,7 +140,7 @@ kubectl get ns
 kubectl config get-contexts
 
 # Switch to GKE
-kubectl config use-context gke_ganymede-cloud_us-central1_cloud9
+kubectl config use-context gke_ganymede-cloud_us-central1-a_cloud9
 
 # Switch back to minikube (local dev)
 kubectl config use-context minikube
@@ -192,8 +192,8 @@ If you need to recreate everything (e.g. after `terraform destroy`):
 
 ```bash
 cd infra && terraform apply          # reprovision cluster + bucket
-gcloud container clusters get-credentials cloud9 --region us-central1 --project ganymede-cloud
-kubectl config use-context gke_ganymede-cloud_us-central1_cloud9
+gcloud container clusters get-credentials cloud9 --zone us-central1-a --project ganymede-cloud
+kubectl config use-context gke_ganymede-cloud_us-central1-a_cloud9
 ```
 
 That's it. Infrastructure is fully reproducible.
@@ -207,4 +207,4 @@ That's it. Infrastructure is fully reproducible.
 | `gke-gcloud-auth-plugin not found` | Plugin not installed | `gcloud components install gke-gcloud-auth-plugin` |
 | `403 compute.instanceGroupManagers.get` | Service account missing compute.viewer role | Run step 2 compute.viewer binding |
 | `terraform apply` destroys and recreates cluster | State mismatch after 403 error | Add compute.viewer role before first apply |
-| `kubectl get nodes` shows nothing | Autopilot — nodes provision on first pod schedule | Expected behavior, not a bug |
+| `kubectl get nodes` empty on first boot | Session pool at min size zero | Platform pool nodes should still list; sessions scale the session pool |

@@ -15,7 +15,7 @@ const (
 	// PromRateWindow plus the Prometheus scrape interval.
 	FreshnessRate FreshnessTier = "rate"
 	// FreshnessMetricsAPI is kubelet -> metrics-server (metrics.k8s.io): updates in
-	// ~15-60s steps on GKE Autopilot; polling faster repeats the cached value.
+	// ~15-60s steps; polling faster repeats the cached value.
 	FreshnessMetricsAPI FreshnessTier = "metrics_api"
 	// FreshnessEstimated means no live series existed and the value came from kube
 	// resource requests; it is a static placeholder, not an observation.

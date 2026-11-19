@@ -82,7 +82,7 @@ func TestDBReplicaStatefulSetSpec_readReplicaShape(t *testing.T) {
 		t.Fatal("expected emptyDir volume for PGDATA")
 	}
 	if pgdata.EmptyDir.SizeLimit == nil {
-		t.Fatal("expected emptyDir sizeLimit for Autopilot")
+		t.Fatal("expected emptyDir sizeLimit on postgres data volume")
 	}
 	wantEphemeral := resource.MustParse(dbReplicaEphemeralSize)
 	if got := *pgdata.EmptyDir.SizeLimit; got.Cmp(wantEphemeral) != 0 {

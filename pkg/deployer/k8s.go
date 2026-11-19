@@ -120,9 +120,8 @@ func (k *K8sDeployer) Deploy(ctx context.Context, cfg DeployConfig) error {
 		return fmt.Errorf("ensure namespace network policies: %w", err)
 	}
 
-	// resource requests/limits are required on GKE Autopilot.
-	// Requests = guaranteed minimum. Limits = hard cap.
-	// We set them equal here so Autopilot doesn't reject the pod.
+	// Requests and limits are required on GKE and for Guaranteed QoS on shared session nodes.
+	// We set them equal so each pod gets Guaranteed QoS and a predictable CPU share.
 	resources := ResolveNodeResources(cfg.Node.Type, cfg.Node.Config)
 
 	// replicas can be tuned per node type (app-server / worker bounds in ValidateRuntimeContract).

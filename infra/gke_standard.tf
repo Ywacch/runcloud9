@@ -1,4 +1,4 @@
-# Zonal GKE Standard cluster beside Autopilot (GS-1). Name matches Autopilot; location is the zone.
+# Zonal GKE Standard cluster (platform + session node pools). Location is var.zone.
 resource "google_container_cluster" "standard" {
   name     = var.cluster_name
   location = var.zone

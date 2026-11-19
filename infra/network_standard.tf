@@ -1,4 +1,4 @@
-# VPC for the zonal GKE Standard cluster (GS-1). Autopilot uses its own networking.
+# VPC for the zonal GKE Standard cluster (GS-1).
 resource "google_compute_network" "standard" {
   name                    = "${var.cluster_name}-standard-vpc"
   auto_create_subnetworks = false

@@ -15,7 +15,7 @@ const namespaceResourceQuotaName = "cloud9-deployment-quota"
 
 // EnsureNamespaceResourceQuota creates the deployment namespace (if needed) and applies
 // a ResourceQuota sized to the design's requested workloads plus sidecar/proxy overhead
-// and GKE Autopilot admission slack.
+// and admission slack (autopilotAdmissionOverhead; see GS-8).
 // A non-zero expiresAt sets cloud9.io/expires-at on create so a later label update
 // does not race the first writer of the namespace object.
 func EnsureNamespaceResourceQuota(
