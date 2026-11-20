@@ -6,6 +6,12 @@ import (
 	"testing/fstest"
 )
 
+// pairMetaYAML is the minimum manifest fields E-23b validation requires on every pair.
+const pairMetaYAML = `  introspect: tables
+  chaos:
+    - pod_kill
+`
+
 func validTestFS(t *testing.T) fstest.MapFS {
 	t.Helper()
 	return fstest.MapFS{
@@ -30,7 +36,7 @@ func validTestFS(t *testing.T) fstest.MapFS {
   build: available
   reason: ok
   fidelity: real
-`),
+` + pairMetaYAML),
 		},
 		"data/guarantees/empty.yaml": &fstest.MapFile{
 			Data: []byte(`job: main_db
@@ -51,7 +57,7 @@ func TestLoad_RejectsUnknownJob(t *testing.T) {
   build: available
   reason: x
   fidelity: real
-`)
+` + pairMetaYAML)
 	_, err := load(fsys)
 	if err == nil || !strings.Contains(err.Error(), "unknown job") {
 		t.Fatalf("err = %v", err)
@@ -68,7 +74,7 @@ func TestLoad_RejectsUnknownEngine(t *testing.T) {
   build: available
   reason: x
   fidelity: real
-`)
+` + pairMetaYAML)
 	_, err := load(fsys)
 	if err == nil || !strings.Contains(err.Error(), "unknown engine") {
 		t.Fatalf("err = %v", err)
@@ -85,13 +91,13 @@ func TestLoad_RejectsDuplicatePair(t *testing.T) {
   build: available
   reason: x
   fidelity: real
-- job: main_db
+` + pairMetaYAML + `- job: main_db
   engine: postgresql
   fit: workable
   build: not_built
   reason: y
   fidelity: real
-`)
+` + pairMetaYAML)
 	_, err := load(fsys)
 	if err == nil || !strings.Contains(err.Error(), "duplicate pair") {
 		t.Fatalf("err = %v", err)
@@ -108,7 +114,7 @@ func TestLoad_RejectsPoorWithoutDemo(t *testing.T) {
   build: not_built
   reason: x
   fidelity: real
-`)
+` + pairMetaYAML)
 	_, err := load(fsys)
 	if err == nil || !strings.Contains(err.Error(), "failureDemo") {
 		t.Fatalf("err = %v", err)

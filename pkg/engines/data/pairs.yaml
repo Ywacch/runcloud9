@@ -4,39 +4,172 @@
   build: available
   reason: Primary relational store for lab templates.
   fidelity: real
+  introspect: tables
+  chaos:
+    - pod_kill
+    - stall_replica
+    - split_primary_replica
+    - split_app_store
+    - promote_replica
+    - promote_lagging_replica
+    - kill_replica
+  signals: []
 - job: hot_cache
   engine: redis
   fit: natural
   build: available
   reason: In-memory key cache with TTL.
   fidelity: real
+  introspect: keys
+  chaos:
+    - pod_kill
+    - cache_flush
+    - split_app_store
+  signals:
+    - field: cacheHits
+      concept: cache_efficiency
+      availability: measured
+    - field: cacheMisses
+      concept: cache_efficiency
+      availability: measured
+    - field: evictionsPerSec
+      concept: eviction
+      availability: measured
+    - field: p99Latency
+      concept: server_latency
+      availability: measured
+    - field: avgLatency
+      concept: server_latency
+      availability: measured
+    - field: redisRejectedRate
+      concept: flow_control
+      availability: measured
 - job: hot_cache
   engine: memcached
   fit: natural
   build: available
   reason: In-memory key cache with TTL; compare lost-update behavior on timelines.
   fidelity: real
+  coHost: false
+  introspect: keys
+  chaos:
+    - pod_kill
+    - cache_flush
+    - split_app_store
+  signals:
+    - field: cacheHits
+      concept: cache_efficiency
+      availability: measured
+    - field: cacheMisses
+      concept: cache_efficiency
+      availability: measured
+    - field: p99Latency
+      concept: server_latency
+      availability: measured
+    - field: avgLatency
+      concept: server_latency
+      availability: measured
+    - field: redisCmdRates
+      availability: not_applicable
+      reason: Memcached has no per-command Redis series.
 - job: timeline
   engine: redis
   fit: natural
   build: available
   reason: Sorted sets and streams for ordered events.
   fidelity: real
+  introspect: keys
+  chaos:
+    - pod_kill
+    - cache_flush
+    - split_app_store
+  signals:
+    - field: timelineKeyCount
+      availability: measured
+    - field: cacheHits
+      concept: cache_efficiency
+      availability: measured
 - job: timeline
   engine: postgresql
   fit: workable
   build: available
   reason: Append-only timelines table on the primary database.
   fidelity: real
+  introspect: tables
+  chaos:
+    - pod_kill
+  signals:
+    - field: timelineRelationBytes
+      availability: measured
+    - field: timelineDeadTuples
+      availability: measured
 - job: work_queue
   engine: rabbitmq
   fit: natural
   build: available
   reason: AMQP queues with ack semantics.
   fidelity: real
+  coHost: false
+  introspect: queues
+  chaos:
+    - pod_kill
+  signals:
+    - field: queueDepth
+      concept: consumer_lag
+      availability: measured
+    - field: messagesReady
+      concept: consumer_lag
+      availability: measured
+    - field: messagesUnacked
+      concept: redelivery
+      availability: measured
+    - field: produceRate
+      concept: flow_control
+      availability: measured
+    - field: consumeRate
+      concept: flow_control
+      availability: measured
+    - field: mqSaturationRatio
+      concept: flow_control
+      availability: measured
+    - field: mqMemoryUsed
+      concept: memory_overhead
+      availability: measured
+    - field: mqMemoryLimit
+      concept: memory_overhead
+      availability: measured
 - job: work_queue
   engine: redis
   fit: workable
   build: available
   reason: Lists and streams can queue work with different failure modes.
   fidelity: real
+  ttlSeparatesEviction: true
+  introspect: stream_peek
+  chaos:
+    - pod_kill
+  signals:
+    - field: queueDepth
+      availability: not_built
+      reason: Redis Streams queue metrics land in E-23c. Backlog is consumer-group lag, not XLEN.
+    - field: messagesReady
+      availability: not_built
+      reason: Redis Streams queue metrics land in E-23c. Backlog is consumer-group lag, not XLEN.
+    - field: messagesUnacked
+      availability: not_built
+      reason: Redis Streams queue metrics land in E-23c. Backlog is consumer-group lag, not XLEN.
+    - field: produceRate
+      availability: not_built
+      reason: Redis Streams queue metrics land in E-23c. Backlog is consumer-group lag, not XLEN.
+    - field: consumeRate
+      availability: not_built
+      reason: Redis Streams queue metrics land in E-23c. Backlog is consumer-group lag, not XLEN.
+    - field: mqSaturationRatio
+      availability: not_built
+      reason: Redis Streams queue metrics land in E-23c. Backlog is consumer-group lag, not XLEN.
+    - field: mqMemoryUsed
+      availability: not_applicable
+      reason: Redis memory belongs to the node. See node memory.
+    - field: mqMemoryLimit
+      availability: not_applicable
+      reason: Redis memory belongs to the node. See node memory.

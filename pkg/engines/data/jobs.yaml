@@ -4,6 +4,8 @@
 - id: hot_cache
   label: Hot cache
   component: cache
+  needs:
+    - evicting
 - id: timeline
   label: Timeline
   component: cache
@@ -14,3 +16,6 @@
 - id: work_queue
   label: Work queue
   component: mq
+  needs:
+    - non_evicting
+    - durable

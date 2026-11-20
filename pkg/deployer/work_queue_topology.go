@@ -1,6 +1,7 @@
 package deployer
 
 import (
+	"github.com/ywacch/cloud9/pkg/engines"
 	"github.com/ywacch/cloud9/pkg/templates"
 )
 
@@ -83,7 +84,18 @@ func redisPolicyForNode(node DeploymentNode, design DeploymentDesign) string {
 		return "noeviction"
 	}
 	if hasQueue && hasDataJob {
-		return "volatile-lru"
+		var jobIDs []string
+		for _, b := range bindings {
+			if b.NodeID == node.ID {
+				jobIDs = append(jobIDs, b.Job)
+			}
+		}
+		if ok, _ := engines.CanCoHost(engines.Default(), "redis", jobIDs); ok {
+			if p, found := engines.Default().Pair("work_queue", "redis"); found && p.TTLSeparatesEviction {
+				return "volatile-lru"
+			}
+		}
+		return canvas
 	}
 	return canvas
 }

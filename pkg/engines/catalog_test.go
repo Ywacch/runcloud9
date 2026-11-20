@@ -65,6 +65,8 @@ func TestValidate_Rejects(t *testing.T) {
 					Job: "main_db", Engine: "unknown",
 					Fit: FitNatural, Build: BuildPlanned,
 					Reason: "x", Fidelity: FidelityReal,
+					Introspect: IntrospectTables,
+					Chaos:      []string{"pod_kill"},
 				})
 			},
 		},
@@ -75,6 +77,8 @@ func TestValidate_Rejects(t *testing.T) {
 					Job: "hot_cache", Engine: "postgresql",
 					Fit: FitPoor, Build: BuildNotBuilt,
 					Reason: "x", Fidelity: FidelityReal,
+					Introspect: IntrospectTables,
+					Chaos:      []string{"pod_kill"},
 				})
 			},
 		},

@@ -9,7 +9,7 @@ const (
 )
 
 // CatalogVersion bumps when the served JSON shape or semantics change.
-const CatalogVersion = "4"
+const CatalogVersion = "5"
 
 // Fit describes how naturally an engine serves a job.
 type Fit string
@@ -42,8 +42,17 @@ type Job struct {
 	ID        string   `json:"id" yaml:"id"`
 	Label     string   `json:"label" yaml:"label"`
 	Component string   `json:"component" yaml:"component"`
+	Needs     []string `json:"needs,omitempty" yaml:"needs,omitempty"`
 	Ops       []string `json:"ops,omitempty" yaml:"ops,omitempty"`
 	OpMetrics []string `json:"opMetrics,omitempty" yaml:"opMetrics,omitempty"`
+}
+
+// PairSignal describes one metrics field a job-engine pair may surface.
+type PairSignal struct {
+	Field        string `json:"field" yaml:"field"`
+	Concept      string `json:"concept,omitempty" yaml:"concept,omitempty"`
+	Availability string `json:"availability" yaml:"availability"`
+	Reason       string `json:"reason,omitempty" yaml:"reason,omitempty"`
 }
 
 // Engine is a datastore or broker family we can mount in a lab.
@@ -74,6 +83,12 @@ type Pair struct {
 	Reason   string `json:"reason" yaml:"reason"`
 	Fidelity string `json:"fidelity" yaml:"fidelity"`
 	Demo     *Demo  `json:"failureDemo,omitempty" yaml:"failureDemo,omitempty"`
+	// CoHost defaults to true when omitted (pairs may share a node).
+	CoHost               *bool        `json:"coHost,omitempty" yaml:"coHost,omitempty"`
+	TTLSeparatesEviction bool         `json:"ttlSeparatesEviction,omitempty" yaml:"ttlSeparatesEviction,omitempty"`
+	Introspect           string       `json:"introspect" yaml:"introspect"`
+	Chaos                []string     `json:"chaos" yaml:"chaos"`
+	Signals              []PairSignal `json:"signals" yaml:"signals"`
 }
 
 // GuaranteeEntry is one claim on a guarantees card.

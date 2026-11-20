@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ywacch/cloud9/pkg/deployer"
+	"github.com/ywacch/cloud9/pkg/engines"
 	"github.com/ywacch/cloud9/pkg/rules"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -227,6 +228,21 @@ func TestOneShotScenarios_revertNoOp(t *testing.T) {
 	}
 	if err := killReplica.Revert(context.Background(), "ns", design, "db"); err != nil {
 		t.Fatalf("Revert kill_replica: %v", err)
+	}
+}
+
+func TestCatalog_PairChaosExists(t *testing.T) {
+	t.Parallel()
+	reg := map[string]struct{}{}
+	for _, r := range scenarioRegistry {
+		reg[r.scenario] = struct{}{}
+	}
+	for _, p := range engines.Default().Pairs {
+		for _, id := range p.Chaos {
+			if _, ok := reg[id]; !ok {
+				t.Fatalf("pair %s/%s chaos %q not in registry", p.Job, p.Engine, id)
+			}
+		}
 	}
 }
 
