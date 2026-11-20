@@ -51,7 +51,6 @@
               },
               {
                 "role": "replica",
-                "index": 0,
                 "appLabel": "postgres-replica",
                 "container": "postgres-replica",
                 "service": "db-replica",

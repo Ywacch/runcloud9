@@ -29,18 +29,6 @@ func introspectEngineForComponent(component string, topo *placement.Topology, sp
 			if eng := workQueueEngineFromDesign(*parsed); eng != "" {
 				return engineAlias(eng)
 			}
-			for _, n := range parsed.Nodes {
-				if n.Type == "mq" {
-					return "rabbitmq"
-				}
-			}
-		}
-		if component == "cache" {
-			for _, n := range parsed.Nodes {
-				if n.Type == "cache" {
-					return engineAlias(deployer.CacheEngineFromNode(n))
-				}
-			}
 		}
 	}
 	return engineAlias(spec.Engine)
