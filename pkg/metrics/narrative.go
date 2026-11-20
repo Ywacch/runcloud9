@@ -178,7 +178,7 @@ func narrateQueueDepth(dm *DeploymentMetrics, topo TopologyFlags) NarrativeOutpu
 	mq := dm.Components["mq"]
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "RabbitMQ queue depth is about %.0f messages. ", mq.QueueDepth)
+	fmt.Fprintf(&b, "%s queue depth is about %.0f messages. ", WorkQueueEngineLabel(dm), mq.QueueDepth)
 	fmt.Fprintf(&b, "Publish rate is about %.1f/s and consume rate about %.1f/s. ", mq.ProduceRate, mq.ConsumeRate)
 	if mq.ConsumeRate > 0.01 {
 		est := mq.QueueDepth / mq.ConsumeRate

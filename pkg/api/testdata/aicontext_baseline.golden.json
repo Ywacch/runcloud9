@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "catalogVersion": "4",
   "sessionId": "sess-golden-1",
   "runs": [
@@ -21,6 +21,64 @@
             }
           ]
         }
+      },
+      "placement": {
+        "nodes": [
+          {
+            "nodeId": "app1",
+            "nodeType": "app-server",
+            "members": [
+              {
+                "role": "primary",
+                "appLabel": "app-server",
+                "container": "app-server",
+                "service": "app-server"
+              }
+            ]
+          },
+          {
+            "nodeId": "db1",
+            "nodeType": "db",
+            "engine": "postgresql",
+            "family": "relational",
+            "members": [
+              {
+                "role": "primary",
+                "appLabel": "postgres",
+                "container": "postgres",
+                "service": "db",
+                "port": "5432"
+              },
+              {
+                "role": "replica",
+                "index": 0,
+                "appLabel": "postgres-replica",
+                "container": "postgres-replica",
+                "service": "db-replica",
+                "port": "5432"
+              },
+              {
+                "role": "replica",
+                "index": 1,
+                "appLabel": "postgres-replica",
+                "container": "postgres-replica",
+                "service": "db-replica",
+                "port": "5432"
+              }
+            ],
+            "jobs": [
+              "main_db"
+            ]
+          }
+        ],
+        "jobs": [
+          {
+            "job": "main_db",
+            "component": "db",
+            "nodeId": "db1",
+            "engine": "postgresql"
+          }
+        ]
       },
       "facts": [
         {

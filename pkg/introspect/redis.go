@@ -15,8 +15,16 @@ type RedisDriver struct {
 
 // NewRedisDriver connects to Redis at host:6379 (no auth).
 func NewRedisDriver(ctx context.Context, host string) (*RedisDriver, error) {
+	return NewRedisDriverPort(ctx, host, 6379)
+}
+
+// NewRedisDriverPort connects to Redis at host:port (no auth).
+func NewRedisDriverPort(ctx context.Context, host string, port int) (*RedisDriver, error) {
+	if port <= 0 {
+		port = 6379
+	}
 	client := redis.NewClient(&redis.Options{
-		Addr: fmt.Sprintf("%s:6379", host),
+		Addr: fmt.Sprintf("%s:%d", host, port),
 	})
 	if err := client.Ping(ctx).Err(); err != nil {
 		_ = client.Close()
@@ -27,6 +35,14 @@ func NewRedisDriver(ctx context.Context, host string) (*RedisDriver, error) {
 
 func (d *RedisDriver) Capabilities() []Capability {
 	return []Capability{CapKeys, CapKeyValue, CapStats}
+}
+
+// StreamLength returns XLEN for a stream key.
+func (d *RedisDriver) StreamLength(ctx context.Context, stream string) (int64, error) {
+	if d == nil || d.client == nil {
+		return 0, fmt.Errorf("introspect: redis client is required")
+	}
+	return d.client.XLen(ctx, stream).Result()
 }
 
 func (d *RedisDriver) Close() error {

@@ -113,7 +113,7 @@ func (t *ThresholdDetector) Eval(namespace string, dm *DeploymentMetrics, topo T
 				Component:   "mq",
 				RuleID:      ruleQueueDepth,
 				Title:       "Queue depth high",
-				Description: "RabbitMQ queue depth exceeds 100 messages",
+				Description: WorkQueueEngineLabel(dm) + " queue depth exceeds 100 messages",
 			}
 			n := Narrate(ruleQueueDepth, dm, topo, tmpl)
 			ev.Narrative, ev.Suggestion, ev.Related = n.Narrative, n.Suggestion, n.Related

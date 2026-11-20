@@ -11,6 +11,7 @@ import (
 
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/introspect"
+	"github.com/ywacch/cloud9/pkg/placement"
 	"github.com/ywacch/cloud9/pkg/templates"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -55,11 +56,19 @@ func (h *Handler) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "component not configured for introspection")
 		return
 	}
+	topo := placementFromDeploymentRow(row)
+	if dm := h.latestMetrics(namespace); dm != nil && dm.Placement != nil {
+		topo = dm.Placement
+	}
+
+	engine := introspectEngineForComponent(component, topo, introSpec, row.Design)
+
+	introSpec.Engine = engine
 	if component == "cache" {
-		if eng := cacheEngineFromStoredDesign(row.Design); eng == "memcached" {
+		if engine == "memcached" {
 			introSpec.Engine = "memcached"
 			// Keep template keyPatterns for whitelist validation and metadump listing.
-		} else if introSpec.Engine == "redis" {
+		} else if engine == "redis" {
 			if mq, hasMQ := tmpl.Introspection["mq"]; hasMQ {
 				introSpec.KeyPatterns = introspect.AppendQueueStreamKeys(introSpec.KeyPatterns, mq.Queues)
 			}
@@ -85,7 +94,7 @@ func (h *Handler) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 
 	layerID := strings.TrimSpace(r.URL.Query().Get("layerId"))
 
-	host, err := resolveIntrospectHost(r.Context(), introSpec.Engine, component, namespace, target, layerID, row.Design, h.clientset)
+	host, port, err := resolveIntrospectHost(r.Context(), engine, component, namespace, target, layerID, row.Design, h.clientset, topo)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -94,11 +103,15 @@ func (h *Handler) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	switch introSpec.Engine {
+	switch engine {
 	case "postgres":
 		h.handlePostgresIntrospect(ctx, w, host, action, param, introSpec, r)
 	case "redis":
-		h.handleRedisIntrospect(ctx, w, host, action, param, introSpec, r)
+		if component == "mq" {
+			h.handleRedisQueueIntrospect(ctx, w, host, port, action, param, introSpec)
+		} else {
+			h.handleRedisIntrospect(ctx, w, host, port, action, param, introSpec, r)
+		}
 	case "memcached":
 		h.handleMemcachedIntrospect(ctx, w, host, action, param, introSpec, r)
 	case "rabbitmq":
@@ -121,55 +134,60 @@ func parseIntrospectTarget(raw string) (string, error) {
 }
 
 // resolveIntrospectHost maps engine + component to an in-cluster DNS host or pod IP.
-func resolveIntrospectHost(ctx context.Context, engine, component, namespace, target, layerID string, design map[string]any, clientset kubernetes.Interface) (string, error) {
+func resolveIntrospectHost(ctx context.Context, engine, component, namespace, target, layerID string, design map[string]any, clientset kubernetes.Interface, topo *placement.Topology) (string, int, error) {
 	if target == "replica" {
 		switch engine {
 		case "redis", "rabbitmq":
-			return "", fmt.Errorf("replica target is not supported for %s", engine)
+			return "", 0, fmt.Errorf("replica target is not supported for %s", engine)
 		case "postgres":
 			if component != "db" {
-				return "", fmt.Errorf("replica target only applies to db component")
+				return "", 0, fmt.Errorf("replica target only applies to db component")
 			}
 			if !designHasReadReplicas(design) {
-				return "", fmt.Errorf("deployment has no read replicas configured")
+				return "", 0, fmt.Errorf("deployment has no read replicas configured")
 			}
 			if layerID != "" {
-				return resolvePostgresReplicaPodHost(ctx, clientset, namespace, layerID)
+				h, err := resolvePostgresReplicaPodHost(ctx, clientset, namespace, layerID)
+				return h, 5432, err
 			}
-			return fmt.Sprintf("%s.%s.svc.cluster.local", deployer.DBReplicaServiceName, namespace), nil
+			return fmt.Sprintf("%s.%s.svc.cluster.local", deployer.DBReplicaServiceName, namespace), 5432, nil
 		default:
-			return "", fmt.Errorf("unsupported engine")
+			return "", 0, fmt.Errorf("unsupported engine")
 		}
 	}
 	if layerID != "" {
-		return "", fmt.Errorf("layerId applies only to replica introspection target")
+		return "", 0, fmt.Errorf("layerId applies only to replica introspection target")
+	}
+
+	if host, port, ok := resolveIntrospectHostPlacement(topo, component, namespace); ok {
+		return host, port, nil
 	}
 
 	switch engine {
 	case "postgres":
 		svcHost, _, err := resolveProxyTarget(component, design)
 		if err != nil {
-			return "", err
+			return "", 0, err
 		}
-		return fmt.Sprintf("%s.%s.svc.cluster.local", svcHost, namespace), nil
+		return fmt.Sprintf("%s.%s.svc.cluster.local", svcHost, namespace), 5432, nil
 	case "redis":
 		if component != "cache" {
-			return "", fmt.Errorf("redis introspection only supports cache component")
+			return "", 0, fmt.Errorf("redis introspection only supports cache component")
 		}
 		svcHost := resolveIntrospectRedisHost(design)
-		return fmt.Sprintf("%s.%s.svc.cluster.local", svcHost, namespace), nil
+		return fmt.Sprintf("%s.%s.svc.cluster.local", svcHost, namespace), 6379, nil
 	case "memcached":
 		if component != "cache" {
-			return "", fmt.Errorf("memcached introspection only supports cache component")
+			return "", 0, fmt.Errorf("memcached introspection only supports cache component")
 		}
-		return fmt.Sprintf("cache.%s.svc.cluster.local", namespace), nil
+		return fmt.Sprintf("cache.%s.svc.cluster.local", namespace), 11211, nil
 	case "rabbitmq":
 		if component != "mq" {
-			return "", fmt.Errorf("rabbitmq introspection only supports mq component")
+			return "", 0, fmt.Errorf("rabbitmq introspection only supports mq component")
 		}
-		return fmt.Sprintf("mq.%s.svc.cluster.local", namespace), nil
+		return fmt.Sprintf("mq.%s.svc.cluster.local", namespace), 5672, nil
 	default:
-		return "", fmt.Errorf("unsupported engine")
+		return "", 0, fmt.Errorf("unsupported engine")
 	}
 }
 
@@ -351,8 +369,8 @@ func filterTables(tables []introspect.TableInfo, allowed []string) []introspect.
 	return out
 }
 
-func (h *Handler) handleRedisIntrospect(ctx context.Context, w http.ResponseWriter, host, action, key string, spec introspect.ComponentSpec, r *http.Request) {
-	driver, err := introspect.NewRedisDriver(ctx, host)
+func (h *Handler) handleRedisIntrospect(ctx context.Context, w http.ResponseWriter, host string, port int, action, key string, spec introspect.ComponentSpec, r *http.Request) {
+	driver, err := introspect.NewRedisDriverPort(ctx, host, port)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("redis connect failed: %v", err))
 		return
@@ -457,6 +475,51 @@ func (h *Handler) handleMemcachedIntrospect(ctx context.Context, w http.Response
 		writeIntrospectJSON(w, kv)
 	default:
 		writeError(w, http.StatusNotFound, "unknown memcached action")
+	}
+}
+
+func (h *Handler) handleRedisQueueIntrospect(ctx context.Context, w http.ResponseWriter, host string, port int, action, queue string, spec introspect.ComponentSpec) {
+	driver, err := introspect.NewRedisDriverPort(ctx, host, port)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("redis connect failed: %v", err))
+		return
+	}
+	defer driver.Close()
+
+	switch action {
+	case "capabilities":
+		writeIntrospectJSON(w, map[string]any{"capabilities": driver.QueueCapabilities()})
+	case "queues":
+		queues := make([]map[string]any, 0, len(spec.Queues))
+		for _, name := range spec.Queues {
+			depth, err := driver.StreamLength(ctx, name)
+			if err != nil {
+				writeError(w, http.StatusBadGateway, err.Error())
+				return
+			}
+			queues = append(queues, map[string]any{
+				"name":     name,
+				"messages": depth,
+			})
+		}
+		writeIntrospectJSON(w, queues)
+	case "peek":
+		peek, extra, err := driver.PeekStream(ctx, queue)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeIntrospectJSON(w, map[string]any{
+			"queue":       peek.Queue,
+			"empty":       peek.Empty,
+			"body":        peek.Body,
+			"contentType": peek.ContentType,
+			"requeued":    peek.Requeued,
+			"pending":     extra.Pending,
+			"lag":         extra.Lag,
+		})
+	default:
+		writeError(w, http.StatusNotFound, "unknown redis queue action")
 	}
 }
 
