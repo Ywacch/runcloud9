@@ -2,6 +2,7 @@ package chaos
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/ywacch/cloud9/pkg/deployer"
 )
@@ -17,7 +18,6 @@ func ResolveTarget(targetComponent string, design deployer.DeploymentDesign) (Re
 	return resolveTarget(targetComponent, design)
 }
 
-// resolveTarget maps canvas targetComponent to K8s labels and validates the design.
 func resolveTarget(targetComponent string, design deployer.DeploymentDesign) (ResolvedTarget, error) {
 	if targetComponent == "" {
 		return ResolvedTarget{}, fmt.Errorf("targetComponent is required")
@@ -26,6 +26,38 @@ func resolveTarget(targetComponent string, design deployer.DeploymentDesign) (Re
 		return ResolvedTarget{}, fmt.Errorf("cannot target loadgen")
 	}
 
+	if design.ResolvedPlacement != nil && len(design.ResolvedPlacement.Nodes) > 0 {
+		return resolveTargetFromPlacement(targetComponent, design)
+	}
+	return resolveTargetLegacy(targetComponent, design)
+}
+
+func resolveTargetFromPlacement(targetComponent string, design deployer.DeploymentDesign) (ResolvedTarget, error) {
+	topo := design.ResolvedPlacement
+	nodeID := strings.TrimSpace(design.ChaosTargetNodeID)
+	if nodeID == "" {
+		n, ok := topo.NodeForComponent(targetComponent)
+		if !ok {
+			return ResolvedTarget{}, fmt.Errorf("target component %q not found in placement", targetComponent)
+		}
+		nodeID = n.NodeID
+	}
+	member, ok := topo.PrimaryMember(nodeID)
+	if !ok {
+		return ResolvedTarget{}, fmt.Errorf("target component %q has no members on node %q", targetComponent, nodeID)
+	}
+	container := member.Container
+	if container == "" {
+		container = member.AppLabel
+	}
+	if member.AppLabel == "" {
+		return ResolvedTarget{}, fmt.Errorf("target component %q missing app label on node %q", targetComponent, nodeID)
+	}
+	return ResolvedTarget{AppLabel: member.AppLabel, Container: container}, nil
+}
+
+// resolveTargetLegacy picks the first node of a component type when placement is absent.
+func resolveTargetLegacy(targetComponent string, design deployer.DeploymentDesign) (ResolvedTarget, error) {
 	nodeType, ok := canvasTypeForComponent(targetComponent)
 	if !ok {
 		return ResolvedTarget{}, fmt.Errorf("unsupported target component %q", targetComponent)

@@ -15,12 +15,14 @@ import (
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/store"
+	"github.com/ywacch/cloud9/pkg/templates"
 )
 
 type chaosRequest struct {
 	Scenario        string `json:"scenario"`
 	TargetComponent string `json:"targetComponent"`
 	TargetPod       string `json:"targetPod"`
+	NodeID          string `json:"nodeId,omitempty"`
 }
 
 type chaosPartitionResponse struct {
@@ -113,12 +115,22 @@ func (h *Handler) handleChaosApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := chaos.ResolveTarget(req.TargetComponent, *design); err != nil {
+	chaosDesign := *design
+	chaosDesign.ChaosTargetNodeID = strings.TrimSpace(req.NodeID)
+	if tmpl := templates.GetTemplate(design.Template); tmpl != nil {
+		if topo, err := deployer.ResolvePlacement(chaosDesign, tmpl); err == nil {
+			chaosDesign.ResolvedPlacement = &topo
+		} else {
+			slog.Debug("chaos: placement resolve skipped", "err", err)
+		}
+	}
+
+	if _, err := chaos.ResolveTarget(req.TargetComponent, chaosDesign); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	scenario, err := chaos.Resolve(req.Scenario, req.TargetComponent, *design, h.clientset)
+	scenario, err := chaos.Resolve(req.Scenario, req.TargetComponent, chaosDesign, h.clientset)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -127,7 +139,7 @@ func (h *Handler) handleChaosApply(w http.ResponseWriter, r *http.Request) {
 		part.TargetPod = req.TargetPod
 	}
 
-	if err := scenario.Apply(r.Context(), namespace, *design, req.TargetComponent); err != nil {
+	if err := scenario.Apply(r.Context(), namespace, chaosDesign, req.TargetComponent); err != nil {
 		if errors.Is(err, chaos.ErrPartitionAlreadyActive) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
