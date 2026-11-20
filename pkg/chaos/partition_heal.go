@@ -108,13 +108,23 @@ func HealPartitions(ctx context.Context, client kubernetes.Interface, namespace 
 
 	healed := make([]ActivePartition, 0, len(active))
 	for _, part := range active {
-		scenario := &PartitionScenario{Client: client, Scenario: part.Scenario}
-		if err := scenario.Revert(ctx, namespace, deployer.DeploymentDesign{}, ""); err != nil {
+		if err := revertActiveChaos(ctx, client, namespace, part); err != nil {
 			return healed, err
 		}
 		healed = append(healed, part)
 	}
 	return healed, nil
+}
+
+func revertActiveChaos(ctx context.Context, client kubernetes.Interface, namespace string, part ActivePartition) error {
+	switch part.Scenario {
+	case scenarioPauseConsumers:
+		s := &PauseConsumersScenario{Client: client}
+		return s.Revert(ctx, namespace, deployer.DeploymentDesign{}, part.TargetComponent)
+	default:
+		scenario := &PartitionScenario{Client: client, Scenario: part.Scenario}
+		return scenario.Revert(ctx, namespace, deployer.DeploymentDesign{}, "")
+	}
 }
 
 // ExpireDuePartitions heals partitions whose expires-at is in the past.
@@ -139,8 +149,7 @@ func ExpireDuePartitions(ctx context.Context, client kubernetes.Interface, names
 
 	healed := make([]ActivePartition, 0, len(due))
 	for _, part := range due {
-		scenario := &PartitionScenario{Client: client, Scenario: part.Scenario}
-		if err := scenario.Revert(ctx, namespace, deployer.DeploymentDesign{}, ""); err != nil {
+		if err := revertActiveChaos(ctx, client, namespace, part); err != nil {
 			return healed, err
 		}
 		healed = append(healed, part)
