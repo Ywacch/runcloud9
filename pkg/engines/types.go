@@ -9,7 +9,7 @@ const (
 )
 
 // CatalogVersion bumps when the served JSON shape or semantics change.
-const CatalogVersion = "3"
+const CatalogVersion = "4"
 
 // Fit describes how naturally an engine serves a job.
 type Fit string
@@ -41,6 +41,7 @@ type Shape struct {
 type Job struct {
 	ID        string   `json:"id" yaml:"id"`
 	Label     string   `json:"label" yaml:"label"`
+	Component string   `json:"component" yaml:"component"`
 	Ops       []string `json:"ops,omitempty" yaml:"ops,omitempty"`
 	OpMetrics []string `json:"opMetrics,omitempty" yaml:"opMetrics,omitempty"`
 }

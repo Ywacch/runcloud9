@@ -13,6 +13,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/diagnostics"
 	"github.com/ywacch/cloud9/pkg/metrics"
 	"github.com/ywacch/cloud9/pkg/store"
+	"github.com/ywacch/cloud9/pkg/templates"
 )
 
 // provisionOrchestrationTimeout is how long Deploy/seed may run once a doorway
@@ -187,6 +188,13 @@ func (h *Handler) runBackgroundProvision(
 	}
 	if h.metricsCollector != nil {
 		topo := MetricsTopologyFromDeploymentDesign(&design, design.Template)
+		if tmpl := templates.GetTemplate(design.Template); tmpl != nil {
+			if placement, err := deployer.ResolvePlacement(design, tmpl); err != nil {
+				log.Printf("placement resolve failed for namespace=%s: %v", namespace, err)
+			} else {
+				h.metricsCollector.SetPlacement(namespace, placement)
+			}
+		}
 		if h.store != nil {
 			row, err := h.store.GetDeployment(context.Background(), namespace)
 			if err == nil && row.RunRole != nil && *row.RunRole != "" {

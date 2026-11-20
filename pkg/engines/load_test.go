@@ -12,6 +12,7 @@ func validTestFS(t *testing.T) fstest.MapFS {
 		"data/jobs.yaml": &fstest.MapFile{
 			Data: []byte(`- id: main_db
   label: Main database
+  component: db
 `),
 		},
 		"data/engines.yaml": &fstest.MapFile{

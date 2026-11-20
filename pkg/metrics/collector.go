@@ -19,6 +19,7 @@ import (
 	metricshub "github.com/ywacch/cloud9/pkg/metrics/hub"
 	"github.com/ywacch/cloud9/pkg/metrics/sidework"
 	"github.com/ywacch/cloud9/pkg/metrics/signals"
+	"github.com/ywacch/cloud9/pkg/placement"
 	"github.com/ywacch/cloud9/pkg/probes"
 	"github.com/ywacch/cloud9/pkg/templates"
 	"golang.org/x/sync/singleflight"
@@ -80,6 +81,8 @@ type MetricsCollector struct {
 	scaleDesired            map[string]map[string]int32 // namespace → component → last HPA desired
 	scaleLagMu              sync.Mutex
 	scaleLag                map[string]scaleLagState
+	placementMu             sync.RWMutex
+	placementByNS           map[string]placement.Topology
 	publisherCollectHook    func(ctx context.Context, namespace, template string, topo TopologyFlags) (*DeploymentMetrics, error) // tests only
 	replSQLMu               sync.Mutex
 	replSQLCache            map[string]replSQLCacheEntry // key = namespace
@@ -132,6 +135,36 @@ func NewMetricsCollector(prometheusURL string, lg loadgen.LoadGenerator, clients
 	}
 	initSideWork(c)
 	return c
+}
+
+// SetPlacement stores the resolved placement for a live deployment namespace.
+func (c *MetricsCollector) SetPlacement(namespace string, topo placement.Topology) {
+	if c == nil || namespace == "" {
+		return
+	}
+	c.placementMu.Lock()
+	if c.placementByNS == nil {
+		c.placementByNS = make(map[string]placement.Topology)
+	}
+	c.placementByNS[namespace] = topo
+	c.placementMu.Unlock()
+}
+
+func (c *MetricsCollector) placementForNamespace(namespace string) *placement.Topology {
+	if c == nil || namespace == "" {
+		return nil
+	}
+	c.placementMu.RLock()
+	defer c.placementMu.RUnlock()
+	if c.placementByNS == nil {
+		return nil
+	}
+	topo, ok := c.placementByNS[namespace]
+	if !ok {
+		return nil
+	}
+	out := topo
+	return &out
 }
 
 // SetDebugMetrics enables/disables per-tick metric source comparison logs.
@@ -244,6 +277,11 @@ func (c *MetricsCollector) Cleanup(namespace string) {
 	}
 	c.scaleLagMu.Unlock()
 	c.clearRunInfo(namespace)
+	c.placementMu.Lock()
+	if c.placementByNS != nil {
+		delete(c.placementByNS, namespace)
+	}
+	c.placementMu.Unlock()
 	c.OpenPostgresSession(namespace)
 }
 
@@ -1426,5 +1464,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 
 	c.copyRunInfoOnto(dm)
 
+	if p := c.placementForNamespace(namespace); p != nil {
+		dm.Placement = p
+	}
 	return dm, nil
 }
