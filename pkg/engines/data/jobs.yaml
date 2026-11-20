@@ -1,12 +1,16 @@
 - id: main_db
   label: Main database
+  component: db
 - id: hot_cache
   label: Hot cache
+  component: cache
 - id: timeline
   label: Timeline
+  component: cache
   ops:
     - append
     - range
     - trim
 - id: work_queue
   label: Work queue
+  component: mq

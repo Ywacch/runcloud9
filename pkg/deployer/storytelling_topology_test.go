@@ -9,9 +9,9 @@ func TestStorytellingTopologyFromDesign(t *testing.T) {
 	d := &DeploymentDesign{
 		Template: "social-feed",
 		Nodes: []DeploymentNode{
-			{Type: "load_balancer"},
+			{Type: "lb"},
 			{Type: "cache", Config: map[string]interface{}{"strategy": "timeline-store"}},
-			{Type: "message_queue"},
+			{Type: "mq"},
 		},
 	}
 	got := StorytellingTopologyFromDesign(d, "")
@@ -140,5 +140,41 @@ func TestStorytellingTopologyFromDesign_RedisOnlyPrimary(t *testing.T) {
 	got := StorytellingTopologyFromDesign(d, "")
 	if got.HasDB || got.CacheRole != "primary" {
 		t.Fatalf("want redis primary: %+v", got)
+	}
+}
+
+func TestStorytellingTopology_HasLB(t *testing.T) {
+	t.Parallel()
+	d := &DeploymentDesign{
+		Template: "ecommerce",
+		Nodes:    []DeploymentNode{{Type: "lb"}},
+	}
+	got := StorytellingTopologyFromDesign(d, "ecommerce")
+	if !got.HasLB {
+		t.Fatal("expected HasLB for lb node type")
+	}
+}
+
+func TestStorytellingTopology_HasMQRedisQueue(t *testing.T) {
+	t.Parallel()
+	design, ok := LayoutDesign("social-feed-wq-dedicated")
+	if !ok {
+		t.Fatal("layout")
+	}
+	got := StorytellingTopologyFromDesign(&design, design.Template)
+	if !got.HasMQ {
+		t.Fatal("redis work_queue binding should set HasMQ")
+	}
+}
+
+func TestStorytellingTopology_CacheEngineFromAlias(t *testing.T) {
+	t.Parallel()
+	design, ok := LayoutDesign("ecommerce-hc-mc-wq-redis")
+	if !ok {
+		t.Fatal("layout")
+	}
+	got := StorytellingTopologyFromDesign(&design, design.Template)
+	if got.CacheEngine != "memcached" {
+		t.Fatalf("CacheEngine: want memcached, got %q", got.CacheEngine)
 	}
 }

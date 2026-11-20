@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"regexp"
 	"strings"
 	"sync"
 
 	"gopkg.in/yaml.v3"
 )
+
+var jobComponentRE = regexp.MustCompile(`^[a-z][a-z-]*$`)
 
 //go:embed data/jobs.yaml data/engines.yaml data/pairs.yaml data/guarantees/*.yaml
 var embeddedData embed.FS
@@ -39,6 +42,16 @@ func (c *Catalog) Pair(job, engine string) (Pair, bool) {
 		}
 	}
 	return Pair{}, false
+}
+
+// JobByID returns the job entry, or false.
+func (c *Catalog) JobByID(id string) (Job, bool) {
+	for _, j := range c.Jobs {
+		if j.ID == id {
+			return j, true
+		}
+	}
+	return Job{}, false
 }
 
 // EngineByID returns the engine entry, or false.
@@ -141,6 +154,12 @@ func validate(c *Catalog) error {
 			return fmt.Errorf("engines: duplicate job id %q", j.ID)
 		}
 		jobIDs[j.ID] = struct{}{}
+		if strings.TrimSpace(j.Component) == "" {
+			return fmt.Errorf("engines: job %q: missing component", j.ID)
+		}
+		if !jobComponentRE.MatchString(j.Component) {
+			return fmt.Errorf("engines: job %q: bad component %q", j.ID, j.Component)
+		}
 	}
 
 	engineIDs := make(map[string]struct{}, len(c.Engines))

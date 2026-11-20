@@ -293,7 +293,7 @@ func (s *DeploymentStore) UpdateExpiresAt(ctx context.Context, namespace string,
 func (s *DeploymentStore) GetStaleDeployments(ctx context.Context) ([]DeploymentRow, error) {
 	s.observe("get_stale_deployments")
 	data, _, err := s.client.From("cloud_deployments").
-		Select("id,namespace,template,archetype,status,expires_at,created_at", "exact", false).
+		Select("id,namespace,template,archetype,status,design,expires_at,created_at", "exact", false).
 		In("status", []string{"running", "provisioning"}).
 		Execute()
 	if err != nil {

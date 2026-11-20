@@ -368,6 +368,14 @@ func (h *Handler) handleGetDeployment(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if len(parsedDesign.Nodes) > 0 {
+		if tmpl := templates.GetTemplate(row.Template); tmpl != nil {
+			if placement, err := deployer.ResolvePlacement(parsedDesign, tmpl); err == nil {
+				resp["placement"] = placement
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }

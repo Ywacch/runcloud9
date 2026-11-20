@@ -5,6 +5,7 @@ import (
 
 	"github.com/ywacch/cloud9/pkg/loadgen"
 	"github.com/ywacch/cloud9/pkg/phenomena"
+	"github.com/ywacch/cloud9/pkg/placement"
 )
 
 // DeploymentMetrics is the payload sent to the frontend every 2s.
@@ -28,6 +29,8 @@ type DeploymentMetrics struct {
 	CollectPending bool `json:"collectPending,omitempty"`
 	// Timeline carries shared timeline job op metrics (append/range latency, errors).
 	Timeline *TimelineOps `json:"timeline,omitempty"`
+	// Placement is the resolved job-to-node topology for this deployment.
+	Placement *placement.Topology `json:"placement,omitempty"`
 }
 
 // TimelineOps summarizes instrumented timeline store operations for the inspector.

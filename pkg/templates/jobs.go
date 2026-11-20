@@ -44,6 +44,7 @@ func resolveJobRequirements(def *templateDef, cat *engines.Catalog) ([]JobRequir
 
 func validateJobRequirements(templateID string, reqs []JobRequirement, cat *engines.Catalog) error {
 	seen := make(map[string]struct{}, len(reqs))
+	byComponent := make(map[string]string)
 	for _, req := range reqs {
 		if req.ID == "" {
 			return fmt.Errorf("template %q: job requirement missing id", templateID)
@@ -56,6 +57,14 @@ func validateJobRequirements(templateID string, reqs []JobRequirement, cat *engi
 		if !catalogHasJob(cat, req.ID) {
 			return fmt.Errorf("template %q: unknown job id %q", templateID, req.ID)
 		}
+		job, ok := cat.JobByID(req.ID)
+		if !ok {
+			return fmt.Errorf("template %q: unknown job id %q", templateID, req.ID)
+		}
+		if other, dup := byComponent[job.Component]; dup {
+			return fmt.Errorf("template %q: jobs %q and %q share component %q", templateID, other, req.ID, job.Component)
+		}
+		byComponent[job.Component] = req.ID
 		if len(req.AllowedEngines) == 0 {
 			return fmt.Errorf("template %q: job %q: allowedEngines is required", templateID, req.ID)
 		}

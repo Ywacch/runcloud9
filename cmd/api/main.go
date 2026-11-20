@@ -198,7 +198,18 @@ func recoverDeployments(ctx context.Context, s api.HandlerDeploymentStore, sched
 			sched.Schedule(row.Namespace, row.ExpiresAt)
 		}
 		if col != nil && row.Status == "running" {
-			col.EnsurePublisher(row.Namespace, row.Template, metrics.TopologyFlags{})
+			topo := metrics.TopologyFlags{}
+			if row.Design != nil {
+				if design, err := deployer.DesignFromMap(row.Design); err == nil {
+					topo = api.MetricsTopologyFromDeploymentDesign(design, row.Template)
+					if tmpl := templates.GetTemplate(row.Template); tmpl != nil {
+						if placement, err := deployer.ResolvePlacement(*design, tmpl); err == nil {
+							col.SetPlacement(row.Namespace, placement)
+						}
+					}
+				}
+			}
+			col.EnsurePublisher(row.Namespace, row.Template, topo)
 		}
 		log.Printf("recovery: registered timer for %s", row.Namespace)
 	}
