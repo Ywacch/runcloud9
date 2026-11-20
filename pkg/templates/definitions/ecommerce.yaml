@@ -367,7 +367,6 @@ introspection:
     engine: redis
     keyPatterns: ["product:*", "cart:*", "catalog", "product-pool"]
   mq:
-    engine: rabbitmq
     queues: [orders]
 
 storytelling:

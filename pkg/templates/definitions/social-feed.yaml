@@ -443,7 +443,6 @@ introspection:
     engine: redis
     keyPatterns: ["timeline:*"]
   mq:
-    engine: rabbitmq
     queues: [fanout]
 
 storytelling:

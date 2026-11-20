@@ -90,6 +90,21 @@ func TestBuildAIContext_BaselineRunOnly(t *testing.T) {
 	}
 }
 
+func TestAIContext_IncludesPlacement(t *testing.T) {
+	t.Parallel()
+	ctx := BuildAIContext(aiContextTestInput())
+	if len(ctx.Runs) != 1 {
+		t.Fatalf("runs: %d", len(ctx.Runs))
+	}
+	pl := ctx.Runs[0].Placement
+	if pl == nil || len(pl.Nodes) == 0 {
+		t.Fatal("expected placement with nodes")
+	}
+	if _, ok := pl.JobByID("main_db"); !ok {
+		t.Fatal("expected main_db job in placement")
+	}
+}
+
 func TestBuildAIContext_RunRoleCandidate(t *testing.T) {
 	t.Parallel()
 

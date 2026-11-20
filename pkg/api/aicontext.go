@@ -6,13 +6,14 @@ import (
 
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/metrics"
+	"github.com/ywacch/cloud9/pkg/placement"
 	"github.com/ywacch/cloud9/pkg/rules"
 	"github.com/ywacch/cloud9/pkg/templateapp/trace"
 	"github.com/ywacch/cloud9/pkg/templates"
 )
 
 // AIContextSchemaVersion is the current ai-context JSON contract version.
-const AIContextSchemaVersion = 1
+const AIContextSchemaVersion = 2
 
 const (
 	RunRoleBaseline  = "baseline"
@@ -32,6 +33,7 @@ type AIContext struct {
 type Run struct {
 	Role               string                     `json:"role"`
 	DesignConfig       deployer.DesignConfig      `json:"designConfig"`
+	Placement          *placement.Topology        `json:"placement,omitempty"`
 	Facts              []metrics.Fact             `json:"facts"`
 	Descriptors        []metrics.SignalDescriptor `json:"descriptors"`
 	ComponentInternals metrics.ComponentInternals `json:"componentInternals"`
@@ -86,6 +88,8 @@ func BuildAIContext(in AIContextInput) AIContext {
 		runRole = final.RunRole
 	}
 
+	pl := placementForAIContext(in)
+
 	return AIContext{
 		SchemaVersion:  AIContextSchemaVersion,
 		CatalogVersion: rules.CatalogVersion,
@@ -93,6 +97,7 @@ func BuildAIContext(in AIContextInput) AIContext {
 		Runs: []Run{{
 			Role:               runRole,
 			DesignConfig:       in.DesignConfig,
+			Placement:          pl,
 			Facts:              facts,
 			Descriptors:        metrics.BuildDescriptors(internals),
 			ComponentInternals: internals,
@@ -152,6 +157,20 @@ func SessionHistoryFromSummary(summary map[string]any) ([]metrics.DeploymentMetr
 		return nil, fmt.Errorf("unmarshal session_history: %w", err)
 	}
 	return hist, nil
+}
+
+func placementForAIContext(in AIContextInput) *placement.Topology {
+	if in.Final != nil && in.Final.Placement != nil {
+		return in.Final.Placement
+	}
+	if in.Design == nil || in.Template == nil {
+		return nil
+	}
+	topo, err := deployer.ResolvePlacement(*in.Design, in.Template)
+	if err != nil {
+		return nil
+	}
+	return &topo
 }
 
 func finalSnapshot(hist []metrics.DeploymentMetrics, latest *metrics.DeploymentMetrics) *metrics.DeploymentMetrics {

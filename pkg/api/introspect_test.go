@@ -155,14 +155,14 @@ func TestValidateIntrospectAction_KeysStarForbiddenWhenNotWhitelisted(t *testing
 
 func TestResolveIntrospectHost_RabbitMQ(t *testing.T) {
 	t.Parallel()
-	host, err := resolveIntrospectHost(context.Background(), "rabbitmq", "mq", "ns1", "primary", "", nil, nil)
+	host, _, err := resolveIntrospectHost(context.Background(), "rabbitmq", "mq", "ns1", "primary", "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
 	if host != "mq.ns1.svc.cluster.local" {
 		t.Fatalf("host=%q", host)
 	}
-	if _, err := resolveIntrospectHost(context.Background(), "rabbitmq", "cache", "ns1", "primary", "", nil, nil); err == nil {
+	if _, _, err := resolveIntrospectHost(context.Background(), "rabbitmq", "cache", "ns1", "primary", "", nil, nil, nil); err == nil {
 		t.Fatal("expected error for non-mq component")
 	}
 }
@@ -298,7 +298,7 @@ func TestResolveIntrospectHost_TargetReplica(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			host, err := resolveIntrospectHost(context.Background(), tc.engine, tc.component, tc.namespace, tc.target, "", tc.design, nil)
+			host, _, err := resolveIntrospectHost(context.Background(), tc.engine, tc.component, tc.namespace, tc.target, "", tc.design, nil, nil)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("expected error")
@@ -339,7 +339,7 @@ func TestResolveIntrospectHost_ReplicaLayerID(t *testing.T) {
 	}
 	clientset := fake.NewSimpleClientset(pod)
 
-	host, err := resolveIntrospectHost(ctx, "postgres", "db", "ns-layer", "replica", "postgres-replica-roll", design, clientset)
+	host, _, err := resolveIntrospectHost(ctx, "postgres", "db", "ns-layer", "replica", "postgres-replica-roll", design, clientset, nil)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestResolveIntrospectHost_ReplicaLayerID(t *testing.T) {
 		t.Fatalf("host=%q want pod IP", host)
 	}
 
-	if _, err := resolveIntrospectHost(ctx, "postgres", "db", "ns-layer", "primary", "postgres-replica-roll", design, clientset); err == nil {
+	if _, _, err := resolveIntrospectHost(ctx, "postgres", "db", "ns-layer", "primary", "postgres-replica-roll", design, clientset, nil); err == nil {
 		t.Fatal("expected error when layerId is set on primary target")
 	}
 }

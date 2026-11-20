@@ -16,12 +16,12 @@ var semanticComponentTypes = []string{
 const (
 	msgSingletonAppServer = "only one app-server node is supported (found {count}) — scale with replicas on a single app-server instead of placing multiple nodes"
 	msgSingletonWorker    = "only one worker node is supported (found {count}) — scale with replicas on a single worker instead of placing multiple nodes"
-	msgSingletonCache     = "only one cache node is supported (found {count}) — remove extra cache nodes; the platform provisions a single Redis service"
+	msgSingletonCache     = "only one cache node is supported (found {count}) — remove extra cache nodes; the platform provisions a single cache service"
 	msgSingletonDB        = "only one db node is supported (found {count}) — remove extra database nodes; the platform provisions a single Postgres service"
 	msgSingletonMQ        = "only one mq node is supported (found {count}) — remove extra message queue nodes; the platform provisions a single queue service"
 
 	msgPresenceMissingAppServer = "Add an App Server — live sessions need something to receive traffic"
-	msgPresenceCacheWithoutDB   = "A cache node is present but no database — clarify whether Redis is your primary store or add a database; " +
+	msgPresenceCacheWithoutDB   = "A cache node is present but no database — clarify whether the cache is your primary store or add a database; " +
 		"for now this topology is rejected"
 	msgPresenceWorkerWithoutMQ = "Workers consume from message queues — add a message queue to the design"
 	msgPresenceMQWithoutWorker = "Message queue has no consumer — add a worker node"
