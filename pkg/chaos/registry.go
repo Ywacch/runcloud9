@@ -124,6 +124,22 @@ var scenarioRegistry = []scenarioRegistration{
 			return &KillReplicaScenario{Client: client}
 		},
 	},
+	{
+		scenario: scenarioPauseConsumers,
+		engine:   "rabbitmq",
+		targets:  []string{"mq"},
+		new: func(client kubernetes.Interface) ChaosScenario {
+			return &PauseConsumersScenario{Client: client}
+		},
+	},
+	{
+		scenario: scenarioPauseConsumers,
+		engine:   "redis",
+		targets:  []string{"mq"},
+		new: func(client kubernetes.Interface) ChaosScenario {
+			return &PauseConsumersScenario{Client: client}
+		},
+	},
 }
 
 // Resolve constructs a scenario for the given name, target component, and deployment design.
@@ -147,6 +163,9 @@ func Resolve(name string, targetComponent string, design deployer.DeploymentDesi
 	}
 	if client == nil {
 		return nil, fmt.Errorf("chaos: kubernetes client is required")
+	}
+	if err := pairAllowsScenario(name, targetComponent, design); err != nil {
+		return nil, err
 	}
 	return reg.new(client), nil
 }
@@ -189,6 +208,16 @@ func engineForTarget(targetComponent string, design deployer.DeploymentDesign) s
 		return normalizeDBEngine(topo.DBEngine)
 	case "cache":
 		return topo.CacheEngine
+	case "mq":
+		if design.ResolvedPlacement != nil {
+			if node, ok := design.ResolvedPlacement.NodeForComponent("mq"); ok && node.Engine != "" {
+				return node.Engine
+			}
+			if j, ok := design.ResolvedPlacement.JobByID("work_queue"); ok {
+				return j.Engine
+			}
+		}
+		return ""
 	default:
 		return ""
 	}

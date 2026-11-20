@@ -25,12 +25,20 @@ func (s *CacheFlushScenario) Apply(ctx context.Context, namespace string, design
 	}
 
 	topo := deployer.StorytellingTopologyFromDesign(&design, design.Template)
-	cmd, err := cacheFlushCommand(topo.CacheEngine)
-	if errors.Is(err, errMemcachedFlushDial) {
+	engine := topo.CacheEngine
+	var cmd []string
+	var cmdErr error
+	if engine == "redis" && cacheNodeSharesWorkQueue(design, targetComponent) {
+		patterns := cacheIntrospectionKeyPatterns(design)
+		cmd, cmdErr = redisCLISelectiveFlushArgv(patterns)
+	} else {
+		cmd, cmdErr = cacheFlushCommand(engine)
+	}
+	if errors.Is(cmdErr, errMemcachedFlushDial) {
 		return flushMemcached(ctx, namespace)
 	}
-	if err != nil {
-		return err
+	if cmdErr != nil {
+		return cmdErr
 	}
 
 	resolved, err := resolveTarget(targetComponent, design)

@@ -113,6 +113,7 @@
   introspect: queues
   chaos:
     - pod_kill
+    - pause_consumers
   signals:
     - field: queueDepth
       concept: consumer_lag
@@ -148,6 +149,7 @@
   introspect: stream_peek
   chaos:
     - pod_kill
+    - pause_consumers
   signals:
     - field: queueDepth
       availability: not_built
