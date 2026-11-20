@@ -160,6 +160,11 @@ func validate(c *Catalog) error {
 		if !jobComponentRE.MatchString(j.Component) {
 			return fmt.Errorf("engines: job %q: bad component %q", j.ID, j.Component)
 		}
+		for _, need := range j.Needs {
+			if _, ok := validJobNeeds[need]; !ok {
+				return fmt.Errorf("engines: job %q: unknown need %q", j.ID, need)
+			}
+		}
 	}
 
 	engineIDs := make(map[string]struct{}, len(c.Engines))
@@ -198,6 +203,20 @@ func validate(c *Catalog) error {
 		}
 		if p.Fit == FitPoor && p.Demo == nil {
 			return fmt.Errorf("engines: pair %s/%s: poor fit requires failureDemo", p.Job, p.Engine)
+		}
+		if p.Introspect == "" {
+			return fmt.Errorf("engines: pair %s/%s: missing introspect", p.Job, p.Engine)
+		}
+		if _, ok := validIntrospect[p.Introspect]; !ok {
+			return fmt.Errorf("engines: pair %s/%s: bad introspect %q", p.Job, p.Engine, p.Introspect)
+		}
+		if len(p.Chaos) == 0 {
+			return fmt.Errorf("engines: pair %s/%s: missing chaos list", p.Job, p.Engine)
+		}
+		for _, s := range p.Signals {
+			if err := ValidatePairSignalMeta(s); err != nil {
+				return fmt.Errorf("engines: pair %s/%s signal %q: %w", p.Job, p.Engine, s.Field, err)
+			}
 		}
 	}
 
