@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ywacch/cloud9/pkg/deployer"
+	"github.com/ywacch/cloud9/pkg/templates"
 )
 
 func TestResolveTarget(t *testing.T) {
@@ -90,5 +91,58 @@ func TestResolveTarget(t *testing.T) {
 				t.Fatalf("got %+v want app=%s container=%s", got, tt.wantApp, tt.wantCont)
 			}
 		})
+	}
+}
+
+func TestResolveTarget_DedicatedQueue(t *testing.T) {
+	t.Parallel()
+	tmpl := templates.GetTemplate("ecommerce")
+	if tmpl == nil {
+		t.Fatal("template")
+	}
+	design, ok := deployer.LayoutDesign("ecommerce-wq-dedicated")
+	if !ok {
+		t.Fatal("layout")
+	}
+	topo, err := deployer.ResolvePlacement(design, tmpl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	design.ResolvedPlacement = &topo
+
+	got, err := resolveTarget("mq", design)
+	if err != nil {
+		t.Fatalf("resolveTarget: %v", err)
+	}
+	if got.AppLabel != "work-queue" {
+		t.Fatalf("app label: got %q want work-queue", got.AppLabel)
+	}
+	if got.Container != "redis" {
+		t.Fatalf("container: got %q want redis (cache-aside pod)", got.Container)
+	}
+}
+
+func TestResolveTarget_PlacementSharedRedisCache(t *testing.T) {
+	t.Parallel()
+	tmpl := templates.GetTemplate("social-feed")
+	if tmpl == nil {
+		t.Fatal("template")
+	}
+	design, ok := deployer.LayoutDesign("social-feed-wq-share")
+	if !ok {
+		t.Fatal("layout")
+	}
+	topo, err := deployer.ResolvePlacement(design, tmpl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	design.ResolvedPlacement = &topo
+
+	got, err := resolveTarget("cache", design)
+	if err != nil {
+		t.Fatalf("resolveTarget: %v", err)
+	}
+	if got.AppLabel != "redis" || got.Container != "redis" {
+		t.Fatalf("got %+v", got)
 	}
 }

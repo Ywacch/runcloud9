@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"time"
+
+	"github.com/ywacch/cloud9/pkg/placement"
 )
 
 type DeploymentDesign struct {
@@ -14,6 +16,10 @@ type DeploymentDesign struct {
 	Connections    []DeploymentConn  `json:"connections"`
 	SessionMinutes *int              `json:"sessionMinutes,omitempty"`
 	JobBindings    map[string]string `json:"jobBindings,omitempty"` // job id -> node id
+	// ResolvedPlacement is set at request time for chaos and introspect. It is not persisted.
+	ResolvedPlacement *placement.Topology `json:"-"`
+	// ChaosTargetNodeID optionally pins chaos to one canvas node.
+	ChaosTargetNodeID string `json:"-"`
 }
 
 type DeploymentNode struct {
