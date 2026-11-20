@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
       id-token: write
     env:
       PROJECT_ID: runcloud9-514803
@@ -127,15 +128,15 @@ jobs:
           kubectl set env deployment/"$DEPLOYMENT_NAME" VERIFY_TEMPLATE_IMAGES- -n "$NAMESPACE"
           kubectl rollout status deployment/"$DEPLOYMENT_NAME" -n "$NAMESPACE" --timeout=300s
 
-      - name: Commit template image tags
+      - name: Open PR for template image tags
         if: steps.templates.outputs.count != '0'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add config/image-versions.json
-          if git diff --cached --quiet; then
-            echo "image-versions.json already matches this commit"
-            exit 0
-          fi
-          git commit -m "chore: bump template image tags [skip ci]"
-          git push origin HEAD:main
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "chore: bump template image tags"
+          title: "chore: bump template image tags"
+          body: |
+            Updates `config/image-versions.json` after the deploy workflow rebuilt template images.
+          branch: chore/deploy-image-tags-${{ github.run_id }}
+          delete-branch: true
+          add-paths: |
+            config/image-versions.json
