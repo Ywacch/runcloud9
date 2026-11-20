@@ -13,6 +13,7 @@ import (
 	"github.com/ywacch/cloud9/pkg/deployer"
 	"github.com/ywacch/cloud9/pkg/logs"
 	"github.com/ywacch/cloud9/pkg/metrics"
+	"github.com/ywacch/cloud9/pkg/placement"
 	"github.com/ywacch/cloud9/pkg/store"
 )
 
@@ -160,14 +161,14 @@ func (h *Handler) writeMetricsSSEFrame(w http.ResponseWriter, dm *metrics.Deploy
 	_ = writeSSEEvent(w, id, payload)
 }
 
-func (h *Handler) streamLogsSSE(w http.ResponseWriter, r *http.Request, namespace string) {
+func (h *Handler) streamLogsSSE(w http.ResponseWriter, r *http.Request, namespace string, topo *placement.Topology) {
 	if _, ok := w.(http.Flusher); !ok {
 		writeError(w, http.StatusInternalServerError, "sse flush unsupported")
 		return
 	}
 	writeSSEHeaders(w)
 	sink := &logsSSELineSink{w: w}
-	logs.StreamWithSink(r.Context(), sink, h.clientset, namespace, sseLogsPingInterval)
+	logs.StreamWithSink(r.Context(), sink, h.clientset, namespace, sseLogsPingInterval, topo)
 }
 
 type logsSSELineSink struct {
@@ -208,7 +209,7 @@ func (h *Handler) streamMetricsWebSocket(w http.ResponseWriter, r *http.Request,
 }
 
 // streamLogsWebSocket upgrades and streams logs over WebSocket.
-func (h *Handler) streamLogsWebSocket(w http.ResponseWriter, r *http.Request, namespace string) {
+func (h *Handler) streamLogsWebSocket(w http.ResponseWriter, r *http.Request, namespace string, topo *placement.Topology) {
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("log ws upgrade failed: %v", err)
@@ -216,5 +217,5 @@ func (h *Handler) streamLogsWebSocket(w http.ResponseWriter, r *http.Request, na
 	}
 	ctx, cancel := cancelWhenSocketCloses(r.Context(), conn)
 	defer cancel()
-	logs.StreamLogs(ctx, conn, h.clientset, namespace)
+	logs.StreamLogs(ctx, conn, h.clientset, namespace, topo)
 }

@@ -25,7 +25,7 @@ func TestDiscoverPodLogStreams_CacheAside(t *testing.T) {
 		},
 	)
 
-	streams := discoverPodLogStreams(context.Background(), client, "ns1")
+	streams := discoverPodLogStreams(context.Background(), client, "ns1", nil)
 	if len(streams) == 0 {
 		t.Fatal("expected at least one stream")
 	}
@@ -52,7 +52,7 @@ func TestDiscoverPodLogStreams_Memcached(t *testing.T) {
 			},
 		},
 	)
-	streams := discoverPodLogStreams(context.Background(), client, "ns1")
+	streams := discoverPodLogStreams(context.Background(), client, "ns1", nil)
 	found := false
 	for _, s := range streams {
 		if s.component == "cache" && s.podName == "memcached-1" && s.containerName == "memcached" {
@@ -82,7 +82,7 @@ func TestDiscoverPodLogStreams_ProxyCacheTargets(t *testing.T) {
 		},
 	)
 
-	streams := discoverPodLogStreams(context.Background(), client, "ns1")
+	streams := discoverPodLogStreams(context.Background(), client, "ns1", nil)
 	if len(streams) == 0 {
 		t.Fatal("expected at least one stream")
 	}
@@ -122,7 +122,7 @@ func TestDiscoverPodLogStreams_DeduplicatesPodContainer(t *testing.T) {
 		},
 	)
 
-	streams := discoverPodLogStreams(context.Background(), client, "ns1")
+	streams := discoverPodLogStreams(context.Background(), client, "ns1", nil)
 	if len(streams) != 1 {
 		t.Fatalf("expected one deduplicated stream, got %d (%+v)", len(streams), streams)
 	}
@@ -146,7 +146,7 @@ func TestDiscoverPodLogStreams_PostgresPrimaryAndReplica(t *testing.T) {
 		},
 	)
 
-	streams := discoverPodLogStreams(context.Background(), client, "ns1")
+	streams := discoverPodLogStreams(context.Background(), client, "ns1", nil)
 	foundPrimary := false
 	foundReplica := false
 	for _, s := range streams {
@@ -173,7 +173,7 @@ func TestParseLine_setsPod(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := parseLine(tc.line, tc.component, tc.pod)
+			got := parseLine(tc.line, tc.component, "", tc.pod)
 			if got.Pod != tc.pod {
 				t.Fatalf("Pod = %q want %q", got.Pod, tc.pod)
 			}
@@ -194,17 +194,17 @@ func TestPodLogStreamKey(t *testing.T) {
 		{
 			name:   "primary postgres",
 			stream: podLogStream{component: "db", podName: "postgres-abc", containerName: "postgres"},
-			want:   "db|postgres-abc|postgres",
+			want:   "db||postgres-abc|postgres",
 		},
 		{
 			name:   "replica postgres",
 			stream: podLogStream{component: "db", podName: "postgres-replica-0", containerName: "postgres-replica"},
-			want:   "db|postgres-replica-0|postgres-replica",
+			want:   "db||postgres-replica-0|postgres-replica",
 		},
 		{
 			name:   "cache redis",
 			stream: podLogStream{component: "cache", podName: "redis-1", containerName: "redis"},
-			want:   "cache|redis-1|redis",
+			want:   "cache||redis-1|redis",
 		},
 	}
 	for _, tc := range tests {
@@ -279,7 +279,7 @@ func TestStreamLogs_ClientClose_Stops(t *testing.T) {
 		}
 		defer conn.Close()
 		defer close(done)
-		StreamLogs(parent, conn, fake.NewSimpleClientset(), "ns1")
+		StreamLogs(parent, conn, fake.NewSimpleClientset(), "ns1", nil)
 	}))
 	defer srv.Close()
 
