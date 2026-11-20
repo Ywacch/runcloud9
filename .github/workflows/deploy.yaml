@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
       id-token: write
     env:
       PROJECT_ID: runcloud9-514803
@@ -131,8 +132,8 @@ jobs:
         if: steps.templates.outputs.count != '0'
         uses: peter-evans/create-pull-request@v7
         with:
-          commit-message: chore: bump template image tags
-          title: chore: bump template image tags
+          commit-message: "chore: bump template image tags"
+          title: "chore: bump template image tags"
           body: |
             Updates `config/image-versions.json` after the deploy workflow rebuilt template images.
           branch: chore/deploy-image-tags-${{ github.run_id }}
