@@ -419,8 +419,13 @@ func (h *Handler) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing deployment id")
 		return
 	}
-	if h.requireOwnership(w, r, namespace) == nil {
+	row := h.requireOwnership(w, r, namespace)
+	if row == nil {
 		return
+	}
+	topo := placementFromDeploymentRow(row)
+	if dm := h.latestMetrics(namespace); dm != nil && dm.Placement != nil {
+		topo = dm.Placement
 	}
 
 	// UNDERSTAND: if clientset is nil (local dev without K8s),
@@ -435,7 +440,7 @@ func (h *Handler) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 			h.cpMetrics.incStreamConnection("sse", "logs")
 			defer h.cpMetrics.decStreamConnection("sse", "logs")
 		}
-		h.streamLogsSSE(w, r, namespace)
+		h.streamLogsSSE(w, r, namespace, topo)
 		return
 	}
 
@@ -443,7 +448,7 @@ func (h *Handler) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 		h.cpMetrics.incStreamConnection("ws", "logs")
 		defer h.cpMetrics.decStreamConnection("ws", "logs")
 	}
-	h.streamLogsWebSocket(w, r, namespace)
+	h.streamLogsWebSocket(w, r, namespace, topo)
 }
 
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {

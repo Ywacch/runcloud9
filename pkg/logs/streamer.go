@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/ywacch/cloud9/pkg/placement"
 	"github.com/ywacch/cloud9/pkg/wskeepalive"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -31,12 +31,13 @@ type componentLogTarget struct {
 
 type podLogStream struct {
 	component     string
+	nodeID        string
 	podName       string
 	containerName string
 }
 
 func (s podLogStream) key() string {
-	return fmt.Sprintf("%s|%s|%s", s.component, s.podName, s.containerName)
+	return fmt.Sprintf("%s|%s|%s|%s", s.component, s.nodeID, s.podName, s.containerName)
 }
 
 // streamSet records which pod/container streams have already been started.
@@ -101,7 +102,7 @@ var componentLogTargets = map[string][]componentLogTarget{
 //
 // Discovery is repeated while ctx is active so pods that appear after connect
 // (Postgres replicas finishing init, late Redis) still get a follower.
-func StreamLogs(ctx context.Context, conn *websocket.Conn, clientset kubernetes.Interface, namespace string) {
+func StreamLogs(ctx context.Context, conn *websocket.Conn, clientset kubernetes.Interface, namespace string, topo *placement.Topology) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -109,16 +110,16 @@ func StreamLogs(ctx context.Context, conn *websocket.Conn, clientset kubernetes.
 	go runLogWebSocketReader(ctx, conn, cancel)
 	defer conn.Close()
 
-	_ = streamLogsCore(ctx, sink, clientset, namespace, wskeepalive.PingPeriod)
+	_ = streamLogsCore(ctx, sink, clientset, namespace, wskeepalive.PingPeriod, topo)
 }
 
 // StreamWithSink streams pod logs to sink until ctx is cancelled. The caller
 // owns response headers for SSE.
-func StreamWithSink(ctx context.Context, sink LineSink, clientset kubernetes.Interface, namespace string, pingInterval time.Duration) {
+func StreamWithSink(ctx context.Context, sink LineSink, clientset kubernetes.Interface, namespace string, pingInterval time.Duration, topo *placement.Topology) {
 	if pingInterval <= 0 {
 		pingInterval = wskeepalive.PingPeriod
 	}
-	_ = streamLogsCore(ctx, sink, clientset, namespace, pingInterval)
+	_ = streamLogsCore(ctx, sink, clientset, namespace, pingInterval, topo)
 }
 
 func runLogWebSocketReader(ctx context.Context, conn *websocket.Conn, cancel context.CancelFunc) {
@@ -141,7 +142,7 @@ func runLogWebSocketReader(ctx context.Context, conn *websocket.Conn, cancel con
 	}
 }
 
-func streamLogsCore(ctx context.Context, sink LineSink, clientset kubernetes.Interface, namespace string, pingInterval time.Duration) error {
+func streamLogsCore(ctx context.Context, sink LineSink, clientset kubernetes.Interface, namespace string, pingInterval time.Duration, topo *placement.Topology) error {
 	writeCh := make(chan LogLine, logBufferSize)
 
 	writerDone := make(chan struct{})
@@ -181,11 +182,11 @@ func streamLogsCore(ctx context.Context, sink LineSink, clientset kubernetes.Int
 				continue
 			}
 			s := stream
-			go streamPodLogs(ctx, clientset, namespace, s.podName, s.component, s.containerName, writeCh)
+			go streamPodLogs(ctx, clientset, namespace, s.podName, s.component, s.nodeID, s.containerName, writeCh)
 		}
 	}
 
-	startNew(discoverPodLogStreams(ctx, clientset, namespace))
+	startNew(discoverPodLogStreams(ctx, clientset, namespace, topo))
 
 	ticker := time.NewTicker(logRediscoverInterval)
 	defer ticker.Stop()
@@ -194,38 +195,9 @@ func streamLogsCore(ctx context.Context, sink LineSink, clientset kubernetes.Int
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			startNew(discoverPodLogStreams(ctx, clientset, namespace))
+			startNew(discoverPodLogStreams(ctx, clientset, namespace, topo))
 		}
 	}
-}
-
-func discoverPodLogStreams(ctx context.Context, clientset kubernetes.Interface, namespace string) []podLogStream {
-	streams := make([]podLogStream, 0, len(componentLogTargets))
-	seen := make(map[string]struct{})
-	for component, targets := range componentLogTargets {
-		for _, target := range targets {
-			pods, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
-				LabelSelector: target.labelSelector,
-			})
-			if err != nil || len(pods.Items) == 0 {
-				continue
-			}
-			for _, pod := range pods.Items {
-				stream := podLogStream{
-					component:     component,
-					podName:       pod.Name,
-					containerName: target.containerName,
-				}
-				key := stream.key()
-				if _, ok := seen[key]; ok {
-					continue
-				}
-				seen[key] = struct{}{}
-				streams = append(streams, stream)
-			}
-		}
-	}
-	return streams
 }
 
 // streamPodLogs streams logs from a single pod and parses each line into a LogLine.
@@ -236,13 +208,13 @@ func discoverPodLogStreams(ctx context.Context, clientset kubernetes.Interface, 
 //
 // GetLogs fails while an init container is still running. Retry until ctx is done
 // so db/cache streams start after replicas finish basebackup.
-func streamPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace, podName, component, containerName string, writeCh chan<- LogLine) {
+func streamPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace, podName, component, nodeID, containerName string, writeCh chan<- LogLine) {
 	needTail := true
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		opened, err := followPodLogs(ctx, clientset, namespace, podName, component, containerName, connectTailLines(needTail), writeCh)
+		opened, err := followPodLogs(ctx, clientset, namespace, podName, component, nodeID, containerName, connectTailLines(needTail), writeCh)
 		if opened {
 			needTail = false
 		}
@@ -264,7 +236,7 @@ func streamPodLogs(ctx context.Context, clientset kubernetes.Interface, namespac
 	}
 }
 
-func followPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace, podName, component, containerName string, tailLines *int64, writeCh chan<- LogLine) (opened bool, err error) {
+func followPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace, podName, component, nodeID, containerName string, tailLines *int64, writeCh chan<- LogLine) (opened bool, err error) {
 	req := clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
 		Container: containerName,
 		Follow:    true,
@@ -288,7 +260,7 @@ func followPodLogs(ctx context.Context, clientset kubernetes.Interface, namespac
 		}
 
 		line := scanner.Text()
-		logLine := parseLine(line, component, podName)
+		logLine := parseLine(line, component, nodeID, podName)
 
 		select {
 		case writeCh <- logLine:
@@ -306,11 +278,12 @@ func followPodLogs(ctx context.Context, clientset kubernetes.Interface, namespac
 // Falls back to a plain-text LogLine if parsing fails.
 // UNDERSTAND: app-server emits JSON (slog.NewJSONHandler). Postgres and Redis
 // emit plain text. We handle both gracefully.
-func parseLine(line, component, podName string) LogLine {
+func parseLine(line, component, nodeID, podName string) LogLine {
 	var parsed map[string]any
 	if err := json.Unmarshal([]byte(line), &parsed); err == nil {
 		ll := LogLine{
 			Component: component,
+			NodeID:    nodeID,
 			Pod:       podName,
 			Timestamp: time.Now(),
 			Level:     "info",
@@ -342,6 +315,7 @@ func parseLine(line, component, podName string) LogLine {
 	return LogLine{
 		Timestamp: time.Now(),
 		Component: component,
+		NodeID:    nodeID,
 		Pod:       podName,
 		Level:     "info",
 		Message:   line,
