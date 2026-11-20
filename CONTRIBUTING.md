@@ -280,7 +280,7 @@ Production source of truth is `config/image-versions.json` loaded via `IMAGE_VER
 2. `TEMPLATE_IMAGE_TAG`
 3. `v1` fallback
 
-Pushes to `main` run `.github/workflows/deploy.yaml`. The job rebuilds a template image when `images/<name>/` changed, and rebuilds every in-repo template image when `pkg/`, `go.mod`, `go.sum`, or `.dockerignore` changed (each Dockerfile copies `pkg/`). It pushes `git-<shortsha>` to Artifact Registry, writes those tags into `config/image-versions.json`, builds `cloud9-api` with that file inside the image, deploys it, then commits the manifest with `[skip ci]`. `ticket-drop` is built from `runcloud9-templates` and is not updated here.
+Pushes to `main` run `.github/workflows/deploy.yaml`. The job rebuilds a template image when `images/<name>/` changed, and rebuilds every in-repo template image when `pkg/`, `go.mod`, `go.sum`, or `.dockerignore` changed (each Dockerfile copies `pkg/`). It pushes `git-<shortsha>` to Artifact Registry, writes those tags into `config/image-versions.json`, builds `cloud9-api` with that file inside the image, deploys it, then opens a pull request with the manifest bump (branch protection blocks a direct push to `main`). `ticket-drop` is built from `runcloud9-templates` and is not updated here.
 
 Docker Desktop remains a fallback. Build and push the same `git-<shortsha>` tag, update `config/image-versions.json`, and merge so the next API image picks it up. Pull `main` first if CI has already committed a bump.
 
