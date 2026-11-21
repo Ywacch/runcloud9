@@ -340,7 +340,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 			Image:     "oliver006/redis_exporter:v1.67.0",
 			Ports:     []corev1.ContainerPort{{ContainerPort: 9121}},
 			Resources: ExporterResources(),
-			Env:       []corev1.EnvVar{{Name: "REDIS_ADDR", Value: "localhost:6379"}},
+			Env:       redisExporterEnv(cfg),
 		}
 		internalRedisDep := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Name: "redis-internal", Namespace: cfg.Namespace},
@@ -511,7 +511,7 @@ func (k *K8sDeployer) deployCache(ctx context.Context, cfg DeployConfig, resourc
 		Image:     "oliver006/redis_exporter:v1.67.0",
 		Ports:     []corev1.ContainerPort{{ContainerPort: 9121}},
 		Resources: ExporterResources(),
-		Env:       []corev1.EnvVar{{Name: "REDIS_ADDR", Value: "localhost:6379"}},
+		Env:       redisExporterEnv(cfg),
 	}
 
 	dep := &appsv1.Deployment{

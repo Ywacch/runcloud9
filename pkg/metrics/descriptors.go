@@ -3,6 +3,8 @@ package metrics
 import (
 	"sort"
 	"strings"
+
+	"github.com/ywacch/cloud9/pkg/engines"
 )
 
 // SignalDescriptor explains one normalized signal for brain context. Freshness
@@ -14,6 +16,7 @@ type SignalDescriptor struct {
 	Unit      string          `json:"unit"`
 	Semantic  string          `json:"semantic"`
 	Meaning   string          `json:"meaning"`
+	Concept   string          `json:"concept,omitempty"`
 	Freshness SignalFreshness `json:"freshness"`
 }
 
@@ -21,6 +24,7 @@ type signalMeta struct {
 	unit           string
 	semantic       string
 	meaning        string
+	concept        string
 	freshnessGroup string
 	defaultTier    FreshnessTier
 }
@@ -63,7 +67,7 @@ var signalDescriptorCatalog = map[string]signalMeta{
 	},
 	"consumeRate": {
 		unit: "rps", semantic: "rate", meaning: "message consume rate",
-		freshnessGroup: SignalThroughput,
+		concept: engines.ConceptFlowControl, freshnessGroup: SignalThroughput,
 	},
 	"cpuLimit": {
 		unit: "count", semantic: "gauge", meaning: "configured CPU limit in cores",
@@ -127,15 +131,15 @@ var signalDescriptorCatalog = map[string]signalMeta{
 	},
 	"messagesReady": {
 		unit: "count", semantic: "gauge", meaning: "queued messages ready for delivery",
-		freshnessGroup: SignalQueue,
+		concept: engines.ConceptConsumerLag, freshnessGroup: SignalQueue,
 	},
 	"messagesUnacked": {
 		unit: "count", semantic: "gauge", meaning: "messages delivered but not yet acknowledged",
-		freshnessGroup: SignalQueue,
+		concept: engines.ConceptRedelivery, freshnessGroup: SignalQueue,
 	},
 	"mqSaturationRatio": {
 		unit: "percent", semantic: "ratio", meaning: "produce rate divided by consume rate",
-		freshnessGroup: SignalThroughput,
+		concept: engines.ConceptFlowControl, freshnessGroup: SignalThroughput,
 	},
 	"p50Latency": {
 		unit: "ms", semantic: "latency", meaning: "p50 request latency in seconds",
@@ -163,11 +167,19 @@ var signalDescriptorCatalog = map[string]signalMeta{
 	},
 	"produceRate": {
 		unit: "rps", semantic: "rate", meaning: "message publish rate",
-		freshnessGroup: SignalThroughput,
+		concept: engines.ConceptFlowControl, freshnessGroup: SignalThroughput,
 	},
 	"queueDepth": {
 		unit: "count", semantic: "gauge", meaning: "broker queue depth",
-		freshnessGroup: SignalQueue,
+		concept: engines.ConceptConsumerLag, freshnessGroup: SignalQueue,
+	},
+	"mqMemoryUsed": {
+		unit: "bytes", semantic: "gauge", meaning: "broker resident memory",
+		concept: engines.ConceptMemoryOverhead, freshnessGroup: SignalContainerMem,
+	},
+	"mqMemoryLimit": {
+		unit: "bytes", semantic: "gauge", meaning: "broker memory limit",
+		concept: engines.ConceptMemoryOverhead, freshnessGroup: SignalContainerMem,
 	},
 	"ready": {
 		unit: "count", semantic: "gauge", meaning: "pod readiness (1 when ready)",
@@ -262,6 +274,7 @@ func BuildDescriptors(internals ComponentInternals) []SignalDescriptor {
 					Unit:      meta.unit,
 					Semantic:  meta.semantic,
 					Meaning:   meta.meaning,
+					Concept:   meta.concept,
 					Freshness: freshnessForSignal(role, signalName, inst.Freshness, meta),
 				})
 			}

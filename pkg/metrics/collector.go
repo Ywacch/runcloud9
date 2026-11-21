@@ -101,6 +101,7 @@ type MetricsCollector struct {
 	sideWorkMu            sync.Mutex
 	sideWorkLast          map[string]time.Time
 	sideWorkCadence       time.Duration
+	collectProm           collectScopedProm
 }
 
 // SetPublisherCollectHookForTest replaces Collect inside session publishers. For tests only.
@@ -494,6 +495,14 @@ func (c *MetricsCollector) query(ctx context.Context, promql string) (float64, e
 	return v, err
 }
 
+func (c *MetricsCollector) queryScalarFirst(ctx context.Context, promql string) (float64, bool) {
+	v, present, err := c.queryScalar(ctx, promql)
+	if err != nil || !present {
+		return 0, false
+	}
+	return v, true
+}
+
 // queryMultiResult runs a PromQL instant query and returns one float per series, keyed by labelKey (e.g. "pod").
 func (c *MetricsCollector) queryMultiResult(ctx context.Context, promql, labelKey string) map[string]float64 {
 	out := make(map[string]float64)
@@ -792,13 +801,17 @@ func applyStorageProfiles(dm *DeploymentMetrics, topo TopologyFlags) {
 	}
 }
 
-func annotateCacheForTemplate(cm *ComponentMetrics, template string) {
+func annotateCacheForTemplate(cm *ComponentMetrics, template string, pl *placement.Topology) {
 	if cm == nil {
 		return
 	}
 	switch template {
 	case "social-feed":
 		cm.CacheStrategy = "timeline-store"
+		if pl != nil && timelineOnPostgres(pl) {
+			cm.CacheMetricMode = "postgres timelines"
+			break
+		}
 		cm.CacheMetricMode = "sorted-set timelines"
 		cm.CacheReadOperation = "ZREVRANGE"
 		cm.CacheWriteOperation = "ZADD"
@@ -913,21 +926,21 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	c.debugCompare("db", "rps", pgTxnRate+pgRollbackRate, dbQPS, "pg_stat_database_xact_commit+rollback", "app db_query_duration_count")
 	c.debugCompare("db", "cpu", dbCPURes.Usage, 0, dbCPURes.Source, "")
 
-	if templateHasTimelineJob(templates.GetTemplate(template)) {
-		c.collectPostgresTimelineTableStats(ctx, ns, &cmDB)
-	}
-
 	dm.Components["db"] = cmDB
 
 	// Cache tier: redis + cache-proxy (separate queries so exporter sidecars are not summed).
+	plEarly := c.placementForNamespace(ns)
+	c.beginCollectPromScope(ns, plEarly)
+	defer c.endCollectPromScope()
+	redisSel := c.cacheRedisPromSel(ns)
 	cmCache := ComponentMetrics{Component: "cache"}
 	redisCPUUser, redisUserPresent, _ := c.queryScalar(ctx, fmt.Sprintf(
-		`sum(rate(redis_cpu_user_seconds_total{namespace=%q}%s))`,
-		ns, promRateRange(),
+		`sum(rate(redis_cpu_user_seconds_total{%s}%s))`,
+		redisSel, promRateRange(),
 	))
 	redisCPUSys, redisSysPresent, _ := c.queryScalar(ctx, fmt.Sprintf(
-		`sum(rate(redis_cpu_sys_seconds_total{namespace=%q}%s))`,
-		ns, promRateRange(),
+		`sum(rate(redis_cpu_sys_seconds_total{%s}%s))`,
+		redisSel, promRateRange(),
 	))
 	redisExporterPresent := redisUserPresent || redisSysPresent
 	redisCPUFromExporter := redisCPUUser + redisCPUSys
@@ -1090,8 +1103,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	}
 	redisCmdPattern := redisCommandPattern(template)
 	redisCmdRates := c.queryMultiResult(ctx, fmt.Sprintf(
-		`sum by (cmd) (rate(redis_commands_total{namespace=%q,cmd=~%q}%s))`,
-		ns, redisCmdPattern, promRateRange(),
+		`sum by (cmd) (rate(redis_commands_total{%s,cmd=~%q}%s))`,
+		redisSel, redisCmdPattern, promRateRange(),
 	), "cmd")
 	if len(redisCmdRates) > 0 {
 		cmCache.RedisCmdRates = redisCmdRates
@@ -1099,8 +1112,8 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	redisOps := RequestPathRedisOpsPerSec(cmCache.RedisCmdRates)
 	if redisOps <= 0 {
 		redisOps, _ = c.query(ctx, fmt.Sprintf(
-			`sum(rate(redis_commands_total{namespace=%q,cmd=~%q}%s))`,
-			ns, redisCmdPattern, promRateRange(),
+			`sum(rate(redis_commands_total{%s,cmd=~%q}%s))`,
+			redisSel, redisCmdPattern, promRateRange(),
 		))
 	}
 	cmCache.RedisOpsPerSec = redisOps
@@ -1111,31 +1124,31 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	}
 	c.debugCompare("cache", "rps", redisOps, cmApp.CacheHits+cmApp.CacheMisses+cmApp.CacheErrors, "redis_commands_total", "app cache_hits+misses+errors")
 
-	if v, _ := c.query(ctx, fmt.Sprintf(`sum(redis_memory_used_bytes{namespace=%q})`, ns)); v > 0 {
+	if v, _ := c.query(ctx, fmt.Sprintf(`sum(redis_memory_used_bytes{%s})`, redisSel)); v > 0 {
 		cmCache.MemoryBytes = int64(v)
 		cmCache.MemIsEstimated = false
-		redisMax, _ := c.query(ctx, fmt.Sprintf(`max(redis_memory_max_bytes{namespace=%q})`, ns))
+		redisMax, _ := c.query(ctx, fmt.Sprintf(`max(redis_memory_max_bytes{%s})`, redisSel))
 		if redisMax > 0 {
 			cmCache.MemoryLimit = int64(redisMax)
 		} else {
 			cmCache.MemoryLimit = c.kubeLimitMem(ctx, ns, "redis.*", "redis")
 		}
 	}
-	if v, _ := c.query(ctx, fmt.Sprintf(`sum(redis_connected_clients{namespace=%q})`, ns)); v > 0 {
+	if v, _ := c.query(ctx, fmt.Sprintf(`sum(redis_connected_clients{%s})`, redisSel)); v > 0 {
 		cmCache.ActiveConnections = v
 	}
-	rh, _ := c.query(ctx, fmt.Sprintf(`sum(rate(redis_keyspace_hits_total{namespace=%q}%s))`, ns, promRateRange()))
-	rm, _ := c.query(ctx, fmt.Sprintf(`sum(rate(redis_keyspace_misses_total{namespace=%q}%s))`, ns, promRateRange()))
+	rh, _ := c.query(ctx, fmt.Sprintf(`sum(rate(redis_keyspace_hits_total{%s}%s))`, redisSel, promRateRange()))
+	rm, _ := c.query(ctx, fmt.Sprintf(`sum(rate(redis_keyspace_misses_total{%s}%s))`, redisSel, promRateRange()))
 	cmCache.RedisKeyspaceHits = rh
 	cmCache.RedisKeyspaceMisses = rm
-	rejected, _ := c.query(ctx, fmt.Sprintf(`sum(rate(redis_rejected_connections_total{namespace=%q}%s))`, ns, promRateRange()))
+	rejected, _ := c.query(ctx, fmt.Sprintf(`sum(rate(redis_rejected_connections_total{%s}%s))`, redisSel, promRateRange()))
 	cmCache.RedisRejectedRate = rejected
-	applyCacheStoreTelemetry(&cmCache, c.fillRedisCacheStoreTelemetry(ctx, ns))
+	applyCacheStoreTelemetry(&cmCache, c.fillRedisCacheStoreTelemetry(ctx, redisSel))
 	// Redis latency percentiles from histogram buckets (microseconds -> seconds).
 	redisLatCmdPattern := redisLatencyCommandPattern(template)
 	redisLatBucket := fmt.Sprintf(
-		`sum(rate(redis_commands_latencies_usec_bucket{namespace=%q,cmd=~%q}%s)) by (le)`,
-		ns, redisLatCmdPattern, promRateRange(),
+		`sum(rate(redis_commands_latencies_usec_bucket{%s,cmd=~%q}%s)) by (le)`,
+		redisSel, redisLatCmdPattern, promRateRange(),
 	)
 	redisP50usec, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.50, %s)`, redisLatBucket))
 	redisP95usec, _ := c.query(ctx, fmt.Sprintf(`histogram_quantile(0.95, %s)`, redisLatBucket))
@@ -1148,12 +1161,12 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 
 	// Average latency fallback from duration/count.
 	redisCmdDur, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(redis_commands_duration_seconds_total{namespace=%q,cmd=~%q}%s))`,
-		ns, redisLatCmdPattern, promRateRange(),
+		`sum(rate(redis_commands_duration_seconds_total{%s,cmd=~%q}%s))`,
+		redisSel, redisLatCmdPattern, promRateRange(),
 	))
 	redisCmdCount, _ := c.query(ctx, fmt.Sprintf(
-		`sum(rate(redis_commands_total{namespace=%q,cmd=~%q}%s))`,
-		ns, redisLatCmdPattern, promRateRange(),
+		`sum(rate(redis_commands_total{%s,cmd=~%q}%s))`,
+		redisSel, redisLatCmdPattern, promRateRange(),
 	))
 	if redisCmdCount > 0 {
 		cmCache.AvgLatency = redisCmdDur / redisCmdCount
@@ -1169,39 +1182,72 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	}
 
 	if strings.EqualFold(topo.CacheEngine, "memcached") {
-		c.applyMemcachedCacheMetrics(ctx, ns, &cmCache)
+		memSel := c.memcachedPromSel(ns)
+		hadLatency := c.applyMemcachedCacheMetrics(ctx, memSel, &cmCache)
+		if !hadLatency {
+			if dm.SignalGaps == nil {
+				dm.SignalGaps = make(map[string][]SignalGap)
+			}
+			mergeSignalGaps(dm.SignalGaps, "cache", []SignalGap{
+				gapNotBuilt("p99Latency", "cache_op_duration_seconds"),
+			})
+		}
 	}
-	annotateCacheForTemplate(&cmCache, template)
+	if templateHasTimelineJob(templates.GetTemplate(template)) {
+		if plEarly != nil && timelineOnPostgres(plEarly) {
+			c.collectPostgresTimelineTableStats(ctx, ns, &cmCache)
+		} else if plEarly == nil {
+			c.collectPostgresTimelineTableStats(ctx, ns, &cmCache)
+		}
+	}
+	annotateCacheForTemplate(&cmCache, template, plEarly)
 	if topo.CacheStrategy != "" {
 		cmCache.CacheStrategy = topo.CacheStrategy
 	}
-	layerSplit := c.collectCacheLayerSplit(ctx, ns)
+	layerSplit := c.collectCacheLayerSplit(ctx, redisSel)
 	applyCacheLayers(&cmCache, layerSplit)
 	dm.Components["cache"] = cmCache
 
-	cmMQ := ComponentMetrics{Component: "mq"}
-	mqCPURes := c.queryContainerResourceCPU(ctx, ns, "rabbitmq.*", "rabbitmq")
-	mqMemRes := c.queryContainerResourceMemory(ctx, ns, "rabbitmq.*", "rabbitmq")
-	cmMQ.CPUUsage = mqCPURes.Usage
-	cmMQ.CPUIsEstimated = mqCPURes.Estimated
-	cmMQ.CPUSource = mqCPURes.Source
-	cmMQ.MemoryBytes = int64(mqMemRes.Usage)
-	cmMQ.MemIsEstimated = mqMemRes.Estimated
-	cmMQ.MemSource = mqMemRes.Source
-	cmMQ.CPULimit = c.kubeLimitCPU(ctx, ns, "rabbitmq.*", "rabbitmq")
-	cmMQ.MemoryLimit = c.kubeLimitMem(ctx, ns, "rabbitmq.*", "rabbitmq")
-	c.applyRabbitMQBrokerMetrics(ctx, ns, &cmMQ)
-	// Override estimated memory with broker metrics from Prometheus when present.
-	if cmMQ.MQMemoryUsed > 0 {
-		cmMQ.MemoryBytes = int64(cmMQ.MQMemoryUsed)
-		cmMQ.MemIsEstimated = false
-		if cmMQ.MQMemoryLimit > 0 {
-			cmMQ.MemoryLimit = int64(cmMQ.MQMemoryLimit)
+	pl := c.placementForNamespace(ns)
+	var cmMQ ComponentMetrics
+	if pl != nil {
+		if _, hasWQ := workQueueJob(pl); hasWQ {
+			c.collectWorkQueueMQ(ctx, ns, template, pl, dm)
+			cmMQ = dm.Components["mq"]
 		}
 	}
-	mqPubRate, _ := c.query(ctx, fmt.Sprintf(`sum(rate({__name__=~".*_mq_publish_total",namespace=%q}%s))`, ns, promRateRange()))
-	if mqPubRate > 0 {
-		cmMQ.ProduceRate = mqPubRate
+	if pl == nil || cmMQ.Component == "" {
+		cmMQ = ComponentMetrics{Component: "mq"}
+		mqCPURes := c.queryContainerResourceCPU(ctx, ns, "rabbitmq.*", "rabbitmq")
+		mqMemRes := c.queryContainerResourceMemory(ctx, ns, "rabbitmq.*", "rabbitmq")
+		cmMQ.CPUUsage = mqCPURes.Usage
+		cmMQ.CPUIsEstimated = mqCPURes.Estimated
+		cmMQ.CPUSource = mqCPURes.Source
+		cmMQ.MemoryBytes = int64(mqMemRes.Usage)
+		cmMQ.MemIsEstimated = mqMemRes.Estimated
+		cmMQ.MemSource = mqMemRes.Source
+		cmMQ.CPULimit = c.kubeLimitCPU(ctx, ns, "rabbitmq.*", "rabbitmq")
+		cmMQ.MemoryLimit = c.kubeLimitMem(ctx, ns, "rabbitmq.*", "rabbitmq")
+		scrapeRabbit := true
+		if pl != nil {
+			if wq, ok := workQueueJob(pl); ok {
+				scrapeRabbit = wq.Engine == "rabbitmq" && nodeHostsRabbitMQ(pl, wq.NodeID)
+			}
+		}
+		if scrapeRabbit {
+			c.applyRabbitMQBrokerMetrics(ctx, ns, &cmMQ)
+		}
+		if cmMQ.MQMemoryUsed > 0 {
+			cmMQ.MemoryBytes = int64(cmMQ.MQMemoryUsed)
+			cmMQ.MemIsEstimated = false
+			if cmMQ.MQMemoryLimit > 0 {
+				cmMQ.MemoryLimit = int64(cmMQ.MQMemoryLimit)
+			}
+		}
+		mqPubRate, _ := c.query(ctx, fmt.Sprintf(`sum(rate({__name__=~".*_mq_publish_total",namespace=%q}%s))`, ns, promRateRange()))
+		if mqPubRate > 0 {
+			cmMQ.ProduceRate = mqPubRate
+		}
 	}
 
 	cmWorker := ComponentMetrics{Component: "worker"}
@@ -1331,7 +1377,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 			if engine == "" {
 				engine = StorageEnginePostgreSQL
 			}
-			live := c.collectStorageIO(ctx, ns, nsSel, engine, template)
+			live := c.collectStorageIO(ctx, promNamespaceSelector(ns), nsSel, engine, template)
 			cm.StorageIO = mergeStorageIO(cm.StorageIO, live)
 			finalizeStorageIO(cm.StorageIO, engine, topo, template)
 			if cm.StorageIO != nil {
@@ -1367,7 +1413,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 			if engine == "" {
 				engine = StorageEngineRedis
 			}
-			live := c.collectStorageIO(ctx, ns, nsSel, engine, template)
+			live := c.collectStorageIO(ctx, redisSel, nsSel, engine, template)
 			cm.StorageIO = mergeStorageIO(cm.StorageIO, live)
 			finalizeStorageIO(cm.StorageIO, engine, topo, template)
 			dm.Components["cache"] = cm
@@ -1379,6 +1425,11 @@ func (c *MetricsCollector) Collect(ctx context.Context, namespace, template stri
 	dm.Timeline = c.collectTimelineOps(ctx, namespace, nsSel, template)
 
 	tmpl := templates.GetTemplate(template)
+	if plEarly != nil {
+		dm.Placement = plEarly
+		c.collectNodeMetrics(ctx, namespace, plEarly, dm)
+		stripSharedNodeResources(dm)
+	}
 	runtimeEvents := c.attachRuntimeHealth(ctx, namespace, dm)
 	if cm, ok := dm.Components["cache"]; ok {
 		syncCacheLayerRestarts(&cm)

@@ -319,13 +319,21 @@ func ApplyStorageProfile(cm *ComponentMetrics, engine StorageEngineID, role stri
 }
 
 func redisStorageReadRateQuery(ns, template string) string {
+	return redisStorageReadRateQuerySel(promNamespaceSelector(ns), template)
+}
+
+func redisStorageReadRateQuerySel(labelSel, template string) string {
 	cmd := redisStorageReadCmdPattern(template)
-	return fmt.Sprintf(`sum(rate(redis_commands_total{namespace=%q,cmd=~%q}%s))`, ns, cmd, promRateRange())
+	return fmt.Sprintf(`sum(rate(redis_commands_total{%s,cmd=~%q}%s))`, labelSel, cmd, promRateRange())
 }
 
 func redisStorageWriteRateQuery(ns, template string) string {
+	return redisStorageWriteRateQuerySel(promNamespaceSelector(ns), template)
+}
+
+func redisStorageWriteRateQuerySel(labelSel, template string) string {
 	cmd := redisStorageWriteCmdPattern(template)
-	return fmt.Sprintf(`sum(rate(redis_commands_total{namespace=%q,cmd=~%q}%s))`, ns, cmd, promRateRange())
+	return fmt.Sprintf(`sum(rate(redis_commands_total{%s,cmd=~%q}%s))`, labelSel, cmd, promRateRange())
 }
 
 func redisStorageReadTotal9mQuery(ns, template string) string {
@@ -339,24 +347,33 @@ func redisStorageWriteTotal9mQuery(ns, template string) string {
 }
 
 func redisStorageReadLatencyQuery(ns, template string) string {
+	return redisStorageReadLatencyQuerySel(promNamespaceSelector(ns), template)
+}
+
+func redisStorageReadLatencyQuerySel(labelSel, template string) string {
 	cmd := redisStorageReadLatencyCmdPattern(template)
 	return fmt.Sprintf(
-		`histogram_quantile(0.99, sum(rate(redis_commands_latencies_usec_bucket{namespace=%q,cmd=~%q}%s)) by (le)) / 1e6`,
-		ns, cmd, promRateRange(),
+		`histogram_quantile(0.99, sum(rate(redis_commands_latencies_usec_bucket{%s,cmd=~%q}%s)) by (le)) / 1e6`,
+		labelSel, cmd, promRateRange(),
 	)
 }
 
 func redisStorageWriteLatencyQuery(ns, template string) string {
+	return redisStorageWriteLatencyQuerySel(promNamespaceSelector(ns), template)
+}
+
+func redisStorageWriteLatencyQuerySel(labelSel, template string) string {
 	cmd := redisStorageWriteLatencyCmdPattern(template)
 	return fmt.Sprintf(
-		`histogram_quantile(0.99, sum(rate(redis_commands_latencies_usec_bucket{namespace=%q,cmd=~%q}%s)) by (le)) / 1e6`,
-		ns, cmd, promRateRange(),
+		`histogram_quantile(0.99, sum(rate(redis_commands_latencies_usec_bucket{%s,cmd=~%q}%s)) by (le)) / 1e6`,
+		labelSel, cmd, promRateRange(),
 	)
 }
 
 // collectStorageIO runs registry PromQL and returns engine-native storage metrics.
 // template adjusts Redis read/write command filters (e.g. social-feed sorted-set ops).
-func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel string, engine StorageEngineID, template string) *StorageIO {
+func (c *MetricsCollector) collectStorageIO(ctx context.Context, labelSel, nsSel string, engine StorageEngineID, template string) *StorageIO {
+	ns := namespaceFromPromSel(labelSel)
 	ctx = withPromCaller(ctx, "storage")
 	prov, ok := LookupStorageProvider(engine)
 	if !ok || c == nil || c.prometheusURL == "" {
@@ -365,14 +382,35 @@ func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel strin
 	io := &StorageIO{Unit: prov.Unit, Source: prov.Source}
 	switch engine {
 	case StorageEngineRedis:
-		io.ReadRate, _ = c.redisStorageReadRate(ctx, ns, template)
-		io.WriteRate, _ = c.redisStorageWriteRate(ctx, ns, template)
+		if c.collectProm.cacheRedis != "" {
+			v, present, _ := c.queryScalar(ctx, redisStorageReadRateQuerySel(labelSel, template))
+			if present {
+				io.ReadRate = v
+			}
+			v, present, _ = c.queryScalar(ctx, redisStorageWriteRateQuerySel(labelSel, template))
+			if present {
+				io.WriteRate = v
+			}
+			io.ReadLatency, _ = c.queryScalarFirst(ctx, redisStorageReadLatencyQuerySel(labelSel, template))
+			io.WriteLatency, _ = c.queryScalarFirst(ctx, redisStorageWriteLatencyQuerySel(labelSel, template))
+		} else {
+			io.ReadRate, _ = c.redisStorageReadRate(ctx, ns, template)
+			io.WriteRate, _ = c.redisStorageWriteRate(ctx, ns, template)
+			io.ReadLatency, _ = c.redisStorageReadLatency(ctx, ns, template)
+			io.WriteLatency, _ = c.redisStorageWriteLatency(ctx, ns, template)
+		}
 		readByPod := c.redisStorageReadTotalByPod(ctx, ns, template)
 		writeByPod := c.redisStorageWriteTotalByPod(ctx, ns, template)
+		if c.collectProm.cacheRedis != "" {
+			readByPod = c.queryMultiResult(ctx, fmt.Sprintf(
+				`sum by (pod) (redis_commands_total{%s,cmd=~%q})`, labelSel, redisStorageReadCmdPattern(template),
+			), "pod")
+			writeByPod = c.queryMultiResult(ctx, fmt.Sprintf(
+				`sum by (pod) (redis_commands_total{%s,cmd=~%q})`, labelSel, redisStorageWriteCmdPattern(template),
+			), "pod")
+		}
 		io.ReadTotal9m = c.sessionAcc.ObserveDeltas(ns, seriesRedisRead, readByPod)
 		io.WriteTotal9m = c.sessionAcc.ObserveDeltas(ns, seriesRedisWrite, writeByPod)
-		io.ReadLatency, _ = c.redisStorageReadLatency(ctx, ns, template)
-		io.WriteLatency, _ = c.redisStorageWriteLatency(ctx, ns, template)
 	default:
 		switch engine {
 		case StorageEnginePostgreSQL:
@@ -406,7 +444,11 @@ func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel strin
 	if prov.BytesUsedQuery != nil {
 		switch engine {
 		case StorageEngineRedis:
-			if v, ok := c.redisMemoryUsedBytes(ctx, ns); ok && v > 0 {
+			if c.collectProm.cacheRedis != "" {
+				if v, present, _ := c.queryScalar(ctx, fmt.Sprintf(`sum(redis_memory_used_bytes{%s})`, labelSel)); present && v > 0 {
+					io.BytesUsed = int64(v)
+				}
+			} else if v, ok := c.redisMemoryUsedBytes(ctx, ns); ok && v > 0 {
 				io.BytesUsed = int64(v)
 			}
 		default:
@@ -418,7 +460,11 @@ func (c *MetricsCollector) collectStorageIO(ctx context.Context, ns, nsSel strin
 	if prov.BytesLimitQuery != nil {
 		switch engine {
 		case StorageEngineRedis:
-			if v, ok := c.redisMemoryMaxBytes(ctx, ns); ok && v > 0 {
+			if c.collectProm.cacheRedis != "" {
+				if v, present, _ := c.queryScalar(ctx, fmt.Sprintf(`max(redis_memory_max_bytes{%s})`, labelSel)); present && v > 0 {
+					io.BytesLimit = int64(v)
+				}
+			} else if v, ok := c.redisMemoryMaxBytes(ctx, ns); ok && v > 0 {
 				io.BytesLimit = int64(v)
 			}
 		default:

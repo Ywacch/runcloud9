@@ -65,7 +65,7 @@ func TestFillRedisCacheStoreTelemetry(t *testing.T) {
 			t.Cleanup(srv.Close)
 
 			c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
-			got := c.fillRedisCacheStoreTelemetry(context.Background(), "ns-cache")
+			got := c.fillRedisCacheStoreTelemetry(context.Background(), promNamespaceSelector("ns-cache"))
 			if got.EvictionsPerSec != tt.wantEvictions {
 				t.Fatalf("EvictionsPerSec: got %v want %v", got.EvictionsPerSec, tt.wantEvictions)
 			}

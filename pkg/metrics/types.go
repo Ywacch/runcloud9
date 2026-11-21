@@ -31,6 +31,10 @@ type DeploymentMetrics struct {
 	Timeline *TimelineOps `json:"timeline,omitempty"`
 	// Placement is the resolved job-to-node topology for this deployment.
 	Placement *placement.Topology `json:"placement,omitempty"`
+	// Nodes holds per-node container resources (E-23c); shared nodes do not duplicate on aliases.
+	Nodes map[string]NodeMetrics `json:"nodes,omitempty"`
+	// SignalGaps lists absent fields per component alias with M-1 availability and reason.
+	SignalGaps map[string][]SignalGap `json:"signalGaps,omitempty"`
 }
 
 // TimelineOps summarizes instrumented timeline store operations for the inspector.

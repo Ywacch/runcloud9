@@ -89,12 +89,16 @@ func TestCollect_PostgresTimelineTableStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db := dm.Components["db"]
-	if db.TimelineRelationBytes == nil || *db.TimelineRelationBytes != 4096 {
-		t.Fatalf("relation bytes: %+v", db.TimelineRelationBytes)
+	cache := dm.Components["cache"]
+	if cache.TimelineRelationBytes == nil || *cache.TimelineRelationBytes != 4096 {
+		t.Fatalf("relation bytes: %+v", cache.TimelineRelationBytes)
 	}
-	if db.TimelineDeadTuples == nil || *db.TimelineDeadTuples != 12 {
-		t.Fatalf("dead tuples: %+v", db.TimelineDeadTuples)
+	if cache.TimelineDeadTuples == nil || *cache.TimelineDeadTuples != 12 {
+		t.Fatalf("dead tuples: %+v", cache.TimelineDeadTuples)
+	}
+	db := dm.Components["db"]
+	if db.TimelineRelationBytes != nil || db.TimelineDeadTuples != nil {
+		t.Fatalf("postgres timeline stats must not sit on db: bytes=%+v dead=%+v", db.TimelineRelationBytes, db.TimelineDeadTuples)
 	}
 }
 

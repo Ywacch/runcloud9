@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ywacch/cloud9/pkg/placement"
 	"github.com/ywacch/cloud9/pkg/rules"
 
 	corev1 "k8s.io/api/core/v1"
@@ -49,6 +50,8 @@ func componentKeyForAppLabel(app string) string {
 		return "lb"
 	case "redis", "redis-internal", "cache-proxy":
 		return "cache"
+	case "work-queue":
+		return "mq"
 	default:
 		return ""
 	}
@@ -241,5 +244,48 @@ func (c *MetricsCollector) attachRuntimeHealth(
 			}
 		}
 	}
+	attachNodeRuntimeHealth(dm, pods)
 	return events
+}
+
+func nodeIDForAppLabel(pl *placement.Topology, app string) string {
+	if pl == nil || app == "" {
+		return ""
+	}
+	for _, n := range pl.Nodes {
+		for _, m := range n.Members {
+			if m.AppLabel == app {
+				return n.NodeID
+			}
+		}
+	}
+	return ""
+}
+
+func attachNodeRuntimeHealth(dm *DeploymentMetrics, pods []corev1.Pod) {
+	if dm == nil || dm.Placement == nil || len(pods) == 0 {
+		return
+	}
+	if dm.Nodes == nil {
+		dm.Nodes = make(map[string]NodeMetrics)
+	}
+	byNode := make(map[string][]corev1.Pod)
+	for _, pod := range pods {
+		app := pod.Labels["app"]
+		nodeID := nodeIDForAppLabel(dm.Placement, app)
+		if nodeID == "" {
+			continue
+		}
+		byNode[nodeID] = append(byNode[nodeID], pod)
+	}
+	for nodeID, nodePods := range byNode {
+		rh := buildRuntimeHealth(nodePods)
+		if rh == nil {
+			continue
+		}
+		nm := dm.Nodes[nodeID]
+		nm.NodeID = nodeID
+		nm.RuntimeHealth = rh
+		dm.Nodes[nodeID] = nm
+	}
 }

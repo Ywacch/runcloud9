@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/ywacch/cloud9/pkg/placement"
 )
 
 func TestCollect_RabbitMQPrometheusSignals(t *testing.T) {
@@ -40,7 +42,15 @@ func TestCollect_RabbitMQPrometheusSignals(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
-	dm, err := c.Collect(context.Background(), ns, "ecommerce", TopologyFlags{HasDB: true, HasCache: true})
+	pl := placement.Topology{
+		Jobs: []placement.Job{{Job: "work_queue", Component: "mq", NodeID: "mq-1", Engine: "rabbitmq"}},
+		Nodes: []placement.Node{{
+			NodeID: "mq-1", Engine: "rabbitmq",
+			Members: []placement.Member{{Role: "primary", AppLabel: "rabbitmq", Container: "rabbitmq"}},
+		}},
+	}
+	c.SetPlacement(ns, pl)
+	dm, err := c.Collect(context.Background(), ns, "ecommerce", TopologyFlags{HasDB: true, HasCache: true, HasMQ: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -22,6 +22,7 @@ func TestComponentKeyForAppLabel(t *testing.T) {
 		{"postgres", "db"},
 		{"postgres-replica", "db"},
 		{"rabbitmq", "mq"},
+		{"work-queue", "mq"},
 		{"lb", "lb"},
 		{"redis", "cache"},
 		{"redis-internal", "cache"},
