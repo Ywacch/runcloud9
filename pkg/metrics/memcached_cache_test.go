@@ -39,7 +39,7 @@ func TestApplyMemcachedCacheMetrics_SetsCPULimitLeavesP99(t *testing.T) {
 
 	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	cm := &ComponentMetrics{P99Latency: 0.04, P99Latency9m: 0.09, AvgLatency: 0.01}
-	c.applyMemcachedCacheMetrics(context.Background(), "ns1", cm)
+	c.applyMemcachedCacheMetrics(context.Background(), promNamespaceSelector("ns1"), cm)
 	if cm.CPULimit != 0.125 {
 		t.Fatalf("CPULimit: want 0.125, got %v", cm.CPULimit)
 	}
@@ -98,7 +98,7 @@ func TestApplyMemcachedCacheMetrics_UsesContainerMetricsNotItemBytes(t *testing.
 		MemIsEstimated: false,
 		MemoryLimit:    230 << 20,
 	}
-	c.applyMemcachedCacheMetrics(context.Background(), "ns1", cm)
+	c.applyMemcachedCacheMetrics(context.Background(), promNamespaceSelector("ns1"), cm)
 	if cm.CPUUsage != 0.04 || cm.CPUIsEstimated || cm.CPUSource != ResourceSourceMetricsAPI {
 		t.Fatalf("cpu: usage=%v estimated=%v source=%q", cm.CPUUsage, cm.CPUIsEstimated, cm.CPUSource)
 	}
@@ -141,7 +141,7 @@ func TestApplyMemcachedCacheMetrics_LifecycleAndClientLatency(t *testing.T) {
 
 	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
 	cm := &ComponentMetrics{P99Latency: 0.04, EvictionsLast9m: 99, ExpirationsLast9m: 99}
-	c.applyMemcachedCacheMetrics(context.Background(), "ns1", cm)
+	c.applyMemcachedCacheMetrics(context.Background(), promNamespaceSelector("ns1"), cm)
 	if cm.EvictionsPerSec != 2 {
 		t.Fatalf("EvictionsPerSec: got %v", cm.EvictionsPerSec)
 	}
@@ -156,5 +156,21 @@ func TestApplyMemcachedCacheMetrics_LifecycleAndClientLatency(t *testing.T) {
 	}
 	if cm.P99Latency != 0.004 || cm.P99Latency9m != 0.004 {
 		t.Fatalf("p99 live=%v session=%v", cm.P99Latency, cm.P99Latency9m)
+	}
+}
+
+func TestMemcached_LatencyAbsentNotZero(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(promEmptyVectorJSON())
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
+	cm := &ComponentMetrics{}
+	c.applyMemcachedCacheMetrics(context.Background(), promNamespaceSelector("ns1"), cm)
+	if cm.P99Latency != 0 || cm.AvgLatency != 0 {
+		t.Fatalf("expected absent latency, got p99=%v avg=%v", cm.P99Latency, cm.AvgLatency)
 	}
 }

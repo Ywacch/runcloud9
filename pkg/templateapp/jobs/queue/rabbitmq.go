@@ -69,6 +69,7 @@ func (r *RabbitMQ) Engine() string {
 
 // Publish sends body to the queue with trace headers from ctx.
 func (r *RabbitMQ) Publish(ctx context.Context, body []byte) error {
+	incPublish(r.Engine(), r.queue)
 	return r.ch.PublishWithContext(ctx, "", r.queue, false, false, amqp.Publishing{
 		ContentType: "application/json",
 		Headers:     tracemq.Headers(ctx),
@@ -104,9 +105,11 @@ func (r *RabbitMQ) handleDelivery(parent context.Context, d amqp.Delivery, h fun
 			_ = d.Ack(false)
 			return
 		}
+		incRedeliver(r.Engine(), r.queue)
 		_ = d.Nack(false, true)
 		return
 	}
+	incAck(r.Engine(), r.queue)
 	_ = d.Ack(false)
 }
 

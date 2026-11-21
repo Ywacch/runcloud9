@@ -85,6 +85,7 @@ func (s *Streams) Engine() string {
 
 // Publish appends body to the stream.
 func (s *Streams) Publish(ctx context.Context, body []byte) error {
+	incPublish(s.Engine(), s.stream)
 	_, err := s.client.XAdd(ctx, &redis.XAddArgs{
 		Stream: s.stream,
 		Values: map[string]interface{}{"body": body},
@@ -181,6 +182,9 @@ func (s *Streams) handleMessage(ctx context.Context, consumer string, msg redis.
 		return
 	}
 	attempts := s.deliveryAttempts(ctx, msg.ID)
+	if attempts > 1 {
+		incRedeliver(s.Engine(), s.stream)
+	}
 	if err := h(ctx, body); err != nil {
 		if attempts >= maxDeliveryAttempts {
 			incPoison(s.Engine(), s.stream)
@@ -192,6 +196,7 @@ func (s *Streams) handleMessage(ctx context.Context, consumer string, msg redis.
 	if err := s.client.XAck(ctx, s.stream, streamsConsumerGroup, msg.ID).Err(); err != nil {
 		return
 	}
+	incAck(s.Engine(), s.stream)
 	s.maybeTrim(ctx)
 }
 

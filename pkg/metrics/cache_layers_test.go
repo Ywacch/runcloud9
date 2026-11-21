@@ -149,7 +149,7 @@ func TestCollectCacheLayerSplit_proxyMetrics(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := NewMetricsCollector(srv.URL, nil, nil, nil, nil)
-	split := c.collectCacheLayerSplit(context.Background(), "ns-proxy")
+	split := c.collectCacheLayerSplit(context.Background(), promNamespaceSelector("ns-proxy"))
 	if !split.proxyPresent {
 		t.Fatal("expected proxyPresent when cache-proxy CPU series exists")
 	}

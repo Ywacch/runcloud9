@@ -139,6 +139,14 @@ func annotateFreshness(dm *DeploymentMetrics) {
 			tierForResourceSource(cm.CPUSource, cm.CPUIsEstimated), cm.CPUSource)
 		fresh[SignalContainerMem] = signalFreshness(
 			tierForResourceSource(cm.MemSource, cm.MemIsEstimated), cm.MemSource)
+		if name == "mq" && dm.Placement != nil {
+			if j, ok := workQueueJob(dm.Placement); ok {
+				if q, ok := fresh[SignalQueue]; ok {
+					q.Source = j.Engine + "_work_queue"
+					fresh[SignalQueue] = q
+				}
+			}
+		}
 		cm.Freshness = fresh
 		for i := range cm.Layers {
 			layer := &cm.Layers[i]

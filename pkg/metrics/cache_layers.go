@@ -23,7 +23,8 @@ type cacheLayerSplit struct {
 }
 
 // collectCacheLayerSplit queries redis-internal and cache-proxy metrics separately.
-func (c *MetricsCollector) collectCacheLayerSplit(ctx context.Context, ns string) cacheLayerSplit {
+func (c *MetricsCollector) collectCacheLayerSplit(ctx context.Context, labelSel string) cacheLayerSplit {
+	ns := namespaceFromPromSel(labelSel)
 	ctx = withPromCaller(ctx, "cache")
 	if c == nil {
 		return cacheLayerSplit{}
@@ -64,8 +65,15 @@ func (c *MetricsCollector) collectCacheLayerSplit(ctx context.Context, ns string
 	redisMem, redisMemPresent := c.queryContainerMemoryPrimaryOnly(ctx, ns, "redis-internal.*", "redis")
 	out.redis.MemoryBytes = int64(redisMem)
 	out.redis.MemIsEstimated = !redisMemPresent
-	if v, ok := c.redisMemoryUsedBytes(ctx, ns); ok && v > 0 {
-		out.redis.MemoryBytes = int64(v)
+	var memUsed float64
+	var memUsedOK bool
+	if c.collectProm.cacheRedis != "" {
+		memUsed, memUsedOK, _ = c.queryScalar(ctx, fmt.Sprintf(`sum(redis_memory_used_bytes{%s})`, labelSel))
+	} else {
+		memUsed, memUsedOK = c.redisMemoryUsedBytes(ctx, ns)
+	}
+	if memUsedOK && memUsed > 0 {
+		out.redis.MemoryBytes = int64(memUsed)
 		out.redis.MemIsEstimated = false
 	}
 
@@ -81,12 +89,19 @@ func (c *MetricsCollector) collectCacheLayerSplit(ctx context.Context, ns string
 	out.redis.CPULimit = c.kubeLimitCPU(ctx, ns, "redis-internal.*", "redis")
 	out.proxy.CPULimit = c.kubeLimitCPU(ctx, ns, "cache-proxy.*", "cache-proxy")
 	out.redis.MemoryLimit = c.kubeLimitMem(ctx, ns, "redis-internal.*", "redis")
-	if redisMax, ok := c.redisMemoryMaxBytes(ctx, ns); ok && redisMax > 0 {
+	var redisMax float64
+	var redisMaxOK bool
+	if c.collectProm.cacheRedis != "" {
+		redisMax, redisMaxOK, _ = c.queryScalar(ctx, fmt.Sprintf(`max(redis_memory_max_bytes{%s})`, labelSel))
+	} else {
+		redisMax, redisMaxOK = c.redisMemoryMaxBytes(ctx, ns)
+	}
+	if redisMaxOK && redisMax > 0 {
 		out.redis.MemoryLimit = int64(redisMax)
 	}
 	out.proxy.MemoryLimit = c.kubeLimitMem(ctx, ns, "cache-proxy.*", "cache-proxy")
 
-	tel := c.fillRedisCacheStoreTelemetry(ctx, ns)
+	tel := c.fillRedisCacheStoreTelemetry(ctx, labelSel)
 	out.redis.EvictionsPerSec = tel.EvictionsPerSec
 	out.redis.ExpirationsPerSec = tel.ExpirationsPerSec
 	out.redis.EvictionsLast9m = tel.EvictionsLast9m
